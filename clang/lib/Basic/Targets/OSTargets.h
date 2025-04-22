@@ -309,6 +309,34 @@ public:
   }
 };
 
+template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY UnifiedTargetInfo : public OSTargetInfo<Target> {
+ protected:
+   void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Linux defines; list based off of gcc output
+     DefineStd(Builder, "unix", Opts);
+     Builder.defineMacro("__unified__");
+     Builder.defineMacro("__Linux__");
+     Builder.defineMacro("__ELF__");
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+ 
+ public:
+   UnifiedTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     switch (Triple.getArch()) {
+     default:
+       break;
+     case llvm::Triple::x86:
+     case llvm::Triple::x86_64:
+       this->HasFloat128 = true;
+       break;
+     }
+   }
+ };
+
 // Hurd target
 template <typename Target>
 class LLVM_LIBRARY_VISIBILITY HurdTargetInfo : public OSTargetInfo<Target> {

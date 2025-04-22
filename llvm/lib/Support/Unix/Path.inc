@@ -50,8 +50,6 @@ extern char **environ;
 #elif defined(__MVS__)
 #include "llvm/Support/AutoConvert.h"
 #include <sys/ps.h>
-#elif defined(__unified__)
-#include <sys/auxv.h>
 #endif
 
 // Both stdio.h and cstdio are included via different paths and
@@ -199,7 +197,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
     if (realpath(exe_path, link_path))
       return link_path;
   }
-#elif defined(__FreeBSD__) || defined(__unified__)
+#elif defined(__FreeBSD__)
   // On FreeBSD if the exec path specified in ELF auxiliary vectors is
   // preferred, if available.  /proc/curproc/file and the KERN_PROC_PATHNAME
   // sysctl may not return the desired path if there are multiple hardlinks
@@ -247,7 +245,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   // If we don't have procfs mounted, fall back to argv[0]
   if (getprogpath(exe_path, argv0) != NULL)
     return exe_path;
-#elif defined(__linux__) || defined(__CYGWIN__) || defined(__gnu_hurd__)
+#elif defined(__linux__) || defined(__unified__) || defined(__CYGWIN__) || defined(__gnu_hurd__)
   char exe_path[PATH_MAX];
   const char *aPath = "/proc/self/exe";
   if (sys::fs::exists(aPath)) {
@@ -474,7 +472,7 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
 }
 
 static bool is_local_impl(struct STATVFS &Vfs) {
-#if defined(__linux__) || defined(__GNU__)
+#if defined(__linux__) || defined(__unified__) || defined(__GNU__)
 #ifndef NFS_SUPER_MAGIC
 #define NFS_SUPER_MAGIC 0x6969
 #endif

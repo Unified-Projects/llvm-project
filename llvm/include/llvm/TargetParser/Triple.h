@@ -206,6 +206,7 @@ public:
     IOS,
     KFreeBSD,
     Linux,
+    Unified,
     Lv2, // PS3
     MacOSX,
     NetBSD,

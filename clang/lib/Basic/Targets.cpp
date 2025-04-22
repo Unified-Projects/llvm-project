@@ -41,7 +41,6 @@
 #include "Targets/X86.h"
 #include "Targets/XCore.h"
 #include "Targets/Xtensa.h"
-#include "Targets/Unified.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "llvm/ADT/StringExtras.h"
