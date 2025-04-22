@@ -9,7 +9,7 @@
 #include <grpc++/grpc++.h>
 
 #include "Client.h"
-#include "Features.h"
+#include "Feature.h"
 #include "Service.grpc.pb.h"
 #include "index/Index.h"
 #include "marshalling/Marshalling.h"
@@ -144,6 +144,13 @@ public:
   refs(const clangd::RefsRequest &Request,
        llvm::function_ref<void(const clangd::Ref &)> Callback) const override {
     return streamRPC(Request, &remote::v1::SymbolIndex::Stub::Refs, Callback);
+  }
+
+  bool containedRefs(const clangd::ContainedRefsRequest &Request,
+                     llvm::function_ref<void(const ContainedRefsResult &)>
+                         Callback) const override {
+    return streamRPC(Request, &remote::v1::SymbolIndex::Stub::ContainedRefs,
+                     Callback);
   }
 
   void
