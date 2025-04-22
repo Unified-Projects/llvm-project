@@ -41,6 +41,7 @@
 #include "Targets/X86.h"
 #include "Targets/XCore.h"
 #include "Targets/Xtensa.h"
+#include "Targets/Unified.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticFrontend.h"
 #include "llvm/ADT/StringExtras.h"
@@ -600,6 +601,8 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
       return std::make_unique<DarwinX86_64TargetInfo>(Triple, Opts);
 
     switch (os) {
+    case llvm::Triple::UnifiedOS:
+      return std::make_unique<UnifiedTargetInfo>(Triple, Opts);
     case llvm::Triple::Linux: {
       switch (Triple.getEnvironment()) {
       default:

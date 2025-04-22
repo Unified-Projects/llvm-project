@@ -50,6 +50,8 @@ extern char **environ;
 #elif defined(__MVS__)
 #include "llvm/Support/AutoConvert.h"
 #include <sys/ps.h>
+#elif defined(__unified__)
+#include <sys/auxv.h>
 #endif
 
 // Both stdio.h and cstdio are included via different paths and
@@ -197,7 +199,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
     if (realpath(exe_path, link_path))
       return link_path;
   }
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__unified__)
   // On FreeBSD if the exec path specified in ELF auxiliary vectors is
   // preferred, if available.  /proc/curproc/file and the KERN_PROC_PATHNAME
   // sysctl may not return the desired path if there are multiple hardlinks

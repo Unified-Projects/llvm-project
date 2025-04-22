@@ -77,6 +77,7 @@ Expected<unsigned> Process::getPageSize() {
 }
 
 size_t Process::GetMallocUsage() {
+#ifndef __unified__
 #if defined(HAVE_MALLINFO2)
   struct mallinfo2 mi;
   mi = ::mallinfo2();
@@ -108,6 +109,10 @@ size_t Process::GetMallocUsage() {
 #warning Cannot get malloc info on this platform
 #endif
   return 0;
+#endif
+#else
+#warning Cannot get malloc info on this platform
+   return 0;
 #endif
 }
 
