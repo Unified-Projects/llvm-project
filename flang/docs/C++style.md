@@ -8,9 +8,10 @@
 
 # Flang C++ Style Guide
 
-```eval_rst
-.. contents::
-   :local:
+```{contents}
+---
+local:
+---
 ```
 
 This document captures the style guide rules that are followed in the Flang codebase.
@@ -19,7 +20,7 @@ This document captures the style guide rules that are followed in the Flang code
 * Use *clang-format*
 from llvm 7
 on all C++ source and header files before
-every merge to master.  All code layout should be determined
+every merge to main.  All code layout should be determined
 by means of clang-format.
 * Where a clear precedent exists in the project, follow it.
 * Otherwise, where [LLVM's C++ style guide](https://llvm.org/docs/CodingStandards.html#style-issues)

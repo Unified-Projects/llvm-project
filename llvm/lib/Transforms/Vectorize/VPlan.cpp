@@ -17,17 +17,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "VPlan.h"
-#include "VPlanDominatorTree.h"
-#include "llvm/ADT/DepthFirstIterator.h"
+#include "LoopVectorizationPlanner.h"
+#include "VPlanCFG.h"
+#include "VPlanPatternMatch.h"
+#include "VPlanTransforms.h"
+#include "VPlanUtils.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Analysis/IVDescriptors.h"
+#include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
-#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
@@ -35,20 +39,26 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/GenericDomTreeConstruction.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/LoopVersioning.h"
 #include <cassert>
-#include <iterator>
 #include <string>
-#include <vector>
 
 using namespace llvm;
-extern cl::opt<bool> EnableVPlanNativePath;
+using namespace llvm::VPlanPatternMatch;
 
-#define DEBUG_TYPE "vplan"
+namespace llvm {
+extern cl::opt<bool> EnableVPlanNativePath;
+}
+extern cl::opt<unsigned> ForceTargetInstructionCost;
+
+static cl::opt<bool> PrintVPlansInDotFormat(
+    "vplan-print-in-dot-format", cl::Hidden,
+    cl::desc("Use dot format instead of plain text when dumping VPlans"));
+
+#define DEBUG_TYPE "loop-vectorize"
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 raw_ostream &llvm::operator<<(raw_ostream &OS, const VPValue &V) {
@@ -60,7 +70,7 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const VPValue &V) {
 }
 #endif
 
-Value *VPLane::getAsRuntimeExpr(IRBuilder<> &Builder,
+Value *VPLane::getAsRuntimeExpr(IRBuilderBase &Builder,
                                 const ElementCount &VF) const {
   switch (LaneKind) {
   case VPLane::Kind::ScalableLast:
@@ -110,6 +120,14 @@ void VPDef::dump() const {
 }
 #endif
 
+VPRecipeBase *VPValue::getDefiningRecipe() {
+  return cast_or_null<VPRecipeBase>(Def);
+}
+
+const VPRecipeBase *VPValue::getDefiningRecipe() const {
+  return cast_or_null<VPRecipeBase>(Def);
+}
+
 // Get the top-most entry block of \p Start. This is the entry block of the
 // containing VPlan. This function is templated to support both const and non-const blocks
 template <typename T> static T *getPlanEntry(T *Start) {
@@ -152,31 +170,30 @@ VPBasicBlock *VPBlockBase::getEntryBasicBlock() {
 }
 
 void VPBlockBase::setPlan(VPlan *ParentPlan) {
-  assert(ParentPlan->getEntry() == this &&
-         "Can only set plan on its entry block.");
+  assert(ParentPlan->getEntry() == this && "Can only set plan on its entry.");
   Plan = ParentPlan;
 }
 
 /// \return the VPBasicBlock that is the exit of Block, possibly indirectly.
-const VPBasicBlock *VPBlockBase::getExitBasicBlock() const {
+const VPBasicBlock *VPBlockBase::getExitingBasicBlock() const {
   const VPBlockBase *Block = this;
   while (const VPRegionBlock *Region = dyn_cast<VPRegionBlock>(Block))
-    Block = Region->getExit();
+    Block = Region->getExiting();
   return cast<VPBasicBlock>(Block);
 }
 
-VPBasicBlock *VPBlockBase::getExitBasicBlock() {
+VPBasicBlock *VPBlockBase::getExitingBasicBlock() {
   VPBlockBase *Block = this;
   while (VPRegionBlock *Region = dyn_cast<VPRegionBlock>(Block))
-    Block = Region->getExit();
+    Block = Region->getExiting();
   return cast<VPBasicBlock>(Block);
 }
 
 VPBlockBase *VPBlockBase::getEnclosingBlockWithSuccessors() {
   if (!Successors.empty() || !Parent)
     return this;
-  assert(Parent->getExit() == this &&
-         "Block w/o successors not the exit of its parent.");
+  assert(Parent->getExiting() == this &&
+         "Block w/o successors not the exiting block of its parent.");
   return Parent->getEnclosingBlockWithSuccessors();
 }
 
@@ -188,35 +205,6 @@ VPBlockBase *VPBlockBase::getEnclosingBlockWithPredecessors() {
   return Parent->getEnclosingBlockWithPredecessors();
 }
 
-VPValue *VPBlockBase::getCondBit() {
-  return CondBitUser.getSingleOperandOrNull();
-}
-
-const VPValue *VPBlockBase::getCondBit() const {
-  return CondBitUser.getSingleOperandOrNull();
-}
-
-void VPBlockBase::setCondBit(VPValue *CV) { CondBitUser.resetSingleOpUser(CV); }
-
-VPValue *VPBlockBase::getPredicate() {
-  return PredicateUser.getSingleOperandOrNull();
-}
-
-const VPValue *VPBlockBase::getPredicate() const {
-  return PredicateUser.getSingleOperandOrNull();
-}
-
-void VPBlockBase::setPredicate(VPValue *CV) {
-  PredicateUser.resetSingleOpUser(CV);
-}
-
-void VPBlockBase::deleteCFG(VPBlockBase *Entry) {
-  SmallVector<VPBlockBase *, 8> Blocks(depth_first(Entry));
-
-  for (VPBlockBase *Block : Blocks)
-    delete Block;
-}
-
 VPBasicBlock::iterator VPBasicBlock::getFirstNonPhi() {
   iterator It = begin();
   while (It != end() && It->isPhi())
@@ -224,26 +212,191 @@ VPBasicBlock::iterator VPBasicBlock::getFirstNonPhi() {
   return It;
 }
 
-Value *VPTransformState::get(VPValue *Def, const VPIteration &Instance) {
-  if (!Def->getDef())
+VPTransformState::VPTransformState(const TargetTransformInfo *TTI,
+                                   ElementCount VF, unsigned UF, LoopInfo *LI,
+                                   DominatorTree *DT, IRBuilderBase &Builder,
+                                   InnerLoopVectorizer *ILV, VPlan *Plan,
+                                   Loop *CurrentParentLoop, Type *CanonicalIVTy)
+    : TTI(TTI), VF(VF), CFG(DT), LI(LI), Builder(Builder), ILV(ILV), Plan(Plan),
+      CurrentParentLoop(CurrentParentLoop), LVer(nullptr),
+      TypeAnalysis(CanonicalIVTy) {}
+
+Value *VPTransformState::get(VPValue *Def, const VPLane &Lane) {
+  if (Def->isLiveIn())
     return Def->getLiveInIRValue();
 
-  if (hasScalarValue(Def, Instance)) {
-    return Data
-        .PerPartScalars[Def][Instance.Part][Instance.Lane.mapToCacheIndex(VF)];
+  if (hasScalarValue(Def, Lane))
+    return Data.VPV2Scalars[Def][Lane.mapToCacheIndex(VF)];
+
+  if (!Lane.isFirstLane() && vputils::isUniformAfterVectorization(Def) &&
+      hasScalarValue(Def, VPLane::getFirstLane())) {
+    return Data.VPV2Scalars[Def][0];
   }
 
-  assert(hasVectorValue(Def, Instance.Part));
-  auto *VecPart = Data.PerPartOutput[Def][Instance.Part];
+  assert(hasVectorValue(Def));
+  auto *VecPart = Data.VPV2Vector[Def];
   if (!VecPart->getType()->isVectorTy()) {
-    assert(Instance.Lane.isFirstLane() && "cannot get lane > 0 for scalar");
+    assert(Lane.isFirstLane() && "cannot get lane > 0 for scalar");
     return VecPart;
   }
   // TODO: Cache created scalar values.
-  Value *Lane = Instance.Lane.getAsRuntimeExpr(Builder, VF);
-  auto *Extract = Builder.CreateExtractElement(VecPart, Lane);
+  Value *LaneV = Lane.getAsRuntimeExpr(Builder, VF);
+  auto *Extract = Builder.CreateExtractElement(VecPart, LaneV);
   // set(Def, Extract, Instance);
   return Extract;
+}
+
+Value *VPTransformState::get(VPValue *Def, bool NeedsScalar) {
+  if (NeedsScalar) {
+    assert((VF.isScalar() || Def->isLiveIn() || hasVectorValue(Def) ||
+            !vputils::onlyFirstLaneUsed(Def) ||
+            (hasScalarValue(Def, VPLane(0)) &&
+             Data.VPV2Scalars[Def].size() == 1)) &&
+           "Trying to access a single scalar per part but has multiple scalars "
+           "per part.");
+    return get(Def, VPLane(0));
+  }
+
+  // If Values have been set for this Def return the one relevant for \p Part.
+  if (hasVectorValue(Def))
+    return Data.VPV2Vector[Def];
+
+  auto GetBroadcastInstrs = [this, Def](Value *V) {
+    bool SafeToHoist = Def->isDefinedOutsideLoopRegions();
+    if (VF.isScalar())
+      return V;
+    // Place the code for broadcasting invariant variables in the new preheader.
+    IRBuilder<>::InsertPointGuard Guard(Builder);
+    if (SafeToHoist) {
+      BasicBlock *LoopVectorPreHeader =
+          CFG.VPBB2IRBB[Plan->getVectorPreheader()];
+      if (LoopVectorPreHeader)
+        Builder.SetInsertPoint(LoopVectorPreHeader->getTerminator());
+    }
+
+    // Place the code for broadcasting invariant variables in the new preheader.
+    // Broadcast the scalar into all locations in the vector.
+    Value *Shuf = Builder.CreateVectorSplat(VF, V, "broadcast");
+
+    return Shuf;
+  };
+
+  if (!hasScalarValue(Def, {0})) {
+    assert(Def->isLiveIn() && "expected a live-in");
+    Value *IRV = Def->getLiveInIRValue();
+    Value *B = GetBroadcastInstrs(IRV);
+    set(Def, B);
+    return B;
+  }
+
+  Value *ScalarValue = get(Def, VPLane(0));
+  // If we aren't vectorizing, we can just copy the scalar map values over
+  // to the vector map.
+  if (VF.isScalar()) {
+    set(Def, ScalarValue);
+    return ScalarValue;
+  }
+
+  bool IsUniform = vputils::isUniformAfterVectorization(Def);
+
+  VPLane LastLane(IsUniform ? 0 : VF.getKnownMinValue() - 1);
+  // Check if there is a scalar value for the selected lane.
+  if (!hasScalarValue(Def, LastLane)) {
+    // At the moment, VPWidenIntOrFpInductionRecipes, VPScalarIVStepsRecipes and
+    // VPExpandSCEVRecipes can also be uniform.
+    assert((isa<VPWidenIntOrFpInductionRecipe, VPScalarIVStepsRecipe,
+                VPExpandSCEVRecipe>(Def->getDefiningRecipe())) &&
+           "unexpected recipe found to be invariant");
+    IsUniform = true;
+    LastLane = 0;
+  }
+
+  auto *LastInst = cast<Instruction>(get(Def, LastLane));
+  // Set the insert point after the last scalarized instruction or after the
+  // last PHI, if LastInst is a PHI. This ensures the insertelement sequence
+  // will directly follow the scalar definitions.
+  auto OldIP = Builder.saveIP();
+  auto NewIP = isa<PHINode>(LastInst)
+                   ? LastInst->getParent()->getFirstNonPHIIt()
+                   : std::next(BasicBlock::iterator(LastInst));
+  Builder.SetInsertPoint(&*NewIP);
+
+  // However, if we are vectorizing, we need to construct the vector values.
+  // If the value is known to be uniform after vectorization, we can just
+  // broadcast the scalar value corresponding to lane zero. Otherwise, we
+  // construct the vector values using insertelement instructions. Since the
+  // resulting vectors are stored in State, we will only generate the
+  // insertelements once.
+  Value *VectorValue = nullptr;
+  if (IsUniform) {
+    VectorValue = GetBroadcastInstrs(ScalarValue);
+    set(Def, VectorValue);
+  } else {
+    // Initialize packing with insertelements to start from undef.
+    assert(!VF.isScalable() && "VF is assumed to be non scalable.");
+    Value *Undef = PoisonValue::get(VectorType::get(LastInst->getType(), VF));
+    set(Def, Undef);
+    for (unsigned Lane = 0; Lane < VF.getKnownMinValue(); ++Lane)
+      packScalarIntoVectorValue(Def, Lane);
+    VectorValue = get(Def);
+  }
+  Builder.restoreIP(OldIP);
+  return VectorValue;
+}
+
+BasicBlock *VPTransformState::CFGState::getPreheaderBBFor(VPRecipeBase *R) {
+  VPRegionBlock *LoopRegion = R->getParent()->getEnclosingLoopRegion();
+  return VPBB2IRBB[LoopRegion->getPreheaderVPBB()];
+}
+
+void VPTransformState::addNewMetadata(Instruction *To,
+                                      const Instruction *Orig) {
+  // If the loop was versioned with memchecks, add the corresponding no-alias
+  // metadata.
+  if (LVer && isa<LoadInst, StoreInst>(Orig))
+    LVer->annotateInstWithNoAlias(To, Orig);
+}
+
+void VPTransformState::addMetadata(Value *To, Instruction *From) {
+  // No source instruction to transfer metadata from?
+  if (!From)
+    return;
+
+  if (Instruction *ToI = dyn_cast<Instruction>(To)) {
+    propagateMetadata(ToI, From);
+    addNewMetadata(ToI, From);
+  }
+}
+
+void VPTransformState::setDebugLocFrom(DebugLoc DL) {
+  const DILocation *DIL = DL;
+  // When a FSDiscriminator is enabled, we don't need to add the multiply
+  // factors to the discriminators.
+  if (DIL &&
+      Builder.GetInsertBlock()
+          ->getParent()
+          ->shouldEmitDebugInfoForProfiling() &&
+      !EnableFSDiscriminator) {
+    // FIXME: For scalable vectors, assume vscale=1.
+    unsigned UF = Plan->getUF();
+    auto NewDIL =
+        DIL->cloneByMultiplyingDuplicationFactor(UF * VF.getKnownMinValue());
+    if (NewDIL)
+      Builder.SetCurrentDebugLocation(*NewDIL);
+    else
+      LLVM_DEBUG(dbgs() << "Failed to create new discriminator: "
+                        << DIL->getFilename() << " Line: " << DIL->getLine());
+  } else
+    Builder.SetCurrentDebugLocation(DIL);
+}
+
+void VPTransformState::packScalarIntoVectorValue(VPValue *Def,
+                                                 const VPLane &Lane) {
+  Value *ScalarInst = get(Def, Lane);
+  Value *VectorValue = get(Def);
+  VectorValue = Builder.CreateInsertElement(VectorValue, ScalarInst,
+                                            Lane.getAsRuntimeExpr(Builder, VF));
+  set(Def, VectorValue);
 }
 
 BasicBlock *
@@ -252,141 +405,141 @@ VPBasicBlock::createEmptyBasicBlock(VPTransformState::CFGState &CFG) {
   // Pred stands for Predessor. Prev stands for Previous - last visited/created.
   BasicBlock *PrevBB = CFG.PrevBB;
   BasicBlock *NewBB = BasicBlock::Create(PrevBB->getContext(), getName(),
-                                         PrevBB->getParent(), CFG.LastBB);
+                                         PrevBB->getParent(), CFG.ExitBB);
   LLVM_DEBUG(dbgs() << "LV: created " << NewBB->getName() << '\n');
 
+  return NewBB;
+}
+
+void VPBasicBlock::connectToPredecessors(VPTransformState::CFGState &CFG) {
+  BasicBlock *NewBB = CFG.VPBB2IRBB[this];
   // Hook up the new basic block to its predecessors.
   for (VPBlockBase *PredVPBlock : getHierarchicalPredecessors()) {
-    VPBasicBlock *PredVPBB = PredVPBlock->getExitBasicBlock();
-    auto &PredVPSuccessors = PredVPBB->getSuccessors();
+    VPBasicBlock *PredVPBB = PredVPBlock->getExitingBasicBlock();
+    auto &PredVPSuccessors = PredVPBB->getHierarchicalSuccessors();
     BasicBlock *PredBB = CFG.VPBB2IRBB[PredVPBB];
-
-    // In outer loop vectorization scenario, the predecessor BBlock may not yet
-    // be visited(backedge). Mark the VPBasicBlock for fixup at the end of
-    // vectorization. We do not encounter this case in inner loop vectorization
-    // as we start out by building a loop skeleton with the vector loop header
-    // and latch blocks. As a result, we never enter this function for the
-    // header block in the non VPlan-native path.
-    if (!PredBB) {
-      assert(EnableVPlanNativePath &&
-             "Unexpected null predecessor in non VPlan-native path");
-      CFG.VPBBsToFix.push_back(PredVPBB);
-      continue;
-    }
 
     assert(PredBB && "Predecessor basic-block not found building successor.");
     auto *PredBBTerminator = PredBB->getTerminator();
     LLVM_DEBUG(dbgs() << "LV: draw edge from" << PredBB->getName() << '\n');
+
+    auto *TermBr = dyn_cast<BranchInst>(PredBBTerminator);
     if (isa<UnreachableInst>(PredBBTerminator)) {
       assert(PredVPSuccessors.size() == 1 &&
              "Predecessor ending w/o branch must have single successor.");
+      DebugLoc DL = PredBBTerminator->getDebugLoc();
       PredBBTerminator->eraseFromParent();
-      BranchInst::Create(NewBB, PredBB);
+      auto *Br = BranchInst::Create(NewBB, PredBB);
+      Br->setDebugLoc(DL);
+    } else if (TermBr && !TermBr->isConditional()) {
+      TermBr->setSuccessor(0, NewBB);
     } else {
-      assert(PredVPSuccessors.size() == 2 &&
-             "Predecessor ending with branch must have two successors.");
+      // Set each forward successor here when it is created, excluding
+      // backedges. A backward successor is set when the branch is created.
       unsigned idx = PredVPSuccessors.front() == this ? 0 : 1;
-      assert(!PredBBTerminator->getSuccessor(idx) &&
+      assert((TermBr && (!TermBr->getSuccessor(idx) ||
+                         (isa<VPIRBasicBlock>(this) &&
+                          TermBr->getSuccessor(idx) == NewBB))) &&
              "Trying to reset an existing successor block.");
-      PredBBTerminator->setSuccessor(idx, NewBB);
+      TermBr->setSuccessor(idx, NewBB);
     }
+    CFG.DTU.applyUpdates({{DominatorTree::Insert, PredBB, NewBB}});
   }
-  return NewBB;
+}
+
+void VPIRBasicBlock::execute(VPTransformState *State) {
+  assert(getHierarchicalSuccessors().size() <= 2 &&
+         "VPIRBasicBlock can have at most two successors at the moment!");
+  State->Builder.SetInsertPoint(IRBB->getTerminator());
+  State->CFG.PrevBB = IRBB;
+  State->CFG.VPBB2IRBB[this] = IRBB;
+  executeRecipes(State, IRBB);
+  // Create a branch instruction to terminate IRBB if one was not created yet
+  // and is needed.
+  if (getSingleSuccessor() && isa<UnreachableInst>(IRBB->getTerminator())) {
+    auto *Br = State->Builder.CreateBr(IRBB);
+    Br->setOperand(0, nullptr);
+    IRBB->getTerminator()->eraseFromParent();
+  } else {
+    assert(
+        (getNumSuccessors() == 0 || isa<BranchInst>(IRBB->getTerminator())) &&
+        "other blocks must be terminated by a branch");
+  }
+
+  connectToPredecessors(State->CFG);
+}
+
+VPIRBasicBlock *VPIRBasicBlock::clone() {
+  auto *NewBlock = getPlan()->createEmptyVPIRBasicBlock(IRBB);
+  for (VPRecipeBase &R : Recipes)
+    NewBlock->appendRecipe(R.clone());
+  return NewBlock;
 }
 
 void VPBasicBlock::execute(VPTransformState *State) {
-  bool Replica = State->Instance && !State->Instance->isFirstIteration();
-  VPBasicBlock *PrevVPBB = State->CFG.PrevVPBB;
-  VPBlockBase *SingleHPred = nullptr;
+  bool Replica = bool(State->Lane);
   BasicBlock *NewBB = State->CFG.PrevBB; // Reuse it if possible.
 
-  // 1. Create an IR basic block, or reuse the last one if possible.
-  // The last IR basic block is reused, as an optimization, in three cases:
-  // A. the first VPBB reuses the loop header BB - when PrevVPBB is null;
-  // B. when the current VPBB has a single (hierarchical) predecessor which
-  //    is PrevVPBB and the latter has a single (hierarchical) successor; and
-  // C. when the current VPBB is an entry of a region replica - where PrevVPBB
-  //    is the exit of this region from a previous instance, or the predecessor
-  //    of this region.
-  if (PrevVPBB && /* A */
-      !((SingleHPred = getSingleHierarchicalPredecessor()) &&
-        SingleHPred->getExitBasicBlock() == PrevVPBB &&
-        PrevVPBB->getSingleHierarchicalSuccessor()) && /* B */
-      !(Replica && getPredecessors().empty())) {       /* C */
+  auto IsReplicateRegion = [](VPBlockBase *BB) {
+    auto *R = dyn_cast_or_null<VPRegionBlock>(BB);
+    return R && R->isReplicator();
+  };
+
+  // 1. Create an IR basic block.
+  if ((Replica && this == getParent()->getEntry()) ||
+      IsReplicateRegion(getSingleHierarchicalPredecessor())) {
+    // Reuse the previous basic block if the current VPBB is either
+    //  * the entry to a replicate region, or
+    //  * the exit of a replicate region.
+    State->CFG.VPBB2IRBB[this] = NewBB;
+  } else {
     NewBB = createEmptyBasicBlock(State->CFG);
+
     State->Builder.SetInsertPoint(NewBB);
     // Temporarily terminate with unreachable until CFG is rewired.
     UnreachableInst *Terminator = State->Builder.CreateUnreachable();
+    // Register NewBB in its loop. In innermost loops its the same for all
+    // BB's.
+    if (State->CurrentParentLoop)
+      State->CurrentParentLoop->addBasicBlockToLoop(NewBB, *State->LI);
     State->Builder.SetInsertPoint(Terminator);
-    // Register NewBB in its loop. In innermost loops its the same for all BB's.
-    Loop *L = State->LI->getLoopFor(State->CFG.LastBB);
-    L->addBasicBlockToLoop(NewBB, *State->LI);
+
     State->CFG.PrevBB = NewBB;
+    State->CFG.VPBB2IRBB[this] = NewBB;
+    connectToPredecessors(State->CFG);
   }
 
   // 2. Fill the IR basic block with IR instructions.
-  LLVM_DEBUG(dbgs() << "LV: vectorizing VPBB:" << getName()
-                    << " in BB:" << NewBB->getName() << '\n');
+  executeRecipes(State, NewBB);
+}
 
-  State->CFG.VPBB2IRBB[this] = NewBB;
+VPBasicBlock *VPBasicBlock::clone() {
+  auto *NewBlock = getPlan()->createVPBasicBlock(getName());
+  for (VPRecipeBase &R : *this)
+    NewBlock->appendRecipe(R.clone());
+  return NewBlock;
+}
+
+void VPBasicBlock::executeRecipes(VPTransformState *State, BasicBlock *BB) {
+  LLVM_DEBUG(dbgs() << "LV: vectorizing VPBB:" << getName()
+                    << " in BB:" << BB->getName() << '\n');
+
   State->CFG.PrevVPBB = this;
 
   for (VPRecipeBase &Recipe : Recipes)
     Recipe.execute(*State);
 
-  VPValue *CBV;
-  if (EnableVPlanNativePath && (CBV = getCondBit())) {
-    assert(CBV->getUnderlyingValue() &&
-           "Unexpected null underlying value for condition bit");
-
-    // Condition bit value in a VPBasicBlock is used as the branch selector. In
-    // the VPlan-native path case, since all branches are uniform we generate a
-    // branch instruction using the condition value from vector lane 0 and dummy
-    // successors. The successors are fixed later when the successor blocks are
-    // visited.
-    Value *NewCond = State->get(CBV, {0, 0});
-
-    // Replace the temporary unreachable terminator with the new conditional
-    // branch.
-    auto *CurrentTerminator = NewBB->getTerminator();
-    assert(isa<UnreachableInst>(CurrentTerminator) &&
-           "Expected to replace unreachable terminator with conditional "
-           "branch.");
-    auto *CondBr = BranchInst::Create(NewBB, nullptr, NewCond);
-    CondBr->setSuccessor(0, nullptr);
-    ReplaceInstWithInst(CurrentTerminator, CondBr);
-  }
-
-  LLVM_DEBUG(dbgs() << "LV: filled BB:" << *NewBB);
-}
-
-void VPBasicBlock::dropAllReferences(VPValue *NewValue) {
-  for (VPRecipeBase &R : Recipes) {
-    for (auto *Def : R.definedValues())
-      Def->replaceAllUsesWith(NewValue);
-
-    for (unsigned I = 0, E = R.getNumOperands(); I != E; I++)
-      R.setOperand(I, NewValue);
-  }
+  LLVM_DEBUG(dbgs() << "LV: filled BB:" << *BB);
 }
 
 VPBasicBlock *VPBasicBlock::splitAt(iterator SplitAt) {
   assert((SplitAt == end() || SplitAt->getParent() == this) &&
          "can only split at a position in the same block");
 
-  SmallVector<VPBlockBase *, 2> Succs(getSuccessors().begin(),
-                                      getSuccessors().end());
-  // First, disconnect the current block from its successors.
-  for (VPBlockBase *Succ : Succs)
-    VPBlockUtils::disconnectBlocks(this, Succ);
-
+  SmallVector<VPBlockBase *, 2> Succs(successors());
   // Create new empty block after the block to split.
-  auto *SplitBlock = new VPBasicBlock(getName() + ".split");
+  auto *SplitBlock = getPlan()->createVPBasicBlock(getName() + ".split");
   VPBlockUtils::insertBlockAfter(SplitBlock, this);
-
-  // Add successors for block to split to new block.
-  for (VPBlockBase *Succ : Succs)
-    VPBlockUtils::connectBlocks(SplitBlock, Succ);
 
   // Finally, move the recipes starting at SplitAt to new block.
   for (VPRecipeBase &ToMove :
@@ -394,6 +547,71 @@ VPBasicBlock *VPBasicBlock::splitAt(iterator SplitAt) {
     ToMove.moveBefore(*SplitBlock, SplitBlock->end());
 
   return SplitBlock;
+}
+
+/// Return the enclosing loop region for region \p P. The templated version is
+/// used to support both const and non-const block arguments.
+template <typename T> static T *getEnclosingLoopRegionForRegion(T *P) {
+  if (P && P->isReplicator()) {
+    P = P->getParent();
+    // Multiple loop regions can be nested, but replicate regions can only be
+    // nested inside a loop region or must be outside any other region.
+    assert((!P || !cast<VPRegionBlock>(P)->isReplicator()) &&
+           "unexpected nested replicate regions");
+  }
+  return P;
+}
+
+VPRegionBlock *VPBasicBlock::getEnclosingLoopRegion() {
+  return getEnclosingLoopRegionForRegion(getParent());
+}
+
+const VPRegionBlock *VPBasicBlock::getEnclosingLoopRegion() const {
+  return getEnclosingLoopRegionForRegion(getParent());
+}
+
+static bool hasConditionalTerminator(const VPBasicBlock *VPBB) {
+  if (VPBB->empty()) {
+    assert(
+        VPBB->getNumSuccessors() < 2 &&
+        "block with multiple successors doesn't have a recipe as terminator");
+    return false;
+  }
+
+  const VPRecipeBase *R = &VPBB->back();
+  bool IsCondBranch = isa<VPBranchOnMaskRecipe>(R) ||
+                      match(R, m_BranchOnCond(m_VPValue())) ||
+                      match(R, m_BranchOnCount(m_VPValue(), m_VPValue()));
+  (void)IsCondBranch;
+
+  if (VPBB->getNumSuccessors() >= 2 ||
+      (VPBB->isExiting() && !VPBB->getParent()->isReplicator())) {
+    assert(IsCondBranch && "block with multiple successors not terminated by "
+                           "conditional branch recipe");
+
+    return true;
+  }
+
+  assert(
+      !IsCondBranch &&
+      "block with 0 or 1 successors terminated by conditional branch recipe");
+  return false;
+}
+
+VPRecipeBase *VPBasicBlock::getTerminator() {
+  if (hasConditionalTerminator(this))
+    return &back();
+  return nullptr;
+}
+
+const VPRecipeBase *VPBasicBlock::getTerminator() const {
+  if (hasConditionalTerminator(this))
+    return &back();
+  return nullptr;
+}
+
+bool VPBasicBlock::isExiting() const {
+  return getParent() && getParent()->getExitingBasicBlock() == this;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -412,13 +630,6 @@ void VPBlockBase::printSuccessors(raw_ostream &O, const Twine &Indent) const {
 void VPBasicBlock::print(raw_ostream &O, const Twine &Indent,
                          VPSlotTracker &SlotTracker) const {
   O << Indent << getName() << ":\n";
-  if (const VPValue *Pred = getPredicate()) {
-    O << Indent << "BlockPredicate:";
-    Pred->printAsOperand(O, SlotTracker);
-    if (const auto *PredInst = dyn_cast<VPInstruction>(Pred))
-      O << " (" << PredInst->getParent()->getName() << ")";
-    O << '\n';
-  }
 
   auto RecipeIndent = Indent + "  ";
   for (const VPRecipeBase &Recipe : *this) {
@@ -427,71 +638,164 @@ void VPBasicBlock::print(raw_ostream &O, const Twine &Indent,
   }
 
   printSuccessors(O, Indent);
-
-  if (const VPValue *CBV = getCondBit()) {
-    O << Indent << "CondBit: ";
-    CBV->printAsOperand(O, SlotTracker);
-    if (const auto *CBI = dyn_cast<VPInstruction>(CBV))
-      O << " (" << CBI->getParent()->getName() << ")";
-    O << '\n';
-  }
 }
 #endif
 
-void VPRegionBlock::dropAllReferences(VPValue *NewValue) {
-  for (VPBlockBase *Block : depth_first(Entry))
-    // Drop all references in VPBasicBlocks and replace all uses with
-    // DummyValue.
-    Block->dropAllReferences(NewValue);
+static std::pair<VPBlockBase *, VPBlockBase *> cloneFrom(VPBlockBase *Entry);
+
+// Clone the CFG for all nodes reachable from \p Entry, this includes cloning
+// the blocks and their recipes. Operands of cloned recipes will NOT be updated.
+// Remapping of operands must be done separately. Returns a pair with the new
+// entry and exiting blocks of the cloned region. If \p Entry isn't part of a
+// region, return nullptr for the exiting block.
+static std::pair<VPBlockBase *, VPBlockBase *> cloneFrom(VPBlockBase *Entry) {
+  DenseMap<VPBlockBase *, VPBlockBase *> Old2NewVPBlocks;
+  VPBlockBase *Exiting = nullptr;
+  bool InRegion = Entry->getParent();
+  // First, clone blocks reachable from Entry.
+  for (VPBlockBase *BB : vp_depth_first_shallow(Entry)) {
+    VPBlockBase *NewBB = BB->clone();
+    Old2NewVPBlocks[BB] = NewBB;
+    if (InRegion && BB->getNumSuccessors() == 0) {
+      assert(!Exiting && "Multiple exiting blocks?");
+      Exiting = BB;
+    }
+  }
+  assert((!InRegion || Exiting) && "regions must have a single exiting block");
+
+  // Second, update the predecessors & successors of the cloned blocks.
+  for (VPBlockBase *BB : vp_depth_first_shallow(Entry)) {
+    VPBlockBase *NewBB = Old2NewVPBlocks[BB];
+    SmallVector<VPBlockBase *> NewPreds;
+    for (VPBlockBase *Pred : BB->getPredecessors()) {
+      NewPreds.push_back(Old2NewVPBlocks[Pred]);
+    }
+    NewBB->setPredecessors(NewPreds);
+    SmallVector<VPBlockBase *> NewSuccs;
+    for (VPBlockBase *Succ : BB->successors()) {
+      NewSuccs.push_back(Old2NewVPBlocks[Succ]);
+    }
+    NewBB->setSuccessors(NewSuccs);
+  }
+
+#if !defined(NDEBUG)
+  // Verify that the order of predecessors and successors matches in the cloned
+  // version.
+  for (const auto &[OldBB, NewBB] :
+       zip(vp_depth_first_shallow(Entry),
+           vp_depth_first_shallow(Old2NewVPBlocks[Entry]))) {
+    for (const auto &[OldPred, NewPred] :
+         zip(OldBB->getPredecessors(), NewBB->getPredecessors()))
+      assert(NewPred == Old2NewVPBlocks[OldPred] && "Different predecessors");
+
+    for (const auto &[OldSucc, NewSucc] :
+         zip(OldBB->successors(), NewBB->successors()))
+      assert(NewSucc == Old2NewVPBlocks[OldSucc] && "Different successors");
+  }
+#endif
+
+  return std::make_pair(Old2NewVPBlocks[Entry],
+                        Exiting ? Old2NewVPBlocks[Exiting] : nullptr);
+}
+
+VPRegionBlock *VPRegionBlock::clone() {
+  const auto &[NewEntry, NewExiting] = cloneFrom(getEntry());
+  auto *NewRegion = getPlan()->createVPRegionBlock(NewEntry, NewExiting,
+                                                   getName(), isReplicator());
+  for (VPBlockBase *Block : vp_depth_first_shallow(NewEntry))
+    Block->setParent(NewRegion);
+  return NewRegion;
 }
 
 void VPRegionBlock::execute(VPTransformState *State) {
-  ReversePostOrderTraversal<VPBlockBase *> RPOT(Entry);
+  ReversePostOrderTraversal<VPBlockShallowTraversalWrapper<VPBlockBase *>>
+      RPOT(Entry);
 
   if (!isReplicator()) {
+    // Create and register the new vector loop.
+    Loop *PrevLoop = State->CurrentParentLoop;
+    State->CurrentParentLoop = State->LI->AllocateLoop();
+    BasicBlock *VectorPH = State->CFG.VPBB2IRBB[getPreheaderVPBB()];
+    Loop *ParentLoop = State->LI->getLoopFor(VectorPH);
+
+    // Insert the new loop into the loop nest and register the new basic blocks
+    // before calling any utilities such as SCEV that require valid LoopInfo.
+    if (ParentLoop)
+      ParentLoop->addChildLoop(State->CurrentParentLoop);
+    else
+      State->LI->addTopLevelLoop(State->CurrentParentLoop);
+
     // Visit the VPBlocks connected to "this", starting from it.
     for (VPBlockBase *Block : RPOT) {
-      if (EnableVPlanNativePath) {
-        // The inner loop vectorization path does not represent loop preheader
-        // and exit blocks as part of the VPlan. In the VPlan-native path, skip
-        // vectorizing loop preheader block. In future, we may replace this
-        // check with the check for loop preheader.
-        if (Block->getNumPredecessors() == 0)
-          continue;
-
-        // Skip vectorizing loop exit block. In future, we may replace this
-        // check with the check for loop exit.
-        if (Block->getNumSuccessors() == 0)
-          continue;
-      }
-
       LLVM_DEBUG(dbgs() << "LV: VPBlock in RPO " << Block->getName() << '\n');
       Block->execute(State);
     }
+
+    State->CurrentParentLoop = PrevLoop;
     return;
   }
 
-  assert(!State->Instance && "Replicating a Region with non-null instance.");
+  assert(!State->Lane && "Replicating a Region with non-null instance.");
 
   // Enter replicating mode.
-  State->Instance = VPIteration(0, 0);
-
-  for (unsigned Part = 0, UF = State->UF; Part < UF; ++Part) {
-    State->Instance->Part = Part;
-    assert(!State->VF.isScalable() && "VF is assumed to be non scalable.");
-    for (unsigned Lane = 0, VF = State->VF.getKnownMinValue(); Lane < VF;
-         ++Lane) {
-      State->Instance->Lane = VPLane(Lane, VPLane::Kind::First);
-      // Visit the VPBlocks connected to \p this, starting from it.
-      for (VPBlockBase *Block : RPOT) {
-        LLVM_DEBUG(dbgs() << "LV: VPBlock in RPO " << Block->getName() << '\n');
-        Block->execute(State);
-      }
+  assert(!State->VF.isScalable() && "VF is assumed to be non scalable.");
+  State->Lane = VPLane(0);
+  for (unsigned Lane = 0, VF = State->VF.getKnownMinValue(); Lane < VF;
+       ++Lane) {
+    State->Lane = VPLane(Lane, VPLane::Kind::First);
+    // Visit the VPBlocks connected to \p this, starting from it.
+    for (VPBlockBase *Block : RPOT) {
+      LLVM_DEBUG(dbgs() << "LV: VPBlock in RPO " << Block->getName() << '\n');
+      Block->execute(State);
     }
   }
 
   // Exit replicating mode.
-  State->Instance.reset();
+  State->Lane.reset();
+}
+
+InstructionCost VPBasicBlock::cost(ElementCount VF, VPCostContext &Ctx) {
+  InstructionCost Cost = 0;
+  for (VPRecipeBase &R : Recipes)
+    Cost += R.cost(VF, Ctx);
+  return Cost;
+}
+
+InstructionCost VPRegionBlock::cost(ElementCount VF, VPCostContext &Ctx) {
+  if (!isReplicator()) {
+    InstructionCost Cost = 0;
+    for (VPBlockBase *Block : vp_depth_first_shallow(getEntry()))
+      Cost += Block->cost(VF, Ctx);
+    InstructionCost BackedgeCost =
+        ForceTargetInstructionCost.getNumOccurrences()
+            ? InstructionCost(ForceTargetInstructionCost.getNumOccurrences())
+            : Ctx.TTI.getCFInstrCost(Instruction::Br, Ctx.CostKind);
+    LLVM_DEBUG(dbgs() << "Cost of " << BackedgeCost << " for VF " << VF
+                      << ": vector loop backedge\n");
+    Cost += BackedgeCost;
+    return Cost;
+  }
+
+  // Compute the cost of a replicate region. Replicating isn't supported for
+  // scalable vectors, return an invalid cost for them.
+  // TODO: Discard scalable VPlans with replicate recipes earlier after
+  // construction.
+  if (VF.isScalable())
+    return InstructionCost::getInvalid();
+
+  // First compute the cost of the conditionally executed recipes, followed by
+  // account for the branching cost, except if the mask is a header mask or
+  // uniform condition.
+  using namespace llvm::VPlanPatternMatch;
+  VPBasicBlock *Then = cast<VPBasicBlock>(getEntry()->getSuccessors()[0]);
+  InstructionCost ThenCost = Then->cost(VF, Ctx);
+
+  // For the scalar case, we may not always execute the original predicated
+  // block, Thus, scale the block's cost by the probability of executing it.
+  if (VF.isScalar())
+    return ThenCost / getReciprocalPredBlockProb();
+
+  return ThenCost;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -499,7 +803,7 @@ void VPRegionBlock::print(raw_ostream &O, const Twine &Indent,
                           VPSlotTracker &SlotTracker) const {
   O << Indent << (isReplicator() ? "<xVFxUF> " : "<x1> ") << getName() << ": {";
   auto NewIndent = Indent + "  ";
-  for (auto *BlockBase : depth_first(Entry)) {
+  for (auto *BlockBase : vp_depth_first_shallow(Entry)) {
     O << '\n';
     BlockBase->print(O, NewIndent, SlotTracker);
   }
@@ -509,364 +813,331 @@ void VPRegionBlock::print(raw_ostream &O, const Twine &Indent,
 }
 #endif
 
-bool VPRecipeBase::mayWriteToMemory() const {
-  switch (getVPDefID()) {
-  case VPWidenMemoryInstructionSC: {
-    return cast<VPWidenMemoryInstructionRecipe>(this)->isStore();
-  }
-  case VPReplicateSC:
-  case VPWidenCallSC:
-    return cast<Instruction>(getVPSingleValue()->getUnderlyingValue())
-        ->mayWriteToMemory();
-  case VPBranchOnMaskSC:
-    return false;
-  case VPWidenIntOrFpInductionSC:
-  case VPWidenCanonicalIVSC:
-  case VPWidenPHISC:
-  case VPBlendSC:
-  case VPWidenSC:
-  case VPWidenGEPSC:
-  case VPReductionSC:
-  case VPWidenSelectSC: {
-    const Instruction *I =
-        dyn_cast_or_null<Instruction>(getVPSingleValue()->getUnderlyingValue());
-    (void)I;
-    assert((!I || !I->mayWriteToMemory()) &&
-           "underlying instruction may write to memory");
-    return false;
-  }
-  default:
-    return true;
-  }
+VPlan::VPlan(Loop *L) {
+  setEntry(createVPIRBasicBlock(L->getLoopPreheader()));
+  ScalarHeader = createVPIRBasicBlock(L->getHeader());
 }
 
-bool VPRecipeBase::mayReadFromMemory() const {
-  switch (getVPDefID()) {
-  case VPWidenMemoryInstructionSC: {
-    return !cast<VPWidenMemoryInstructionRecipe>(this)->isStore();
-  }
-  case VPReplicateSC:
-  case VPWidenCallSC:
-    return cast<Instruction>(getVPSingleValue()->getUnderlyingValue())
-        ->mayReadFromMemory();
-  case VPBranchOnMaskSC:
-    return false;
-  case VPWidenIntOrFpInductionSC:
-  case VPWidenCanonicalIVSC:
-  case VPWidenPHISC:
-  case VPBlendSC:
-  case VPWidenSC:
-  case VPWidenGEPSC:
-  case VPReductionSC:
-  case VPWidenSelectSC: {
-    const Instruction *I =
-        dyn_cast_or_null<Instruction>(getVPSingleValue()->getUnderlyingValue());
-    (void)I;
-    assert((!I || !I->mayReadFromMemory()) &&
-           "underlying instruction may read from memory");
-    return false;
-  }
-  default:
-    return true;
-  }
-}
+VPlan::~VPlan() {
+  VPValue DummyValue;
 
-bool VPRecipeBase::mayHaveSideEffects() const {
-  switch (getVPDefID()) {
-  case VPBranchOnMaskSC:
-    return false;
-  case VPWidenIntOrFpInductionSC:
-  case VPWidenCanonicalIVSC:
-  case VPWidenPHISC:
-  case VPBlendSC:
-  case VPWidenSC:
-  case VPWidenGEPSC:
-  case VPReductionSC:
-  case VPWidenSelectSC: {
-    const Instruction *I =
-        dyn_cast_or_null<Instruction>(getVPSingleValue()->getUnderlyingValue());
-    (void)I;
-    assert((!I || !I->mayHaveSideEffects()) &&
-           "underlying instruction has side-effects");
-    return false;
-  }
-  case VPReplicateSC: {
-    auto *R = cast<VPReplicateRecipe>(this);
-    return R->getUnderlyingInstr()->mayHaveSideEffects();
-  }
-  default:
-    return true;
-  }
-}
+  for (auto *VPB : CreatedBlocks) {
+    if (auto *VPBB = dyn_cast<VPBasicBlock>(VPB)) {
+      // Replace all operands of recipes and all VPValues defined in VPBB with
+      // DummyValue so the block can be deleted.
+      for (VPRecipeBase &R : *VPBB) {
+        for (auto *Def : R.definedValues())
+          Def->replaceAllUsesWith(&DummyValue);
 
-void VPRecipeBase::insertBefore(VPRecipeBase *InsertPos) {
-  assert(!Parent && "Recipe already in some VPBasicBlock");
-  assert(InsertPos->getParent() &&
-         "Insertion position not in any VPBasicBlock");
-  Parent = InsertPos->getParent();
-  Parent->getRecipeList().insert(InsertPos->getIterator(), this);
-}
-
-void VPRecipeBase::insertAfter(VPRecipeBase *InsertPos) {
-  assert(!Parent && "Recipe already in some VPBasicBlock");
-  assert(InsertPos->getParent() &&
-         "Insertion position not in any VPBasicBlock");
-  Parent = InsertPos->getParent();
-  Parent->getRecipeList().insertAfter(InsertPos->getIterator(), this);
-}
-
-void VPRecipeBase::removeFromParent() {
-  assert(getParent() && "Recipe not in any VPBasicBlock");
-  getParent()->getRecipeList().remove(getIterator());
-  Parent = nullptr;
-}
-
-iplist<VPRecipeBase>::iterator VPRecipeBase::eraseFromParent() {
-  assert(getParent() && "Recipe not in any VPBasicBlock");
-  return getParent()->getRecipeList().erase(getIterator());
-}
-
-void VPRecipeBase::moveAfter(VPRecipeBase *InsertPos) {
-  removeFromParent();
-  insertAfter(InsertPos);
-}
-
-void VPRecipeBase::moveBefore(VPBasicBlock &BB,
-                              iplist<VPRecipeBase>::iterator I) {
-  assert(I == BB.end() || I->getParent() == &BB);
-  removeFromParent();
-  Parent = &BB;
-  BB.getRecipeList().insert(I, this);
-}
-
-void VPInstruction::generateInstruction(VPTransformState &State,
-                                        unsigned Part) {
-  IRBuilder<> &Builder = State.Builder;
-
-  if (Instruction::isBinaryOp(getOpcode())) {
-    Value *A = State.get(getOperand(0), Part);
-    Value *B = State.get(getOperand(1), Part);
-    Value *V = Builder.CreateBinOp((Instruction::BinaryOps)getOpcode(), A, B);
-    State.set(this, V, Part);
-    return;
-  }
-
-  switch (getOpcode()) {
-  case VPInstruction::Not: {
-    Value *A = State.get(getOperand(0), Part);
-    Value *V = Builder.CreateNot(A);
-    State.set(this, V, Part);
-    break;
-  }
-  case VPInstruction::ICmpULE: {
-    Value *IV = State.get(getOperand(0), Part);
-    Value *TC = State.get(getOperand(1), Part);
-    Value *V = Builder.CreateICmpULE(IV, TC);
-    State.set(this, V, Part);
-    break;
-  }
-  case Instruction::Select: {
-    Value *Cond = State.get(getOperand(0), Part);
-    Value *Op1 = State.get(getOperand(1), Part);
-    Value *Op2 = State.get(getOperand(2), Part);
-    Value *V = Builder.CreateSelect(Cond, Op1, Op2);
-    State.set(this, V, Part);
-    break;
-  }
-  case VPInstruction::ActiveLaneMask: {
-    // Get first lane of vector induction variable.
-    Value *VIVElem0 = State.get(getOperand(0), VPIteration(Part, 0));
-    // Get the original loop tripcount.
-    Value *ScalarTC = State.TripCount;
-
-    auto *Int1Ty = Type::getInt1Ty(Builder.getContext());
-    auto *PredTy = FixedVectorType::get(Int1Ty, State.VF.getKnownMinValue());
-    Instruction *Call = Builder.CreateIntrinsic(
-        Intrinsic::get_active_lane_mask, {PredTy, ScalarTC->getType()},
-        {VIVElem0, ScalarTC}, nullptr, "active.lane.mask");
-    State.set(this, Call, Part);
-    break;
-  }
-  case VPInstruction::FirstOrderRecurrenceSplice: {
-    // Generate code to combine the previous and current values in vector v3.
-    //
-    //   vector.ph:
-    //     v_init = vector(..., ..., ..., a[-1])
-    //     br vector.body
-    //
-    //   vector.body
-    //     i = phi [0, vector.ph], [i+4, vector.body]
-    //     v1 = phi [v_init, vector.ph], [v2, vector.body]
-    //     v2 = a[i, i+1, i+2, i+3];
-    //     v3 = vector(v1(3), v2(0, 1, 2))
-
-    // For the first part, use the recurrence phi (v1), otherwise v2.
-    auto *V1 = State.get(getOperand(0), 0);
-    Value *PartMinus1 = Part == 0 ? V1 : State.get(getOperand(1), Part - 1);
-    if (!PartMinus1->getType()->isVectorTy()) {
-      State.set(this, PartMinus1, Part);
-    } else {
-      Value *V2 = State.get(getOperand(1), Part);
-      State.set(this, Builder.CreateVectorSplice(PartMinus1, V2, -1), Part);
+        for (unsigned I = 0, E = R.getNumOperands(); I != E; I++)
+          R.setOperand(I, &DummyValue);
+      }
     }
-    break;
+    delete VPB;
   }
-  default:
-    llvm_unreachable("Unsupported opcode for instruction");
-  }
+  for (VPValue *VPV : VPLiveInsToFree)
+    delete VPV;
+  if (BackedgeTakenCount)
+    delete BackedgeTakenCount;
 }
 
-void VPInstruction::execute(VPTransformState &State) {
-  assert(!State.Instance && "VPInstruction executing an Instance");
-  for (unsigned Part = 0; Part < State.UF; ++Part)
-    generateInstruction(State, Part);
-}
+VPlanPtr VPlan::createInitialVPlan(Type *InductionTy,
+                                   PredicatedScalarEvolution &PSE,
+                                   bool RequiresScalarEpilogueCheck,
+                                   bool TailFolded, Loop *TheLoop) {
+  auto Plan = std::make_unique<VPlan>(TheLoop);
+  VPBlockBase *ScalarHeader = Plan->getScalarHeader();
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void VPInstruction::dump() const {
-  VPSlotTracker SlotTracker(getParent()->getPlan());
-  print(dbgs(), "", SlotTracker);
-}
+  // Connect entry only to vector preheader initially. Entry will also be
+  // connected to the scalar preheader later, during skeleton creation when
+  // runtime guards are added as needed. Note that when executing the VPlan for
+  // an epilogue vector loop, the original entry block here will be replaced by
+  // a new VPIRBasicBlock wrapping the entry to the epilogue vector loop after
+  // generating code for the main vector loop.
+  VPBasicBlock *VecPreheader = Plan->createVPBasicBlock("vector.ph");
+  VPBlockUtils::connectBlocks(Plan->getEntry(), VecPreheader);
 
-void VPInstruction::print(raw_ostream &O, const Twine &Indent,
-                          VPSlotTracker &SlotTracker) const {
-  O << Indent << "EMIT ";
+  // Create SCEV and VPValue for the trip count.
+  // We use the symbolic max backedge-taken-count, which works also when
+  // vectorizing loops with uncountable early exits.
+  const SCEV *BackedgeTakenCountSCEV = PSE.getSymbolicMaxBackedgeTakenCount();
+  assert(!isa<SCEVCouldNotCompute>(BackedgeTakenCountSCEV) &&
+         "Invalid loop count");
+  ScalarEvolution &SE = *PSE.getSE();
+  const SCEV *TripCount = SE.getTripCountFromExitCount(BackedgeTakenCountSCEV,
+                                                       InductionTy, TheLoop);
+  Plan->TripCount =
+      vputils::getOrCreateVPValueForSCEVExpr(*Plan, TripCount, SE);
 
-  if (hasResult()) {
-    printAsOperand(O, SlotTracker);
-    O << " = ";
+  // Create VPRegionBlock, with empty header and latch blocks, to be filled
+  // during processing later.
+  VPBasicBlock *HeaderVPBB = Plan->createVPBasicBlock("vector.body");
+  VPBasicBlock *LatchVPBB = Plan->createVPBasicBlock("vector.latch");
+  VPBlockUtils::insertBlockAfter(LatchVPBB, HeaderVPBB);
+  auto *TopRegion = Plan->createVPRegionBlock(
+      HeaderVPBB, LatchVPBB, "vector loop", false /*isReplicator*/);
+
+  VPBlockUtils::insertBlockAfter(TopRegion, VecPreheader);
+  VPBasicBlock *MiddleVPBB = Plan->createVPBasicBlock("middle.block");
+  VPBlockUtils::insertBlockAfter(MiddleVPBB, TopRegion);
+
+  VPBasicBlock *ScalarPH = Plan->createVPBasicBlock("scalar.ph");
+  VPBlockUtils::connectBlocks(ScalarPH, ScalarHeader);
+  if (!RequiresScalarEpilogueCheck) {
+    VPBlockUtils::connectBlocks(MiddleVPBB, ScalarPH);
+    return Plan;
   }
 
-  switch (getOpcode()) {
-  case VPInstruction::Not:
-    O << "not";
-    break;
-  case VPInstruction::ICmpULE:
-    O << "icmp ule";
-    break;
-  case VPInstruction::SLPLoad:
-    O << "combined load";
-    break;
-  case VPInstruction::SLPStore:
-    O << "combined store";
-    break;
-  case VPInstruction::ActiveLaneMask:
-    O << "active lane mask";
-    break;
-  case VPInstruction::FirstOrderRecurrenceSplice:
-    O << "first-order splice";
-    break;
-  default:
-    O << Instruction::getOpcodeName(getOpcode());
-  }
+  // If needed, add a check in the middle block to see if we have completed
+  // all of the iterations in the first vector loop.  Three cases:
+  // 1) If (N - N%VF) == N, then we *don't* need to run the remainder.
+  //    Thus if tail is to be folded, we know we don't need to run the
+  //    remainder and we can set the condition to true.
+  // 2) If we require a scalar epilogue, there is no conditional branch as
+  //    we unconditionally branch to the scalar preheader.  Do nothing.
+  // 3) Otherwise, construct a runtime check.
+  BasicBlock *IRExitBlock = TheLoop->getUniqueLatchExitBlock();
+  auto *VPExitBlock = Plan->createVPIRBasicBlock(IRExitBlock);
+  // The connection order corresponds to the operands of the conditional branch.
+  VPBlockUtils::insertBlockAfter(VPExitBlock, MiddleVPBB);
+  VPBlockUtils::connectBlocks(MiddleVPBB, ScalarPH);
 
-  for (const VPValue *Operand : operands()) {
-    O << " ";
-    Operand->printAsOperand(O, SlotTracker);
-  }
+  auto *ScalarLatchTerm = TheLoop->getLoopLatch()->getTerminator();
+  // Here we use the same DebugLoc as the scalar loop latch terminator instead
+  // of the corresponding compare because they may have ended up with
+  // different line numbers and we want to avoid awkward line stepping while
+  // debugging. Eg. if the compare has got a line number inside the loop.
+  VPBuilder Builder(MiddleVPBB);
+  VPValue *Cmp =
+      TailFolded
+          ? Plan->getOrAddLiveIn(ConstantInt::getTrue(
+                IntegerType::getInt1Ty(TripCount->getType()->getContext())))
+          : Builder.createICmp(CmpInst::ICMP_EQ, Plan->getTripCount(),
+                               &Plan->getVectorTripCount(),
+                               ScalarLatchTerm->getDebugLoc(), "cmp.n");
+  Builder.createNaryOp(VPInstruction::BranchOnCond, {Cmp},
+                       ScalarLatchTerm->getDebugLoc());
+  return Plan;
 }
-#endif
 
-/// Generate the code inside the body of the vectorized loop. Assumes a single
-/// LoopVectorBody basic-block was created for this. Introduce additional
-/// basic-blocks as needed, and fill them all.
-void VPlan::execute(VPTransformState *State) {
-  // -1. Check if the backedge taken count is needed, and if so build it.
+void VPlan::prepareToExecute(Value *TripCountV, Value *VectorTripCountV,
+                             VPTransformState &State) {
+  Type *TCTy = TripCountV->getType();
+  // Check if the backedge taken count is needed, and if so build it.
   if (BackedgeTakenCount && BackedgeTakenCount->getNumUsers()) {
-    Value *TC = State->TripCount;
-    IRBuilder<> Builder(State->CFG.PrevBB->getTerminator());
-    auto *TCMO = Builder.CreateSub(TC, ConstantInt::get(TC->getType(), 1),
+    IRBuilder<> Builder(State.CFG.PrevBB->getTerminator());
+    auto *TCMO = Builder.CreateSub(TripCountV, ConstantInt::get(TCTy, 1),
                                    "trip.count.minus.1");
-    auto VF = State->VF;
-    Value *VTCMO =
-        VF.isScalar() ? TCMO : Builder.CreateVectorSplat(VF, TCMO, "broadcast");
-    for (unsigned Part = 0, UF = State->UF; Part < UF; ++Part)
-      State->set(BackedgeTakenCount, VTCMO, Part);
+    BackedgeTakenCount->setUnderlyingValue(TCMO);
   }
 
-  // 0. Set the reverse mapping from VPValues to Values for code generation.
-  for (auto &Entry : Value2VPValue)
-    State->VPValue2Value[Entry.second] = Entry.first;
+  VectorTripCount.setUnderlyingValue(VectorTripCountV);
 
-  BasicBlock *VectorPreHeaderBB = State->CFG.PrevBB;
-  State->CFG.VectorPreHeader = VectorPreHeaderBB;
-  BasicBlock *VectorHeaderBB = VectorPreHeaderBB->getSingleSuccessor();
-  assert(VectorHeaderBB && "Loop preheader does not have a single successor.");
+  IRBuilder<> Builder(State.CFG.PrevBB->getTerminator());
+  // FIXME: Model VF * UF computation completely in VPlan.
+  assert((!getVectorLoopRegion() || VFxUF.getNumUsers()) &&
+         "VFxUF expected to always have users");
+  unsigned UF = getUF();
+  if (VF.getNumUsers()) {
+    Value *RuntimeVF = getRuntimeVF(Builder, TCTy, State.VF);
+    VF.setUnderlyingValue(RuntimeVF);
+    VFxUF.setUnderlyingValue(
+        UF > 1 ? Builder.CreateMul(RuntimeVF, ConstantInt::get(TCTy, UF))
+               : RuntimeVF);
+  } else {
+    VFxUF.setUnderlyingValue(createStepForVF(Builder, TCTy, State.VF, UF));
+  }
+}
 
-  // 1. Make room to generate basic-blocks inside loop body if needed.
-  BasicBlock *VectorLatchBB = VectorHeaderBB->splitBasicBlock(
-      VectorHeaderBB->getFirstInsertionPt(), "vector.body.latch");
-  Loop *L = State->LI->getLoopFor(VectorHeaderBB);
-  L->addBasicBlockToLoop(VectorLatchBB, *State->LI);
-  // Remove the edge between Header and Latch to allow other connections.
-  // Temporarily terminate with unreachable until CFG is rewired.
-  // Note: this asserts the generated code's assumption that
-  // getFirstInsertionPt() can be dereferenced into an Instruction.
-  VectorHeaderBB->getTerminator()->eraseFromParent();
-  State->Builder.SetInsertPoint(VectorHeaderBB);
-  UnreachableInst *Terminator = State->Builder.CreateUnreachable();
-  State->Builder.SetInsertPoint(Terminator);
-
-  // 2. Generate code in loop body.
+/// Generate the code inside the preheader and body of the vectorized loop.
+/// Assumes a single pre-header basic-block was created for this. Introduce
+/// additional basic-blocks as needed, and fill them all.
+void VPlan::execute(VPTransformState *State) {
+  // Initialize CFG state.
   State->CFG.PrevVPBB = nullptr;
-  State->CFG.PrevBB = VectorHeaderBB;
-  State->CFG.LastBB = VectorLatchBB;
+  State->CFG.ExitBB = State->CFG.PrevBB->getSingleSuccessor();
 
-  for (VPBlockBase *Block : depth_first(Entry))
+  // Disconnect VectorPreHeader from ExitBB in both the CFG and DT.
+  BasicBlock *VectorPreHeader = State->CFG.PrevBB;
+  cast<BranchInst>(VectorPreHeader->getTerminator())->setSuccessor(0, nullptr);
+  State->CFG.DTU.applyUpdates(
+      {{DominatorTree::Delete, VectorPreHeader, State->CFG.ExitBB}});
+
+  LLVM_DEBUG(dbgs() << "Executing best plan with VF=" << State->VF
+                    << ", UF=" << getUF() << '\n');
+  setName("Final VPlan");
+  LLVM_DEBUG(dump());
+
+  // Disconnect the middle block from its single successor (the scalar loop
+  // header) in both the CFG and DT. The branch will be recreated during VPlan
+  // execution.
+  BasicBlock *MiddleBB = State->CFG.ExitBB;
+  BasicBlock *ScalarPh = MiddleBB->getSingleSuccessor();
+  auto *BrInst = new UnreachableInst(MiddleBB->getContext());
+  BrInst->insertBefore(MiddleBB->getTerminator()->getIterator());
+  MiddleBB->getTerminator()->eraseFromParent();
+  State->CFG.DTU.applyUpdates({{DominatorTree::Delete, MiddleBB, ScalarPh}});
+  // Disconnect scalar preheader and scalar header, as the dominator tree edge
+  // will be updated as part of VPlan execution. This allows keeping the DTU
+  // logic generic during VPlan execution.
+  State->CFG.DTU.applyUpdates(
+      {{DominatorTree::Delete, ScalarPh, ScalarPh->getSingleSuccessor()}});
+
+  ReversePostOrderTraversal<VPBlockShallowTraversalWrapper<VPBlockBase *>> RPOT(
+      Entry);
+  // Generate code for the VPlan, in parts of the vector skeleton, loop body and
+  // successor blocks including the middle, exit and scalar preheader blocks.
+  for (VPBlockBase *Block : RPOT)
     Block->execute(State);
 
-  // Setup branch terminator successors for VPBBs in VPBBsToFix based on
-  // VPBB's successors.
-  for (auto VPBB : State->CFG.VPBBsToFix) {
-    assert(EnableVPlanNativePath &&
-           "Unexpected VPBBsToFix in non VPlan-native path");
-    BasicBlock *BB = State->CFG.VPBB2IRBB[VPBB];
-    assert(BB && "Unexpected null basic block for VPBB");
+  State->CFG.DTU.flush();
 
-    unsigned Idx = 0;
-    auto *BBTerminator = BB->getTerminator();
+  auto *LoopRegion = getVectorLoopRegion();
+  if (!LoopRegion)
+    return;
 
-    for (VPBlockBase *SuccVPBlock : VPBB->getHierarchicalSuccessors()) {
-      VPBasicBlock *SuccVPBB = SuccVPBlock->getEntryBasicBlock();
-      BBTerminator->setSuccessor(Idx, State->CFG.VPBB2IRBB[SuccVPBB]);
-      ++Idx;
+  VPBasicBlock *LatchVPBB = LoopRegion->getExitingBasicBlock();
+  BasicBlock *VectorLatchBB = State->CFG.VPBB2IRBB[LatchVPBB];
+
+  // Fix the latch value of canonical, reduction and first-order recurrences
+  // phis in the vector loop.
+  VPBasicBlock *Header = LoopRegion->getEntryBasicBlock();
+  for (VPRecipeBase &R : Header->phis()) {
+    // Skip phi-like recipes that generate their backedege values themselves.
+    if (isa<VPWidenPHIRecipe>(&R))
+      continue;
+
+    if (isa<VPWidenInductionRecipe>(&R)) {
+      PHINode *Phi = nullptr;
+      if (isa<VPWidenIntOrFpInductionRecipe>(&R)) {
+        Phi = cast<PHINode>(State->get(R.getVPSingleValue()));
+      } else {
+        auto *WidenPhi = cast<VPWidenPointerInductionRecipe>(&R);
+        assert(!WidenPhi->onlyScalarsGenerated(State->VF.isScalable()) &&
+               "recipe generating only scalars should have been replaced");
+        auto *GEP = cast<GetElementPtrInst>(State->get(WidenPhi));
+        Phi = cast<PHINode>(GEP->getPointerOperand());
+      }
+
+      Phi->setIncomingBlock(1, VectorLatchBB);
+
+      // Move the last step to the end of the latch block. This ensures
+      // consistent placement of all induction updates.
+      Instruction *Inc = cast<Instruction>(Phi->getIncomingValue(1));
+      Inc->moveBefore(std::prev(VectorLatchBB->getTerminator()->getIterator()));
+
+      // Use the steps for the last part as backedge value for the induction.
+      if (auto *IV = dyn_cast<VPWidenIntOrFpInductionRecipe>(&R))
+        Inc->setOperand(0, State->get(IV->getLastUnrolledPartOperand()));
+      continue;
     }
+
+    auto *PhiR = cast<VPHeaderPHIRecipe>(&R);
+    bool NeedsScalar = isa<VPScalarPHIRecipe>(PhiR) ||
+                       (isa<VPReductionPHIRecipe>(PhiR) &&
+                        cast<VPReductionPHIRecipe>(PhiR)->isInLoop());
+    Value *Phi = State->get(PhiR, NeedsScalar);
+    Value *Val = State->get(PhiR->getBackedgeValue(), NeedsScalar);
+    cast<PHINode>(Phi)->addIncoming(Val, VectorLatchBB);
   }
+}
 
-  // 3. Merge the temporary latch created with the last basic-block filled.
-  BasicBlock *LastBB = State->CFG.PrevBB;
-  // Connect LastBB to VectorLatchBB to facilitate their merge.
-  assert((EnableVPlanNativePath ||
-          isa<UnreachableInst>(LastBB->getTerminator())) &&
-         "Expected InnerLoop VPlan CFG to terminate with unreachable");
-  assert((!EnableVPlanNativePath || isa<BranchInst>(LastBB->getTerminator())) &&
-         "Expected VPlan CFG to terminate with branch in NativePath");
-  LastBB->getTerminator()->eraseFromParent();
-  BranchInst::Create(VectorLatchBB, LastBB);
+InstructionCost VPlan::cost(ElementCount VF, VPCostContext &Ctx) {
+  // For now only return the cost of the vector loop region, ignoring any other
+  // blocks, like the preheader or middle blocks.
+  return getVectorLoopRegion()->cost(VF, Ctx);
+}
 
-  // Merge LastBB with Latch.
-  bool Merged = MergeBlockIntoPredecessor(VectorLatchBB, nullptr, State->LI);
-  (void)Merged;
-  assert(Merged && "Could not merge last basic block with latch.");
-  VectorLatchBB = LastBB;
+VPRegionBlock *VPlan::getVectorLoopRegion() {
+  // TODO: Cache if possible.
+  for (VPBlockBase *B : vp_depth_first_shallow(getEntry()))
+    if (auto *R = dyn_cast<VPRegionBlock>(B))
+      return R->isReplicator() ? nullptr : R;
+  return nullptr;
+}
 
-  // We do not attempt to preserve DT for outer loop vectorization currently.
-  if (!EnableVPlanNativePath)
-    updateDominatorTree(State->DT, VectorPreHeaderBB, VectorLatchBB,
-                        L->getExitBlock());
+const VPRegionBlock *VPlan::getVectorLoopRegion() const {
+  for (const VPBlockBase *B : vp_depth_first_shallow(getEntry()))
+    if (auto *R = dyn_cast<VPRegionBlock>(B))
+      return R->isReplicator() ? nullptr : R;
+  return nullptr;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+void VPlan::printLiveIns(raw_ostream &O) const {
+  VPSlotTracker SlotTracker(this);
+
+  if (VF.getNumUsers() > 0) {
+    O << "\nLive-in ";
+    VF.printAsOperand(O, SlotTracker);
+    O << " = VF";
+  }
+
+  if (VFxUF.getNumUsers() > 0) {
+    O << "\nLive-in ";
+    VFxUF.printAsOperand(O, SlotTracker);
+    O << " = VF * UF";
+  }
+
+  if (VectorTripCount.getNumUsers() > 0) {
+    O << "\nLive-in ";
+    VectorTripCount.printAsOperand(O, SlotTracker);
+    O << " = vector-trip-count";
+  }
+
+  if (BackedgeTakenCount && BackedgeTakenCount->getNumUsers()) {
+    O << "\nLive-in ";
+    BackedgeTakenCount->printAsOperand(O, SlotTracker);
+    O << " = backedge-taken count";
+  }
+
+  O << "\n";
+  if (TripCount->isLiveIn())
+    O << "Live-in ";
+  TripCount->printAsOperand(O, SlotTracker);
+  O << " = original trip-count";
+  O << "\n";
+}
+
 LLVM_DUMP_METHOD
 void VPlan::print(raw_ostream &O) const {
   VPSlotTracker SlotTracker(this);
 
-  O << "VPlan '" << Name << "' {";
-  for (const VPBlockBase *Block : depth_first(getEntry())) {
+  O << "VPlan '" << getName() << "' {";
+
+  printLiveIns(O);
+
+  ReversePostOrderTraversal<VPBlockShallowTraversalWrapper<const VPBlockBase *>>
+      RPOT(getEntry());
+  for (const VPBlockBase *Block : RPOT) {
     O << '\n';
     Block->print(O, "", SlotTracker);
   }
+
   O << "}\n";
+}
+
+std::string VPlan::getName() const {
+  std::string Out;
+  raw_string_ostream RSO(Out);
+  RSO << Name << " for ";
+  if (!VFs.empty()) {
+    RSO << "VF={" << VFs[0];
+    for (ElementCount VF : drop_begin(VFs))
+      RSO << "," << VF;
+    RSO << "},";
+  }
+
+  if (UFs.empty()) {
+    RSO << "UF>=1";
+  } else {
+    RSO << "UF={" << UFs[0];
+    for (unsigned UF : drop_begin(UFs))
+      RSO << "," << UF;
+    RSO << "}";
+  }
+
+  return Out;
 }
 
 LLVM_DUMP_METHOD
@@ -879,53 +1150,120 @@ LLVM_DUMP_METHOD
 void VPlan::dump() const { print(dbgs()); }
 #endif
 
-void VPlan::updateDominatorTree(DominatorTree *DT, BasicBlock *LoopPreHeaderBB,
-                                BasicBlock *LoopLatchBB,
-                                BasicBlock *LoopExitBB) {
-  BasicBlock *LoopHeaderBB = LoopPreHeaderBB->getSingleSuccessor();
-  assert(LoopHeaderBB && "Loop preheader does not have a single successor.");
-  // The vector body may be more than a single basic-block by this point.
-  // Update the dominator tree information inside the vector body by propagating
-  // it from header to latch, expecting only triangular control-flow, if any.
-  BasicBlock *PostDomSucc = nullptr;
-  for (auto *BB = LoopHeaderBB; BB != LoopLatchBB; BB = PostDomSucc) {
-    // Get the list of successors of this block.
-    std::vector<BasicBlock *> Succs(succ_begin(BB), succ_end(BB));
-    assert(Succs.size() <= 2 &&
-           "Basic block in vector loop has more than 2 successors.");
-    PostDomSucc = Succs[0];
-    if (Succs.size() == 1) {
-      assert(PostDomSucc->getSinglePredecessor() &&
-             "PostDom successor has more than one predecessor.");
-      DT->addNewBlock(PostDomSucc, BB);
-      continue;
+static void remapOperands(VPBlockBase *Entry, VPBlockBase *NewEntry,
+                          DenseMap<VPValue *, VPValue *> &Old2NewVPValues) {
+  // Update the operands of all cloned recipes starting at NewEntry. This
+  // traverses all reachable blocks. This is done in two steps, to handle cycles
+  // in PHI recipes.
+  ReversePostOrderTraversal<VPBlockDeepTraversalWrapper<VPBlockBase *>>
+      OldDeepRPOT(Entry);
+  ReversePostOrderTraversal<VPBlockDeepTraversalWrapper<VPBlockBase *>>
+      NewDeepRPOT(NewEntry);
+  // First, collect all mappings from old to new VPValues defined by cloned
+  // recipes.
+  for (const auto &[OldBB, NewBB] :
+       zip(VPBlockUtils::blocksOnly<VPBasicBlock>(OldDeepRPOT),
+           VPBlockUtils::blocksOnly<VPBasicBlock>(NewDeepRPOT))) {
+    assert(OldBB->getRecipeList().size() == NewBB->getRecipeList().size() &&
+           "blocks must have the same number of recipes");
+    for (const auto &[OldR, NewR] : zip(*OldBB, *NewBB)) {
+      assert(OldR.getNumOperands() == NewR.getNumOperands() &&
+             "recipes must have the same number of operands");
+      assert(OldR.getNumDefinedValues() == NewR.getNumDefinedValues() &&
+             "recipes must define the same number of operands");
+      for (const auto &[OldV, NewV] :
+           zip(OldR.definedValues(), NewR.definedValues()))
+        Old2NewVPValues[OldV] = NewV;
     }
-    BasicBlock *InterimSucc = Succs[1];
-    if (PostDomSucc->getSingleSuccessor() == InterimSucc) {
-      PostDomSucc = Succs[1];
-      InterimSucc = Succs[0];
-    }
-    assert(InterimSucc->getSingleSuccessor() == PostDomSucc &&
-           "One successor of a basic block does not lead to the other.");
-    assert(InterimSucc->getSinglePredecessor() &&
-           "Interim successor has more than one predecessor.");
-    assert(PostDomSucc->hasNPredecessors(2) &&
-           "PostDom successor has more than two predecessors.");
-    DT->addNewBlock(InterimSucc, BB);
-    DT->addNewBlock(PostDomSucc, BB);
   }
-  // Latch block is a new dominator for the loop exit.
-  DT->changeImmediateDominator(LoopExitBB, LoopLatchBB);
-  assert(DT->verify(DominatorTree::VerificationLevel::Fast));
+
+  // Update all operands to use cloned VPValues.
+  for (VPBasicBlock *NewBB :
+       VPBlockUtils::blocksOnly<VPBasicBlock>(NewDeepRPOT)) {
+    for (VPRecipeBase &NewR : *NewBB)
+      for (unsigned I = 0, E = NewR.getNumOperands(); I != E; ++I) {
+        VPValue *NewOp = Old2NewVPValues.lookup(NewR.getOperand(I));
+        NewR.setOperand(I, NewOp);
+      }
+  }
+}
+
+VPlan *VPlan::duplicate() {
+  unsigned NumBlocksBeforeCloning = CreatedBlocks.size();
+  // Clone blocks.
+  const auto &[NewEntry, __] = cloneFrom(Entry);
+
+  BasicBlock *ScalarHeaderIRBB = getScalarHeader()->getIRBasicBlock();
+  VPIRBasicBlock *NewScalarHeader = cast<VPIRBasicBlock>(*find_if(
+      vp_depth_first_shallow(NewEntry), [ScalarHeaderIRBB](VPBlockBase *VPB) {
+        auto *VPIRBB = dyn_cast<VPIRBasicBlock>(VPB);
+        return VPIRBB && VPIRBB->getIRBasicBlock() == ScalarHeaderIRBB;
+      }));
+  // Create VPlan, clone live-ins and remap operands in the cloned blocks.
+  auto *NewPlan = new VPlan(cast<VPBasicBlock>(NewEntry), NewScalarHeader);
+  DenseMap<VPValue *, VPValue *> Old2NewVPValues;
+  for (VPValue *OldLiveIn : VPLiveInsToFree) {
+    Old2NewVPValues[OldLiveIn] =
+        NewPlan->getOrAddLiveIn(OldLiveIn->getLiveInIRValue());
+  }
+  Old2NewVPValues[&VectorTripCount] = &NewPlan->VectorTripCount;
+  Old2NewVPValues[&VF] = &NewPlan->VF;
+  Old2NewVPValues[&VFxUF] = &NewPlan->VFxUF;
+  if (BackedgeTakenCount) {
+    NewPlan->BackedgeTakenCount = new VPValue();
+    Old2NewVPValues[BackedgeTakenCount] = NewPlan->BackedgeTakenCount;
+  }
+  assert(TripCount && "trip count must be set");
+  if (TripCount->isLiveIn())
+    Old2NewVPValues[TripCount] =
+        NewPlan->getOrAddLiveIn(TripCount->getLiveInIRValue());
+  // else NewTripCount will be created and inserted into Old2NewVPValues when
+  // TripCount is cloned. In any case NewPlan->TripCount is updated below.
+
+  remapOperands(Entry, NewEntry, Old2NewVPValues);
+
+  // Initialize remaining fields of cloned VPlan.
+  NewPlan->VFs = VFs;
+  NewPlan->UFs = UFs;
+  // TODO: Adjust names.
+  NewPlan->Name = Name;
+  assert(Old2NewVPValues.contains(TripCount) &&
+         "TripCount must have been added to Old2NewVPValues");
+  NewPlan->TripCount = Old2NewVPValues[TripCount];
+
+  // Transfer all cloned blocks (the second half of all current blocks) from
+  // current to new VPlan.
+  unsigned NumBlocksAfterCloning = CreatedBlocks.size();
+  for (unsigned I :
+       seq<unsigned>(NumBlocksBeforeCloning, NumBlocksAfterCloning))
+    NewPlan->CreatedBlocks.push_back(this->CreatedBlocks[I]);
+  CreatedBlocks.truncate(NumBlocksBeforeCloning);
+
+  return NewPlan;
+}
+
+VPIRBasicBlock *VPlan::createEmptyVPIRBasicBlock(BasicBlock *IRBB) {
+  auto *VPIRBB = new VPIRBasicBlock(IRBB);
+  CreatedBlocks.push_back(VPIRBB);
+  return VPIRBB;
+}
+
+VPIRBasicBlock *VPlan::createVPIRBasicBlock(BasicBlock *IRBB) {
+  auto *VPIRBB = createEmptyVPIRBasicBlock(IRBB);
+  for (Instruction &I :
+       make_range(IRBB->begin(), IRBB->getTerminator()->getIterator()))
+    VPIRBB->appendRecipe(new VPIRInstruction(I));
+  return VPIRBB;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-const Twine VPlanPrinter::getUID(const VPBlockBase *Block) {
+
+Twine VPlanPrinter::getUID(const VPBlockBase *Block) {
   return (isa<VPRegionBlock>(Block) ? "cluster_N" : "N") +
          Twine(getOrCreateBID(Block));
 }
 
-const Twine VPlanPrinter::getOrCreateName(const VPBlockBase *Block) {
+Twine VPlanPrinter::getOrCreateName(const VPBlockBase *Block) {
   const std::string &Name = Block->getName();
   if (!Name.empty())
     return Name;
@@ -939,17 +1277,24 @@ void VPlanPrinter::dump() {
   OS << "graph [labelloc=t, fontsize=30; label=\"Vectorization Plan";
   if (!Plan.getName().empty())
     OS << "\\n" << DOT::EscapeString(Plan.getName());
-  if (Plan.BackedgeTakenCount) {
-    OS << ", where:\\n";
-    Plan.BackedgeTakenCount->print(OS, SlotTracker);
-    OS << " := BackedgeTakenCount";
+
+  {
+    // Print live-ins.
+  std::string Str;
+  raw_string_ostream SS(Str);
+  Plan.printLiveIns(SS);
+  SmallVector<StringRef, 0> Lines;
+  StringRef(Str).rtrim('\n').split(Lines, "\n");
+  for (auto Line : Lines)
+    OS << DOT::EscapeString(Line.str()) << "\\n";
   }
+
   OS << "\"]\n";
   OS << "node [shape=rect, fontname=Courier, fontsize=30]\n";
   OS << "edge [fontname=Courier, fontsize=30]\n";
   OS << "compound=true\n";
 
-  for (const VPBlockBase *Block : depth_first(Plan.getEntry()))
+  for (const VPBlockBase *Block : vp_depth_first_shallow(Plan.getEntry()))
     dumpBlock(Block);
 
   OS << "}\n";
@@ -967,8 +1312,8 @@ void VPlanPrinter::dumpBlock(const VPBlockBase *Block) {
 void VPlanPrinter::drawEdge(const VPBlockBase *From, const VPBlockBase *To,
                             bool Hidden, const Twine &Label) {
   // Due to "dot" we print an edge between two regions as an edge between the
-  // exit basic block and the entry basic of the respective regions.
-  const VPBlockBase *Tail = From->getExitBasicBlock();
+  // exiting basic block and the entry basic of the respective regions.
+  const VPBlockBase *Tail = From->getExitingBasicBlock();
   const VPBlockBase *Head = To->getEntryBasicBlock();
   OS << Indent << getUID(Tail) << " -> " << getUID(Head);
   OS << " [ label=\"" << Label << '\"';
@@ -1034,7 +1379,7 @@ void VPlanPrinter::dumpRegion(const VPRegionBlock *Region) {
      << DOT::EscapeString(Region->getName()) << "\"\n";
   // Dump the blocks of the region.
   assert(Region->getEntry() && "Region contains no inner blocks.");
-  for (const VPBlockBase *Block : depth_first(Region->getEntry()))
+  for (const VPBlockBase *Block : vp_depth_first_shallow(Region->getEntry()))
     dumpBlock(Block);
   bumpIndent(-1);
   OS << Indent << "}\n";
@@ -1058,334 +1403,53 @@ void VPlanIngredient::print(raw_ostream &O) const {
     V->printAsOperand(O, false);
 }
 
-void VPWidenCallRecipe::print(raw_ostream &O, const Twine &Indent,
-                              VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN-CALL ";
-
-  auto *CI = cast<CallInst>(getUnderlyingInstr());
-  if (CI->getType()->isVoidTy())
-    O << "void ";
-  else {
-    printAsOperand(O, SlotTracker);
-    O << " = ";
-  }
-
-  O << "call @" << CI->getCalledFunction()->getName() << "(";
-  printOperands(O, SlotTracker);
-  O << ")";
-}
-
-void VPWidenSelectRecipe::print(raw_ostream &O, const Twine &Indent,
-                                VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN-SELECT ";
-  printAsOperand(O, SlotTracker);
-  O << " = select ";
-  getOperand(0)->printAsOperand(O, SlotTracker);
-  O << ", ";
-  getOperand(1)->printAsOperand(O, SlotTracker);
-  O << ", ";
-  getOperand(2)->printAsOperand(O, SlotTracker);
-  O << (InvariantCond ? " (condition is loop invariant)" : "");
-}
-
-void VPWidenRecipe::print(raw_ostream &O, const Twine &Indent,
-                          VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN ";
-  printAsOperand(O, SlotTracker);
-  O << " = " << getUnderlyingInstr()->getOpcodeName() << " ";
-  printOperands(O, SlotTracker);
-}
-
-void VPWidenIntOrFpInductionRecipe::print(raw_ostream &O, const Twine &Indent,
-                                          VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN-INDUCTION";
-  if (getTruncInst()) {
-    O << "\\l\"";
-    O << " +\n" << Indent << "\"  " << VPlanIngredient(IV) << "\\l\"";
-    O << " +\n" << Indent << "\"  ";
-    getVPValue(0)->printAsOperand(O, SlotTracker);
-  } else
-    O << " " << VPlanIngredient(IV);
-}
-
-void VPWidenGEPRecipe::print(raw_ostream &O, const Twine &Indent,
-                             VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN-GEP ";
-  O << (IsPtrLoopInvariant ? "Inv" : "Var");
-  size_t IndicesNumber = IsIndexLoopInvariant.size();
-  for (size_t I = 0; I < IndicesNumber; ++I)
-    O << "[" << (IsIndexLoopInvariant[I] ? "Inv" : "Var") << "]";
-
-  O << " ";
-  printAsOperand(O, SlotTracker);
-  O << " = getelementptr ";
-  printOperands(O, SlotTracker);
-}
-
-void VPWidenPHIRecipe::print(raw_ostream &O, const Twine &Indent,
-                             VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN-PHI ";
-
-  auto *OriginalPhi = cast<PHINode>(getUnderlyingValue());
-  // Unless all incoming values are modeled in VPlan  print the original PHI
-  // directly.
-  // TODO: Remove once all VPWidenPHIRecipe instances keep all relevant incoming
-  // values as VPValues.
-  if (getNumOperands() != OriginalPhi->getNumOperands()) {
-    O << VPlanIngredient(OriginalPhi);
-    return;
-  }
-
-  printAsOperand(O, SlotTracker);
-  O << " = phi ";
-  printOperands(O, SlotTracker);
-}
-
-void VPBlendRecipe::print(raw_ostream &O, const Twine &Indent,
-                          VPSlotTracker &SlotTracker) const {
-  O << Indent << "BLEND ";
-  Phi->printAsOperand(O, false);
-  O << " =";
-  if (getNumIncomingValues() == 1) {
-    // Not a User of any mask: not really blending, this is a
-    // single-predecessor phi.
-    O << " ";
-    getIncomingValue(0)->printAsOperand(O, SlotTracker);
-  } else {
-    for (unsigned I = 0, E = getNumIncomingValues(); I < E; ++I) {
-      O << " ";
-      getIncomingValue(I)->printAsOperand(O, SlotTracker);
-      O << "/";
-      getMask(I)->printAsOperand(O, SlotTracker);
-    }
-  }
-}
-
-void VPReductionRecipe::print(raw_ostream &O, const Twine &Indent,
-                              VPSlotTracker &SlotTracker) const {
-  O << Indent << "REDUCE ";
-  printAsOperand(O, SlotTracker);
-  O << " = ";
-  getChainOp()->printAsOperand(O, SlotTracker);
-  O << " + reduce." << Instruction::getOpcodeName(RdxDesc->getOpcode())
-    << " (";
-  getVecOp()->printAsOperand(O, SlotTracker);
-  if (getCondOp()) {
-    O << ", ";
-    getCondOp()->printAsOperand(O, SlotTracker);
-  }
-  O << ")";
-}
-
-void VPReplicateRecipe::print(raw_ostream &O, const Twine &Indent,
-                              VPSlotTracker &SlotTracker) const {
-  O << Indent << (IsUniform ? "CLONE " : "REPLICATE ");
-
-  if (!getUnderlyingInstr()->getType()->isVoidTy()) {
-    printAsOperand(O, SlotTracker);
-    O << " = ";
-  }
-  O << Instruction::getOpcodeName(getUnderlyingInstr()->getOpcode()) << " ";
-  printOperands(O, SlotTracker);
-
-  if (AlsoPack)
-    O << " (S->V)";
-}
-
-void VPPredInstPHIRecipe::print(raw_ostream &O, const Twine &Indent,
-                                VPSlotTracker &SlotTracker) const {
-  O << Indent << "PHI-PREDICATED-INSTRUCTION ";
-  printAsOperand(O, SlotTracker);
-  O << " = ";
-  printOperands(O, SlotTracker);
-}
-
-void VPWidenMemoryInstructionRecipe::print(raw_ostream &O, const Twine &Indent,
-                                           VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN ";
-
-  if (!isStore()) {
-    getVPSingleValue()->printAsOperand(O, SlotTracker);
-    O << " = ";
-  }
-  O << Instruction::getOpcodeName(Ingredient.getOpcode()) << " ";
-
-  printOperands(O, SlotTracker);
-}
 #endif
 
-void VPWidenCanonicalIVRecipe::execute(VPTransformState &State) {
-  Value *CanonicalIV = State.CanonicalIV;
-  Type *STy = CanonicalIV->getType();
-  IRBuilder<> Builder(State.CFG.PrevBB->getTerminator());
-  ElementCount VF = State.VF;
-  assert(!VF.isScalable() && "the code following assumes non scalables ECs");
-  Value *VStart = VF.isScalar()
-                      ? CanonicalIV
-                      : Builder.CreateVectorSplat(VF.getKnownMinValue(),
-                                                  CanonicalIV, "broadcast");
-  for (unsigned Part = 0, UF = State.UF; Part < UF; ++Part) {
-    SmallVector<Constant *, 8> Indices;
-    for (unsigned Lane = 0; Lane < VF.getKnownMinValue(); ++Lane)
-      Indices.push_back(
-          ConstantInt::get(STy, Part * VF.getKnownMinValue() + Lane));
-    // If VF == 1, there is only one iteration in the loop above, thus the
-    // element pushed back into Indices is ConstantInt::get(STy, Part)
-    Constant *VStep =
-        VF.isScalar() ? Indices.back() : ConstantVector::get(Indices);
-    // Add the consecutive indices to the vector value.
-    Value *CanonicalVectorIV = Builder.CreateAdd(VStart, VStep, "vec.iv");
-    State.set(getVPSingleValue(), CanonicalVectorIV, Part);
-  }
+/// Returns true if there is a vector loop region and \p VPV is defined in a
+/// loop region.
+static bool isDefinedInsideLoopRegions(const VPValue *VPV) {
+  const VPRecipeBase *DefR = VPV->getDefiningRecipe();
+  return DefR && (!DefR->getParent()->getPlan()->getVectorLoopRegion() ||
+                  DefR->getParent()->getEnclosingLoopRegion());
 }
 
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void VPWidenCanonicalIVRecipe::print(raw_ostream &O, const Twine &Indent,
-                                     VPSlotTracker &SlotTracker) const {
-  O << Indent << "EMIT ";
-  getVPSingleValue()->printAsOperand(O, SlotTracker);
-  O << " = WIDEN-CANONICAL-INDUCTION";
+bool VPValue::isDefinedOutsideLoopRegions() const {
+  return !isDefinedInsideLoopRegions(this);
 }
-#endif
-
-void VPFirstOrderRecurrencePHIRecipe::execute(VPTransformState &State) {
-  auto &Builder = State.Builder;
-  // Create a vector from the initial value.
-  auto *VectorInit = getStartValue()->getLiveInIRValue();
-
-  Type *VecTy = State.VF.isScalar()
-                    ? VectorInit->getType()
-                    : VectorType::get(VectorInit->getType(), State.VF);
-
-  if (State.VF.isVector()) {
-    auto *IdxTy = Builder.getInt32Ty();
-    auto *One = ConstantInt::get(IdxTy, 1);
-    IRBuilder<>::InsertPointGuard Guard(Builder);
-    Builder.SetInsertPoint(State.CFG.VectorPreHeader->getTerminator());
-    auto *RuntimeVF = getRuntimeVF(Builder, IdxTy, State.VF);
-    auto *LastIdx = Builder.CreateSub(RuntimeVF, One);
-    VectorInit = Builder.CreateInsertElement(
-        PoisonValue::get(VecTy), VectorInit, LastIdx, "vector.recur.init");
-  }
-
-  // Create a phi node for the new recurrence.
-  PHINode *EntryPart = PHINode::Create(
-      VecTy, 2, "vector.recur", &*State.CFG.PrevBB->getFirstInsertionPt());
-  EntryPart->addIncoming(VectorInit, State.CFG.VectorPreHeader);
-  State.set(this, EntryPart, 0);
-}
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void VPFirstOrderRecurrencePHIRecipe::print(raw_ostream &O, const Twine &Indent,
-                                            VPSlotTracker &SlotTracker) const {
-  O << Indent << "FIRST-ORDER-RECURRENCE-PHI ";
-  printAsOperand(O, SlotTracker);
-  O << " = phi ";
-  printOperands(O, SlotTracker);
-}
-#endif
-
-void VPReductionPHIRecipe::execute(VPTransformState &State) {
-  PHINode *PN = cast<PHINode>(getUnderlyingValue());
-  auto &Builder = State.Builder;
-
-  // In order to support recurrences we need to be able to vectorize Phi nodes.
-  // Phi nodes have cycles, so we need to vectorize them in two stages. This is
-  // stage #1: We create a new vector PHI node with no incoming edges. We'll use
-  // this value when we vectorize all of the instructions that use the PHI.
-  bool ScalarPHI = State.VF.isScalar() || IsInLoop;
-  Type *VecTy =
-      ScalarPHI ? PN->getType() : VectorType::get(PN->getType(), State.VF);
-
-  BasicBlock *HeaderBB = State.CFG.PrevBB;
-  assert(State.LI->getLoopFor(HeaderBB)->getHeader() == HeaderBB &&
-         "recipe must be in the vector loop header");
-  unsigned LastPartForNewPhi = isOrdered() ? 1 : State.UF;
-  for (unsigned Part = 0; Part < LastPartForNewPhi; ++Part) {
-    Value *EntryPart =
-        PHINode::Create(VecTy, 2, "vec.phi", &*HeaderBB->getFirstInsertionPt());
-    State.set(this, EntryPart, Part);
-  }
-  VPValue *StartVPV = getStartValue();
-  Value *StartV = StartVPV->getLiveInIRValue();
-
-  Value *Iden = nullptr;
-  RecurKind RK = RdxDesc.getRecurrenceKind();
-  if (RecurrenceDescriptor::isMinMaxRecurrenceKind(RK)) {
-    // MinMax reduction have the start value as their identify.
-    if (ScalarPHI) {
-      Iden = StartV;
-    } else {
-      IRBuilderBase::InsertPointGuard IPBuilder(Builder);
-      Builder.SetInsertPoint(State.CFG.VectorPreHeader->getTerminator());
-      StartV = Iden =
-          Builder.CreateVectorSplat(State.VF, StartV, "minmax.ident");
-    }
-  } else {
-    Constant *IdenC = RecurrenceDescriptor::getRecurrenceIdentity(
-        RK, VecTy->getScalarType(), RdxDesc.getFastMathFlags());
-    Iden = IdenC;
-
-    if (!ScalarPHI) {
-      Iden = ConstantVector::getSplat(State.VF, IdenC);
-      IRBuilderBase::InsertPointGuard IPBuilder(Builder);
-      Builder.SetInsertPoint(State.CFG.VectorPreHeader->getTerminator());
-      Constant *Zero = Builder.getInt32(0);
-      StartV = Builder.CreateInsertElement(Iden, StartV, Zero);
-    }
-  }
-
-  for (unsigned Part = 0; Part < LastPartForNewPhi; ++Part) {
-    Value *EntryPart = State.get(this, Part);
-    // Make sure to add the reduction start value only to the
-    // first unroll part.
-    Value *StartVal = (Part == 0) ? StartV : Iden;
-    cast<PHINode>(EntryPart)->addIncoming(StartVal, State.CFG.VectorPreHeader);
-  }
-}
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-void VPReductionPHIRecipe::print(raw_ostream &O, const Twine &Indent,
-                                 VPSlotTracker &SlotTracker) const {
-  O << Indent << "WIDEN-REDUCTION-PHI ";
-
-  printAsOperand(O, SlotTracker);
-  O << " = phi ";
-  printOperands(O, SlotTracker);
-}
-#endif
-
-template void DomTreeBuilder::Calculate<VPDominatorTree>(VPDominatorTree &DT);
-
 void VPValue::replaceAllUsesWith(VPValue *New) {
+  replaceUsesWithIf(New, [](VPUser &, unsigned) { return true; });
+}
+
+void VPValue::replaceUsesWithIf(
+    VPValue *New,
+    llvm::function_ref<bool(VPUser &U, unsigned Idx)> ShouldReplace) {
+  // Note that this early exit is required for correctness; the implementation
+  // below relies on the number of users for this VPValue to decrease, which
+  // isn't the case if this == New.
+  if (this == New)
+    return;
+
   for (unsigned J = 0; J < getNumUsers();) {
     VPUser *User = Users[J];
-    unsigned NumUsers = getNumUsers();
-    for (unsigned I = 0, E = User->getNumOperands(); I < E; ++I)
-      if (User->getOperand(I) == this)
-        User->setOperand(I, New);
+    bool RemovedUser = false;
+    for (unsigned I = 0, E = User->getNumOperands(); I < E; ++I) {
+      if (User->getOperand(I) != this || !ShouldReplace(*User, I))
+        continue;
+
+      RemovedUser = true;
+      User->setOperand(I, New);
+    }
     // If a user got removed after updating the current user, the next user to
     // update will be moved to the current position, so we only need to
     // increment the index if the number of users did not change.
-    if (NumUsers == getNumUsers())
+    if (!RemovedUser)
       J++;
   }
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
 void VPValue::printAsOperand(raw_ostream &OS, VPSlotTracker &Tracker) const {
-  if (const Value *UV = getUnderlyingValue()) {
-    OS << "ir<";
-    UV->printAsOperand(OS, false);
-    OS << ">";
-    return;
-  }
-
-  unsigned Slot = Tracker.getSlot(this);
-  if (Slot == unsigned(-1))
-    OS << "<badref>";
-  else
-    OS << "vp<%" << Tracker.getSlot(this) << ">";
+  OS << Tracker.getOrCreateName(this);
 }
 
 void VPUser::printOperands(raw_ostream &O, VPSlotTracker &SlotTracker) const {
@@ -1398,7 +1462,8 @@ void VPUser::printOperands(raw_ostream &O, VPSlotTracker &SlotTracker) const {
 void VPInterleavedAccessInfo::visitRegion(VPRegionBlock *Region,
                                           Old2NewTy &Old2New,
                                           InterleavedAccessInfo &IAI) {
-  ReversePostOrderTraversal<VPBlockBase *> RPOT(Region->getEntry());
+  ReversePostOrderTraversal<VPBlockShallowTraversalWrapper<VPBlockBase *>>
+      RPOT(Region->getEntry());
   for (VPBlockBase *Base : RPOT) {
     visitBlock(Base, Old2New, IAI);
   }
@@ -1412,7 +1477,10 @@ void VPInterleavedAccessInfo::visitBlock(VPBlockBase *Block, Old2NewTy &Old2New,
         continue;
       assert(isa<VPInstruction>(&VPI) && "Can only handle VPInstructions");
       auto *VPInst = cast<VPInstruction>(&VPI);
-      auto *Inst = cast<Instruction>(VPInst->getUnderlyingValue());
+
+      auto *Inst = dyn_cast_or_null<Instruction>(VPInst->getUnderlyingValue());
+      if (!Inst)
+        continue;
       auto *IG = IAI.getInterleaveGroup(Inst);
       if (!IG)
         continue;
@@ -1440,29 +1508,165 @@ void VPInterleavedAccessInfo::visitBlock(VPBlockBase *Block, Old2NewTy &Old2New,
 VPInterleavedAccessInfo::VPInterleavedAccessInfo(VPlan &Plan,
                                                  InterleavedAccessInfo &IAI) {
   Old2NewTy Old2New;
-  visitRegion(cast<VPRegionBlock>(Plan.getEntry()), Old2New, IAI);
+  visitRegion(Plan.getVectorLoopRegion(), Old2New, IAI);
 }
 
-void VPSlotTracker::assignSlot(const VPValue *V) {
-  assert(Slots.find(V) == Slots.end() && "VPValue already has a slot!");
-  Slots[V] = NextSlot++;
+void VPSlotTracker::assignName(const VPValue *V) {
+  assert(!VPValue2Name.contains(V) && "VPValue already has a name!");
+  auto *UV = V->getUnderlyingValue();
+  auto *VPI = dyn_cast_or_null<VPInstruction>(V->getDefiningRecipe());
+  if (!UV && !(VPI && !VPI->getName().empty())) {
+    VPValue2Name[V] = (Twine("vp<%") + Twine(NextSlot) + ">").str();
+    NextSlot++;
+    return;
+  }
+
+  // Use the name of the underlying Value, wrapped in "ir<>", and versioned by
+  // appending ".Number" to the name if there are multiple uses.
+  std::string Name;
+  if (UV) {
+    raw_string_ostream S(Name);
+    UV->printAsOperand(S, false);
+  } else
+    Name = VPI->getName();
+
+  assert(!Name.empty() && "Name cannot be empty.");
+  StringRef Prefix = UV ? "ir<" : "vp<%";
+  std::string BaseName = (Twine(Prefix) + Name + Twine(">")).str();
+
+  // First assign the base name for V.
+  const auto &[A, _] = VPValue2Name.insert({V, BaseName});
+  // Integer or FP constants with different types will result in he same string
+  // due to stripping types.
+  if (V->isLiveIn() && isa<ConstantInt, ConstantFP>(UV))
+    return;
+
+  // If it is already used by C > 0 other VPValues, increase the version counter
+  // C and use it for V.
+  const auto &[C, UseInserted] = BaseName2Version.insert({BaseName, 0});
+  if (!UseInserted) {
+    C->second++;
+    A->second = (BaseName + Twine(".") + Twine(C->second)).str();
+  }
 }
 
-void VPSlotTracker::assignSlots(const VPlan &Plan) {
-
-  for (const VPValue *V : Plan.VPExternalDefs)
-    assignSlot(V);
-
+void VPSlotTracker::assignNames(const VPlan &Plan) {
+  if (Plan.VF.getNumUsers() > 0)
+    assignName(&Plan.VF);
+  if (Plan.VFxUF.getNumUsers() > 0)
+    assignName(&Plan.VFxUF);
+  assignName(&Plan.VectorTripCount);
   if (Plan.BackedgeTakenCount)
-    assignSlot(Plan.BackedgeTakenCount);
+    assignName(Plan.BackedgeTakenCount);
+  for (VPValue *LI : Plan.VPLiveInsToFree)
+    assignName(LI);
 
-  ReversePostOrderTraversal<
-      VPBlockRecursiveTraversalWrapper<const VPBlockBase *>>
-      RPOT(VPBlockRecursiveTraversalWrapper<const VPBlockBase *>(
-          Plan.getEntry()));
+  ReversePostOrderTraversal<VPBlockDeepTraversalWrapper<const VPBlockBase *>>
+      RPOT(VPBlockDeepTraversalWrapper<const VPBlockBase *>(Plan.getEntry()));
   for (const VPBasicBlock *VPBB :
        VPBlockUtils::blocksOnly<const VPBasicBlock>(RPOT))
-    for (const VPRecipeBase &Recipe : *VPBB)
-      for (VPValue *Def : Recipe.definedValues())
-        assignSlot(Def);
+    assignNames(VPBB);
+}
+
+void VPSlotTracker::assignNames(const VPBasicBlock *VPBB) {
+  for (const VPRecipeBase &Recipe : *VPBB)
+    for (VPValue *Def : Recipe.definedValues())
+      assignName(Def);
+}
+
+std::string VPSlotTracker::getOrCreateName(const VPValue *V) const {
+  std::string Name = VPValue2Name.lookup(V);
+  if (!Name.empty())
+    return Name;
+
+  // If no name was assigned, no VPlan was provided when creating the slot
+  // tracker or it is not reachable from the provided VPlan. This can happen,
+  // e.g. when trying to print a recipe that has not been inserted into a VPlan
+  // in a debugger.
+  // TODO: Update VPSlotTracker constructor to assign names to recipes &
+  // VPValues not associated with a VPlan, instead of constructing names ad-hoc
+  // here.
+  const VPRecipeBase *DefR = V->getDefiningRecipe();
+  (void)DefR;
+  assert((!DefR || !DefR->getParent() || !DefR->getParent()->getPlan()) &&
+         "VPValue defined by a recipe in a VPlan?");
+
+  // Use the underlying value's name, if there is one.
+  if (auto *UV = V->getUnderlyingValue()) {
+    std::string Name;
+    raw_string_ostream S(Name);
+    UV->printAsOperand(S, false);
+    return (Twine("ir<") + Name + ">").str();
+  }
+
+  return "<badref>";
+}
+
+bool LoopVectorizationPlanner::getDecisionAndClampRange(
+    const std::function<bool(ElementCount)> &Predicate, VFRange &Range) {
+  assert(!Range.isEmpty() && "Trying to test an empty VF range.");
+  bool PredicateAtRangeStart = Predicate(Range.Start);
+
+  for (ElementCount TmpVF : VFRange(Range.Start * 2, Range.End))
+    if (Predicate(TmpVF) != PredicateAtRangeStart) {
+      Range.End = TmpVF;
+      break;
+    }
+
+  return PredicateAtRangeStart;
+}
+
+/// Build VPlans for the full range of feasible VF's = {\p MinVF, 2 * \p MinVF,
+/// 4 * \p MinVF, ..., \p MaxVF} by repeatedly building a VPlan for a sub-range
+/// of VF's starting at a given VF and extending it as much as possible. Each
+/// vectorization decision can potentially shorten this sub-range during
+/// buildVPlan().
+void LoopVectorizationPlanner::buildVPlans(ElementCount MinVF,
+                                           ElementCount MaxVF) {
+  auto MaxVFTimes2 = MaxVF * 2;
+  for (ElementCount VF = MinVF; ElementCount::isKnownLT(VF, MaxVFTimes2);) {
+    VFRange SubRange = {VF, MaxVFTimes2};
+    auto Plan = buildVPlan(SubRange);
+    VPlanTransforms::optimize(*Plan);
+    // Update the name of the latch of the top-level vector loop region region
+    // after optimizations which includes block folding.
+    Plan->getVectorLoopRegion()->getExiting()->setName("vector.latch");
+    VPlans.push_back(std::move(Plan));
+    VF = SubRange.End;
+  }
+}
+
+VPlan &LoopVectorizationPlanner::getPlanFor(ElementCount VF) const {
+  assert(count_if(VPlans,
+                  [VF](const VPlanPtr &Plan) { return Plan->hasVF(VF); }) ==
+             1 &&
+         "Multiple VPlans for VF.");
+
+  for (const VPlanPtr &Plan : VPlans) {
+    if (Plan->hasVF(VF))
+      return *Plan.get();
+  }
+  llvm_unreachable("No plan found!");
+}
+
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+void LoopVectorizationPlanner::printPlans(raw_ostream &O) {
+  if (VPlans.empty()) {
+    O << "LV: No VPlans built.\n";
+    return;
+  }
+  for (const auto &Plan : VPlans)
+    if (PrintVPlansInDotFormat)
+      Plan->printDOT(O);
+    else
+      Plan->print(O);
+}
+#endif
+
+TargetTransformInfo::OperandValueInfo
+VPCostContext::getOperandInfo(VPValue *V) const {
+  if (!V->isLiveIn())
+    return {};
+
+  return TTI::getOperandInfo(V->getLiveInIRValue());
 }

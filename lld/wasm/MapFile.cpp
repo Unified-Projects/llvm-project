@@ -28,7 +28,6 @@
 #include "SyntheticSections.h"
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -52,7 +51,7 @@ static void writeHeader(raw_ostream &os, int64_t vma, uint64_t lma,
 // Returns a list of all symbols that we want to print out.
 static std::vector<Symbol *> getSymbols() {
   std::vector<Symbol *> v;
-  for (InputFile *file : symtab->objectFiles)
+  for (InputFile *file : ctx.objectFiles)
     for (Symbol *b : file->getSymbols())
       if (auto *dr = dyn_cast<Symbol>(b))
         if ((!isa<SectionSymbol>(dr)) && dr->isLive() &&
@@ -75,7 +74,7 @@ static SymbolMapTy getSectionSyms(ArrayRef<Symbol *> syms) {
 static DenseMap<Symbol *, std::string>
 getSymbolStrings(ArrayRef<Symbol *> syms) {
   std::vector<std::string> str(syms.size());
-  parallelForEachN(0, syms.size(), [&](size_t i) {
+  parallelFor(0, syms.size(), [&](size_t i) {
     raw_string_ostream os(str[i]);
     auto *chunk = syms[i]->getChunk();
     if (chunk == nullptr)
@@ -104,14 +103,14 @@ getSymbolStrings(ArrayRef<Symbol *> syms) {
 }
 
 void lld::wasm::writeMapFile(ArrayRef<OutputSection *> outputSections) {
-  if (config->mapFile.empty())
+  if (ctx.arg.mapFile.empty())
     return;
 
   // Open a map file for writing.
   std::error_code ec;
-  raw_fd_ostream os(config->mapFile, ec, sys::fs::OF_None);
+  raw_fd_ostream os(ctx.arg.mapFile, ec, sys::fs::OF_None);
   if (ec) {
-    error("cannot open " + config->mapFile + ": " + ec.message());
+    error("cannot open " + ctx.arg.mapFile + ": " + ec.message());
     return;
   }
 

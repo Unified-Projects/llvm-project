@@ -40,14 +40,9 @@
 #include <cstdint>
 #include <ctime>
 #include <memory>
-#include <stack>
 #include <string>
 #include <system_error>
 #include <vector>
-
-#ifdef HAVE_SYS_STAT_H
-#include <sys/stat.h>
-#endif
 
 namespace llvm {
 namespace sys {
@@ -233,8 +228,7 @@ class file_status : public basic_file_status {
   #elif defined (_WIN32)
   uint32_t NumLinks = 0;
   uint32_t VolumeSerialNumber = 0;
-  uint32_t FileIndexHigh = 0;
-  uint32_t FileIndexLow = 0;
+  uint64_t PathHash = 0;
   #endif
 
 public:
@@ -255,13 +249,12 @@ public:
               uint32_t LastAccessTimeHigh, uint32_t LastAccessTimeLow,
               uint32_t LastWriteTimeHigh, uint32_t LastWriteTimeLow,
               uint32_t VolumeSerialNumber, uint32_t FileSizeHigh,
-              uint32_t FileSizeLow, uint32_t FileIndexHigh,
-              uint32_t FileIndexLow)
+              uint32_t FileSizeLow, uint64_t PathHash)
       : basic_file_status(Type, Perms, LastAccessTimeHigh, LastAccessTimeLow,
                           LastWriteTimeHigh, LastWriteTimeLow, FileSizeHigh,
                           FileSizeLow),
         NumLinks(LinkCount), VolumeSerialNumber(VolumeSerialNumber),
-        FileIndexHigh(FileIndexHigh), FileIndexLow(FileIndexLow) {}
+        PathHash(PathHash) {}
   #endif
 
   UniqueID getUniqueID() const;
@@ -772,7 +765,8 @@ enum OpenFlags : unsigned {
   /// The file should be opened in append mode.
   OF_Append = 4,
 
-  /// Delete the file on close. Only makes a difference on windows.
+  /// The returned handle can be used for deleting the file. Only makes a
+  /// difference on windows.
   OF_Delete = 8,
 
   /// When a child process is launched, this file should remain open in the
@@ -793,7 +787,7 @@ enum OpenFlags : unsigned {
 /// is false the current directory will be used instead.
 ///
 /// This function does not check if the file exists. If you want to be sure
-/// that the file does not yet exist, you should use use enough '%' characters
+/// that the file does not yet exist, you should use enough '%' characters
 /// in your model to ensure this. Each '%' gives 4-bits of entropy so you can
 /// use 32 of them to get 128 bits of entropy.
 ///
@@ -864,6 +858,11 @@ public:
 
   // The open file descriptor.
   int FD = -1;
+
+#ifdef _WIN32
+  // Whether we need to manually remove the file on close.
+  bool RemoveOnClose = false;
+#endif
 
   // Keep this with the given name.
   Error keep(const Twine &Name);
@@ -1007,6 +1006,25 @@ file_t getStderrHandle();
 /// @param Buf Buffer to read into.
 /// @returns The number of bytes read, or error.
 Expected<size_t> readNativeFile(file_t FileHandle, MutableArrayRef<char> Buf);
+
+/// Default chunk size for \a readNativeFileToEOF().
+enum : size_t { DefaultReadChunkSize = 4 * 4096 };
+
+/// Reads from \p FileHandle until EOF, appending to \p Buffer in chunks of
+/// size \p ChunkSize.
+///
+/// This calls \a readNativeFile() in a loop. On Error, previous chunks that
+/// were read successfully are left in \p Buffer and returned.
+///
+/// Note: For reading the final chunk at EOF, \p Buffer's capacity needs extra
+/// storage of \p ChunkSize.
+///
+/// \param FileHandle File to read from.
+/// \param Buffer Where to put the file content.
+/// \param ChunkSize Size of chunks.
+/// \returns The error if EOF was not found.
+Error readNativeFileToEOF(file_t FileHandle, SmallVectorImpl<char> &Buffer,
+                          ssize_t ChunkSize = DefaultReadChunkSize);
 
 /// Reads \p Buf.size() bytes from \p FileHandle at offset \p Offset into \p
 /// Buf. If 'pread' is available, this will use that, otherwise it will use
@@ -1273,6 +1291,7 @@ private:
   }
 
   void unmapImpl();
+  void dontNeedImpl();
 
   std::error_code init(sys::fs::file_t FD, uint64_t Offset, mapmode Mode);
 
@@ -1302,6 +1321,7 @@ public:
     unmapImpl();
     copyFrom(mapped_file_region());
   }
+  void dontNeed() { dontNeedImpl(); }
 
   size_t size() const;
   char *data() const;
@@ -1446,7 +1466,7 @@ namespace detail {
 
   /// Keeps state for the recursive_directory_iterator.
   struct RecDirIterState {
-    std::stack<directory_iterator, std::vector<directory_iterator>> Stack;
+    std::vector<directory_iterator> Stack;
     uint16_t Level = 0;
     bool HasNoPushRequest = false;
   };
@@ -1465,8 +1485,8 @@ public:
                                         bool follow_symlinks = true)
       : State(std::make_shared<detail::RecDirIterState>()),
         Follow(follow_symlinks) {
-    State->Stack.push(directory_iterator(path, ec, Follow));
-    if (State->Stack.top() == directory_iterator())
+    State->Stack.push_back(directory_iterator(path, ec, Follow));
+    if (State->Stack.back() == directory_iterator())
       State.reset();
   }
 
@@ -1477,27 +1497,28 @@ public:
     if (State->HasNoPushRequest)
       State->HasNoPushRequest = false;
     else {
-      file_type type = State->Stack.top()->type();
+      file_type type = State->Stack.back()->type();
       if (type == file_type::symlink_file && Follow) {
         // Resolve the symlink: is it a directory to recurse into?
-        ErrorOr<basic_file_status> status = State->Stack.top()->status();
+        ErrorOr<basic_file_status> status = State->Stack.back()->status();
         if (status)
           type = status->type();
         // Otherwise broken symlink, and we'll continue.
       }
       if (type == file_type::directory_file) {
-        State->Stack.push(directory_iterator(*State->Stack.top(), ec, Follow));
-        if (State->Stack.top() != end_itr) {
+        State->Stack.push_back(
+            directory_iterator(*State->Stack.back(), ec, Follow));
+        if (State->Stack.back() != end_itr) {
           ++State->Level;
           return *this;
         }
-        State->Stack.pop();
+        State->Stack.pop_back();
       }
     }
 
     while (!State->Stack.empty()
-           && State->Stack.top().increment(ec) == end_itr) {
-      State->Stack.pop();
+           && State->Stack.back().increment(ec) == end_itr) {
+      State->Stack.pop_back();
       --State->Level;
     }
 
@@ -1508,8 +1529,8 @@ public:
     return *this;
   }
 
-  const directory_entry &operator*() const { return *State->Stack.top(); }
-  const directory_entry *operator->() const { return &*State->Stack.top(); }
+  const directory_entry &operator*() const { return *State->Stack.back(); }
+  const directory_entry *operator->() const { return &*State->Stack.back(); }
 
   // observers
   /// Gets the current level. Starting path is at level 0.
@@ -1529,10 +1550,10 @@ public:
     do {
       if (ec)
         report_fatal_error("Error incrementing directory iterator.");
-      State->Stack.pop();
+      State->Stack.pop_back();
       --State->Level;
     } while (!State->Stack.empty()
-             && State->Stack.top().increment(ec) == end_itr);
+             && State->Stack.back().increment(ec) == end_itr);
 
     // Check if we are done. If so, create an end iterator.
     if (State->Stack.empty())

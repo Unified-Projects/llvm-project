@@ -8,7 +8,7 @@
 //
 // This file defines the basic operations for the AMX dialect.
 //
-// The Intel Advanced Matrix Extensions (AMX) provides a tile matrix
+// The Intel Advanced Matrix Extensions (AMX) provide a tile matrix
 // multiply unit (TMUL), a tile control register (TILECFG), and eight
 // tile registers TMM0 through TMM7 (TILEDATA).
 //
@@ -30,6 +30,8 @@
 
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/BuiltinTypes.td"
 
 //===----------------------------------------------------------------------===//
 // AMX dialect definition.
@@ -38,17 +40,103 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 def AMX_Dialect : Dialect {
   let name = "amx";
   let cppNamespace = "::mlir::amx";
+  let description = [{
+    The Intel Advanced Matrix Extensions (AMX) provide a tile matrix
+    multiply unit (TMUL), a tile control register (TILECFG), and eight
+    tile registers TMM0 through TMM7 (TILEDATA).
+
+    This `AMX` dialect provides a bridge between MLIR concepts such as
+    vectors and memrefs and the lower level LLVM IR support of AMX.
+    The dialect is split into user-facing AMX ops (AMX_Op) and
+    backend-facing intrinsic ops (AMX_IntrOp).
+
+    Note that since configuration changes (implicit at dialect level) are
+    costly, it is highly recommended to use the AMX dialect on same-shaped
+    vectors, at least within a single method.
+
+    For details, see the Intel documentation:
+    https://software.intel.com/content/www/us/en/develop/articles/intel-sdm.html
+  }];
+  let useDefaultTypePrinterParser = 1;
 }
+
+//===----------------------------------------------------------------------===//
+// AMX Tile definition.
+//===----------------------------------------------------------------------===//
+
+class AMX_Type<string typeName, string typeMnemonic, list<Trait> traits = []>
+    : TypeDef<AMX_Dialect, typeName, traits> {
+  let mnemonic = typeMnemonic;
+}
+
+def AMX_TileTypeElementType : AnyTypeOf<[F32, F16, BF16, I32, I8]> {
+  let cppFunctionName = "isValidTileTypeElementType";
+}
+
+def AMX_TileType : AMX_Type<"Tile", "tile", [ShapedTypeInterface, ValueSemantics]> {
+  let summary = "AMX 2D tile to be used by AMX opertaions.";
+
+  let description = [{
+    This type is used to represent values in AMX tile registers. All AMX operations
+    work on AMX tiles and these tiles cannot be used in other operations directly.
+    LLVM IR type for AMX tile is a primitive type, but in MLIR we provide shape and
+    element type for IR verification and lowering to LLVMIR dialect.
+  }];
+
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    AMX_TileTypeElementType:$elementType
+  );
+
+  let builders = [
+    TypeBuilderWithInferredContext<(ins
+      "ArrayRef<int64_t>":$shape, "Type":$elementType), [{
+      return $_get(elementType.getContext(), shape, elementType);
+    }]>
+  ];
+
+  let extraClassDeclaration = [{
+    /// Returns if this type is ranked (always true).
+    bool hasRank() const { return true; }
+
+    /// Clone this tile type with the given shape and element type. If the
+    /// provided shape is `std::nullopt`, the current shape of the type is used.
+    TileType cloneWith(std::optional<ArrayRef<int64_t>> shape,
+                       Type elementType) const {
+      return get(shape.value_or(getShape()), elementType);
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
+}
+
+def IsAMXTilePred : And<[CPred<"::llvm::isa<::mlir::amx::TileType>($_self)">,
+  CPred<[{::llvm::cast<::mlir::amx::TileType>($_self).getRank() == 2}]>]>;
+
+class AMXTileOf<list<Type> allowedTypes> :
+  ShapedContainerType<allowedTypes, IsAMXTilePred, "tile",
+                      "::mlir::amx::TileType">;
+
+def AnyAMXTile : AMXTileOf<[F32, F16, BF16, I32, I8]>;
+
+def AMXTileF32 : AMXTileOf<[F32]>;
+
+def AMXTileF16OrBF16 : AMXTileOf<[F16, BF16]>;
+
+def AMXTileI32 : AMXTileOf<[I32]>;
+
+def AMXTileI8 : AMXTileOf<[I8]>;
 
 //===----------------------------------------------------------------------===//
 // AMX Op and IntrOp definitions.
 //===----------------------------------------------------------------------===//
 
-class AMX_Op<string mnemonic, list<OpTrait> traits = []> :
+class AMX_Op<string mnemonic, list<Trait> traits = []> :
   Op<AMX_Dialect, mnemonic, traits> {}
 
 // The "internal" intrinsics are meant for compiler usage.
-class AMX_IntrOp<string mnemonic, int numResults, list<OpTrait> traits = []> :
+class AMX_IntrOp<string mnemonic, int numResults, list<Trait> traits = []> :
   LLVM_IntrOpBase<AMX_Dialect, mnemonic,
                   "x86_" # !subst(".", "_", mnemonic) # "_internal",
                   [], [], traits, numResults>;
@@ -61,7 +149,7 @@ class AMX_IntrOp<string mnemonic, int numResults, list<OpTrait> traits = []> :
 // Tile reset.
 //
 
-def TileZeroOp : AMX_Op<"tile_zero", [NoSideEffect]> {
+def TileZeroOp : AMX_Op<"tile_zero", [Pure]> {
   let summary = "tile zero operation";
   let description = [{
     Zeroes the destination tile, with the shape defined by the 2-dim
@@ -71,25 +159,24 @@ def TileZeroOp : AMX_Op<"tile_zero", [NoSideEffect]> {
     Example:
 
     ```mlir
-      %0 = amx.tile_zero : vector<16x16xbf16>
+      %0 = amx.tile_zero : !amx.tile<16x16xbf16>
     ```
   }];
-  let verifier = [{ return ::verify(*this); }];
-  let results = (outs
-    VectorOfRankAndType<[2], [F32, BF16, I32, I8]>:$res);
+  let results = (outs AnyAMXTile:$res);
   let extraClassDeclaration = [{
-    VectorType getVectorType() {
-      return res().getType().cast<VectorType>();
+    TileType getTileType() {
+      return ::llvm::cast<TileType>(getRes().getType());
     }
   }];
-  let assemblyFormat = "attr-dict `:` type($res)";
+  let assemblyFormat = "attr-dict `:` qualified(type($res))";
+  let hasVerifier = 1;
 }
 
 //
 // Tile memory operations.
 //
 
-def TileLoadOp : AMX_Op<"tile_load", [NoSideEffect]> {
+def TileLoadOp : AMX_Op<"tile_load", [Pure]> {
   let summary = "tile load operation";
   let description = [{
     Loads a tile from memory defined by a base and indices, with the
@@ -100,24 +187,23 @@ def TileLoadOp : AMX_Op<"tile_load", [NoSideEffect]> {
     Example:
 
     ```mlir
-      %0 = amx.tile_load %arg0[%c0, %c0] : memref<?x?xi8> into vector<16x64xi8>
+      %0 = amx.tile_load %arg0[%c0, %c0] : memref<?x?xi8> into !amx.tile<16x64xi8>
     ```
   }];
-  let verifier = [{ return ::verify(*this); }];
   let arguments = (ins Arg<AnyMemRef, "load base", [MemRead]>:$base,
                    Variadic<Index>:$indices);
-  let results = (outs
-    VectorOfRankAndType<[2], [F32, BF16, I32, I8]>:$res);
+  let results = (outs AnyAMXTile:$res);
   let extraClassDeclaration = [{
     MemRefType getMemRefType() {
-      return base().getType().cast<MemRefType>();
+      return ::llvm::cast<MemRefType>(getBase().getType());
     }
-    VectorType getVectorType() {
-      return res().getType().cast<VectorType>();
+    TileType getTileType() {
+      return ::llvm::cast<TileType>(getRes().getType());
     }
   }];
   let assemblyFormat = "$base `[` $indices `]` attr-dict `:` "
-                       "type($base) `into` type($res)";
+                       "type($base) `into` qualified(type($res))";
+  let hasVerifier = 1;
 }
 
 def TileStoreOp : AMX_Op<"tile_store"> {
@@ -131,30 +217,31 @@ def TileStoreOp : AMX_Op<"tile_store"> {
     Example:
 
     ```mlir
-      amx.tile_store %arg1[%c0, %c0], %0 : memref<?x?xi8>, vector<16x64xi8>
+      amx.tile_store %arg1[%c0, %c0], %0 : memref<?x?xi8>, !amx.tile<16x64xi8>
     ```
   }];
-  let verifier = [{ return ::verify(*this); }];
   let arguments = (ins Arg<AnyMemRef, "store base", [MemWrite]>:$base,
                    Variadic<Index>:$indices,
-                   VectorOfRankAndType<[2], [F32, BF16, I32, I8]>:$val);
+                   AnyAMXTile:$val);
   let extraClassDeclaration = [{
     MemRefType getMemRefType() {
-      return base().getType().cast<MemRefType>();
+      return ::llvm::cast<MemRefType>(getBase().getType());
     }
-    VectorType getVectorType() {
-      return val().getType().cast<VectorType>();
+    TileType getTileType() {
+      return ::llvm::cast<TileType>(getVal().getType());
     }
   }];
   let assemblyFormat = "$base `[` $indices `]` `,` $val attr-dict `:` "
-                       "type($base) `,` type($val)";
+                       "type($base) `,` qualified(type($val))";
+  let hasVerifier = 1;
 }
 
 //
 // Tile arithmetic operations.
 //
 
-def TileMulFOp : AMX_Op<"tile_mulf", [NoSideEffect, AllTypesMatch<["acc", "res"]>]> {
+def TileMulFOp : AMX_Op<"tile_mulf", [
+    Pure, AllTypesMatch<["acc", "res"]>]> {
   let summary = "tile multiplication operation (floating-point)";
   let description = [{
     Multiplies a "m x k" tile with a "k x n" tile and accumulates the results
@@ -166,30 +253,32 @@ def TileMulFOp : AMX_Op<"tile_mulf", [NoSideEffect, AllTypesMatch<["acc", "res"]
 
     ```mlir
       %0 = amx.tile_mulf %a, %b, %c
-        : vector<16x32xbf16>, vector<16x32xbf16>, vector<16x16xf32>
+        : !amx.tile<16x32xbf16>, !amx.tile<16x32xbf16>, !amx.tile<16x16xf32>
     ```
   }];
-  let verifier = [{ return ::verify(*this); }];
-  let arguments = (ins VectorOfRankAndType<[2], [F32, BF16]>:$lhs,
-                       VectorOfRankAndType<[2], [F32, BF16]>:$rhs,
-                       VectorOfRankAndType<[2], [F32, BF16]>:$acc);
-  let results = (outs VectorOfRankAndType<[2], [F32, BF16]>:$res);
+  let arguments = (ins AMXTileF16OrBF16:$lhs,
+                       AMXTileF16OrBF16:$rhs,
+                       AMXTileF32:$acc);
+  let results = (outs AMXTileF32:$res);
   let extraClassDeclaration = [{
-    VectorType getLhsVectorType() {
-      return lhs().getType().cast<VectorType>();
+    TileType getLhsTileType() {
+      return ::llvm::cast<TileType>(getLhs().getType());
     }
-    VectorType getRhsVectorType() {
-      return rhs().getType().cast<VectorType>();
+    TileType getRhsTileType() {
+      return ::llvm::cast<TileType>(getRhs().getType());
     }
-    VectorType getVectorType() {
-      return res().getType().cast<VectorType>();
+    TileType getTileType() {
+      return ::llvm::cast<TileType>(getRes().getType());
     }
   }];
   let assemblyFormat = "$lhs `,` $rhs `,` $acc attr-dict `:` "
-                       "type($lhs) `,` type($rhs) `,` type($acc) ";
+                       "qualified(type($lhs)) `,` qualified(type($rhs))"
+                       " `,` qualified(type($acc)) ";
+  let hasVerifier = 1;
 }
 
-def TileMulIOp : AMX_Op<"tile_muli", [NoSideEffect, AllTypesMatch<["acc", "res"]>]> {
+def TileMulIOp : AMX_Op<"tile_muli", [
+    Pure, AllTypesMatch<["acc", "res"]>]> {
   let summary = "tile multiplication operation (integer)";
   let description = [{
     Multiplies a "m x k" tile with a "k x n" tile and accumulates the results
@@ -203,31 +292,31 @@ def TileMulIOp : AMX_Op<"tile_muli", [NoSideEffect, AllTypesMatch<["acc", "res"]
     Example:
 
     ```mlir
-      %0 = amx.tile_muli %a zext, %b zext, %c 
-        : vector<16x64xi8>, vector<16x64xi8>, vector<16x16xi32>
+      %0 = amx.tile_muli %a zext, %b zext, %c
+        : !amx.tile<16x64xi8>, !amx.tile<16x64xi8>, !amx.tile<16x16xi32>
     ```
   }];
-  let verifier = [{ return ::verify(*this); }];
-  let arguments = (ins VectorOfRankAndType<[2], [I32, I8]>:$lhs,
-                       VectorOfRankAndType<[2], [I32, I8]>:$rhs,
-                       VectorOfRankAndType<[2], [I32, I8]>:$acc,
+  let arguments = (ins AMXTileI8:$lhs,
+                       AMXTileI8:$rhs,
+                       AMXTileI32:$acc,
                        UnitAttr:$isZextLhs,
                        UnitAttr:$isZextRhs
                        );
-  let results = (outs VectorOfRankAndType<[2], [I32, I8]>:$res);
+  let results = (outs AMXTileI32:$res);
   let extraClassDeclaration = [{
-    VectorType getLhsVectorType() {
-      return lhs().getType().cast<VectorType>();
+    TileType getLhsTileType() {
+      return ::llvm::cast<TileType>(getLhs().getType());
     }
-    VectorType getRhsVectorType() {
-      return rhs().getType().cast<VectorType>();
+    TileType getRhsTileType() {
+      return ::llvm::cast<TileType>(getRhs().getType());
     }
-    VectorType getVectorType() {
-      return res().getType().cast<VectorType>();
+    TileType getTileType() {
+      return ::llvm::cast<TileType>(getRes().getType());
     }
   }];
   let assemblyFormat = "$lhs (`zext` $isZextLhs^)? `,` $rhs (`zext` $isZextRhs^)? `,` $acc attr-dict `:` "
-                       "type($lhs) `,` type($rhs) `,` type($acc) ";
+                       "qualified(type($lhs)) `,` qualified(type($rhs)) `,` qualified(type($acc)) ";
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -263,6 +352,12 @@ def LLVM_x86_amx_tilestored64 : AMX_IntrOp<"tilestored64", 0>,
 
 // Dot product of bf16 tiles into f32 tile.
 def LLVM_x86_amx_tdpbf16ps : AMX_IntrOp<"tdpbf16ps", 1>,
+  Arguments<(ins AnyInteger,
+                 AnyInteger,
+		 AnyInteger, LLVM_Type, LLVM_Type, LLVM_Type)>;
+
+// Dot product of f16 tiles into f32 tile.
+def LLVM_x86_amx_tdpfp16ps : AMX_IntrOp<"tdpfp16ps", 1>,
   Arguments<(ins AnyInteger,
                  AnyInteger,
 		 AnyInteger, LLVM_Type, LLVM_Type, LLVM_Type)>;
