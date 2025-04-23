@@ -600,8 +600,8 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
       return std::make_unique<DarwinX86_64TargetInfo>(Triple, Opts);
 
     switch (os) {
-    case llvm::Triple::UnifiedOS:
-      return std::make_unique<UnifiedTargetInfo>(Triple, Opts);
+    case llvm::Triple::Unified:
+      return std::make_unique<UnifiedTargetInfo<X86_64TargetInfo>>(Triple, Opts);
     case llvm::Triple::Linux: {
       switch (Triple.getEnvironment()) {
       default:

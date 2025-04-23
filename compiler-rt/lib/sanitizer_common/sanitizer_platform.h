@@ -12,10 +12,14 @@
 #ifndef SANITIZER_PLATFORM_H
 #define SANITIZER_PLATFORM_H
 
-#if !defined(__linux__) && !defined(__FreeBSD__) && !defined(__NetBSD__) && \
-    !defined(__APPLE__) && !defined(_WIN32) && !defined(__Fuchsia__) &&     \
-    !(defined(__sun__) && defined(__svr4__))
-#  error "This operating system is not supported"
+// Allow Linux, BSDs, macOS, Windows, Fuchsia, RTEMS, Solaris, *and* any
+// __unix__-ish target (so x86_64-unknown-unified will compile):
+#if !defined(__linux__)   && !defined(__FreeBSD__) && !defined(__NetBSD__) && \
+    !defined(__OpenBSD__) && !defined(__APPLE__)   && !defined(_WIN32)     && \
+    !defined(__Fuchsia__) && !defined(__rtems__)   &&                         \
+    !defined(__unix__)    && !defined(__unix)      &&                         \
+   !(defined(__sun__) && defined(__svr4__))
+# error "This operating system is not supported"
 #endif
 
 // Get __GLIBC__ on a glibc platform. Exclude Android: features.h includes C
@@ -25,10 +29,10 @@
 #  include <features.h>
 #endif
 
-#if defined(__linux__)
-#  define SANITIZER_LINUX 1
+#if defined(__linux__) || defined(__unix__) || defined(__unix)
+# define SANITIZER_LINUX 1
 #else
-#  define SANITIZER_LINUX 0
+# define SANITIZER_LINUX 0
 #endif
 
 #if defined(__GLIBC__)

@@ -29,7 +29,7 @@ Unified::Unified(const Driver &D, const llvm::Triple &Triple, const ArgList &Arg
   getFilePaths().push_back(getDriver().SysRoot + "/system/lib");
 }
 
-void Unified::addClangSystemIncludeArgs(const ArgList &DriverArgs,
+void Unified::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
                                         ArgStringList &CC1Args) const {
   // Include standard system headers
   addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/system/include");
@@ -38,7 +38,7 @@ void Unified::addClangSystemIncludeArgs(const ArgList &DriverArgs,
   addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/usr/include/" + getTripleString());
 }
 
-void Unified::addLibCxxIncludePaths(const ArgList &DriverArgs,
+void Unified::AddLibCxxIncludePaths(const ArgList &DriverArgs,
                                     ArgStringList &CC1Args) const {
   // Include libc++ headers
   addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/system/include/c++/v1");
@@ -48,8 +48,14 @@ void Unified::addLibCxxIncludePaths(const ArgList &DriverArgs,
 
 void Unified::AddCXXStdlibLibArgs(const ArgList &Args,
                                   ArgStringList &CmdArgs) const {
-  // Link against libc++ by default
-  CmdArgs.push_back("-lc++");
+    // Link against libc++ by default
+    CXXStdlibType Type = GetCXXStdlibType(Args);
+ 
+    switch (Type) {
+    case ToolChain::CST_Libcxx:
+        CmdArgs.push_back("-lc++");
+        break;
+    }
 }
 
 Tool *Unified::buildAssembler() const {
@@ -59,3 +65,112 @@ Tool *Unified::buildAssembler() const {
 Tool *Unified::buildLinker() const {
   return new tools::unified::Linker(*this);
 }
+
+// Definitions for the unified assembler and linker tools:
+namespace clang {
+namespace driver {
+namespace tools {
+namespace unified {
+
+void Assembler::ConstructJob(Compilation &C, const JobAction &JA,
+                            const InputInfo &Output,
+                            const InputInfoList &Inputs,
+                            const llvm::opt::ArgList &Args,
+                            const char *LinkingOutput) const {
+  ArgStringList CmdArgs;
+  // Output file
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(Output.getFilename());
+  // Input files
+  for (const auto &II : Inputs)
+    CmdArgs.push_back(II.getFilename());
+  // Pass through assembler-specific flags
+  Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA, options::OPT_Xassembler);
+  // Invoke 'as' from the toolchain
+  const char *Exec = Args.MakeArgString(getToolChain().GetProgramPath("as"));
+  C.addCommand(std::make_unique<Command>(JA, *this,
+      ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
+}
+
+void Linker::ConstructJob(Compilation &C, const JobAction &JA,
+                          const InputInfo &Output,
+                          const InputInfoList &Inputs,
+                          const llvm::opt::ArgList &Args,
+                          const char *LinkingOutput) const {
+  const toolchains::Unified &TC = static_cast<const toolchains::Unified&>(getToolChain());
+  ArgStringList CmdArgs;
+  const Driver &D = TC.getDriver();
+  // Silence warnings
+  Args.ClaimAllArgs(options::OPT_g_Group);
+  Args.ClaimAllArgs(options::OPT_emit_llvm);
+  Args.ClaimAllArgs(options::OPT_w);
+  // Static vs dynamic
+  if (Args.hasArg(options::OPT_static))
+    CmdArgs.push_back("-Bstatic");
+  else {
+    if (Args.hasArg(options::OPT_rdynamic))
+      CmdArgs.push_back("-export-dynamic");
+    if (Args.hasArg(options::OPT_shared))
+      CmdArgs.push_back("-shared");
+  }
+  // rpath and sysroot
+  CmdArgs.push_back("-rpath=/system/lib");
+  if (!D.SysRoot.empty())
+    CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
+  // PIE
+  bool IsPIE = !Args.hasArg(options::OPT_shared) &&
+               (Args.hasArg(options::OPT_pie) || TC.isPIEDefault(Args));
+  if (IsPIE)
+    CmdArgs.push_back("-pie");
+  // Output
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(Output.getFilename());
+  // Startup files
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
+    if (!Args.hasArg(options::OPT_shared))
+      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath("crt0.o")));
+    std::string crtbegin = TC.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
+    if (TC.getVFS().exists(crtbegin))
+      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath(crtbegin.c_str())));
+  }
+  // Library paths and linker flags
+  Args.AddAllArgs(CmdArgs, options::OPT_L);
+  TC.AddFilePathLibArgs(Args, CmdArgs);
+  Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
+  Args.AddAllArgs(CmdArgs, options::OPT_e);
+  Args.AddAllArgs(CmdArgs, options::OPT_s);
+  Args.AddAllArgs(CmdArgs, options::OPT_t);
+  Args.AddAllArgs(CmdArgs, options::OPT_Z_Flag);
+  Args.AddAllArgs(CmdArgs, options::OPT_r);
+  // LTO
+  if (D.isUsingLTO()) {
+    addLTOOptions(TC, Args, CmdArgs, Output, Inputs[0],
+                  D.getLTOMode() == LTOK_Thin);
+  }
+  // Inputs
+  AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
+  // Runtime libs
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
+    AddRunTimeLibs(TC, D, CmdArgs, Args);
+    if (D.CCCIsCXX() && TC.ShouldLinkCXXStdlib(Args))
+      TC.AddCXXStdlibLibArgs(Args, CmdArgs);
+    if (Args.hasArg(options::OPT_pthread))
+      CmdArgs.push_back("-lpthread");
+    CmdArgs.push_back("-lc");
+  }
+  // CRT end
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
+    std::string crtend = TC.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
+    if (TC.getVFS().exists(crtend))
+      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath(crtend.c_str())));
+  }
+  // Execute linker
+  const char *Exec = Args.MakeArgString(getToolChain().GetLinkerPath());
+  C.addCommand(std::make_unique<Command>(JA, *this,
+      ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
+}
+
+} // namespace unified
+} // namespace tools
+} // namespace driver
+} // namespace clang

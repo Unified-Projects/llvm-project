@@ -26,6 +26,38 @@
 #  pragma GCC system_header
 #endif
 
+#ifdef __unified__
+  // Character‐collation fallback
+  #define wcscoll_l(a,b,c)        wcscoll(a,b)
+
+  // Numeric conversions, drop the locale parameter for C-locale behavior
+  #define atof_l(a,b)             atof(a)
+  #define strtod_l(a,b,c)         strtod(a,b)
+  #define strtol_l(a,b,c,d)       strtol(a,b,c)
+  #define strtoul_l(a,b,c,d)      strtoul(a,b,c)
+  #define strtoll_l(a,b,c,d)      strtoll(a,b,c)
+  #define strtoull_l(a,b,c,d)     strtoull(a,b,c)
+
+  // Wide-char numeric conversions
+  #define wcstod_l(a,b,c)         wcstod(a,b)
+  #define wcstol_l(a,b,c)         wcstol(a,b,c)
+  #define wcstoul_l(a,b,c)        wcstoul(a,b,c)
+
+  // String transformation fallbacks
+  #define strxfrm_l(a,b,c,d)      strxfrm(a,b,c)
+  #define wcsxfrm_l(a,b,c,d)      wcsxfrm(a,b,c)
+
+  // Time-related fallbacks
+  #define mktime_l(a,b)           mktime(a)
+  #define asctime_l(a,b)          asctime(a)
+  #define ctime_l(a,b)            ctime(a)
+  #define strptime_l(a,b,c,d)     strptime(a,b,c)
+  #define strftime_l(a,b,c,d,e)   strftime(a,b,c,d)
+
+  // Monetary formatting fallback
+  #define strfmon_l(a,b,c,...)    strfmon(a,b,c,##__VA_ARGS__)
+#endif
+
 _LIBCPP_BEGIN_NAMESPACE_STD
 
 struct __locale_guard {

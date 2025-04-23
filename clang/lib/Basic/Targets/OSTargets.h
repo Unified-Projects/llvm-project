@@ -317,6 +317,8 @@ template <typename Target>
      // Linux defines; list based off of gcc output
      DefineStd(Builder, "unix", Opts);
      Builder.defineMacro("__unified__");
+     Builder.defineMacro("_GNU_SOURCE", "1");
+     Builder.defineMacro("__USE_GNU",    "1");
      Builder.defineMacro("__Linux__");
      Builder.defineMacro("__ELF__");
      if (this->HasFloat128)
