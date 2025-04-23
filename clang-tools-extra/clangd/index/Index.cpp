@@ -7,11 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Index.h"
-#include "support/Logger.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/raw_ostream.h"
 #include <limits>
 
 namespace clang {
@@ -69,6 +65,11 @@ void SwapIndex::lookup(const LookupRequest &R,
 bool SwapIndex::refs(const RefsRequest &R,
                      llvm::function_ref<void(const Ref &)> CB) const {
   return snapshot()->refs(R, CB);
+}
+bool SwapIndex::containedRefs(
+    const ContainedRefsRequest &R,
+    llvm::function_ref<void(const ContainedRefsResult &)> CB) const {
+  return snapshot()->containedRefs(R, CB);
 }
 void SwapIndex::relations(
     const RelationsRequest &R,

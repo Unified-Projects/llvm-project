@@ -1,16 +1,24 @@
 add_mlir_dialect_library(MLIRMathTransforms
   AlgebraicSimplification.cpp
-  ExpandTanh.cpp
+  ExpandPatterns.cpp
+  ExtendToSupportedTypes.cpp
   PolynomialApproximation.cpp
+  UpliftToFMA.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Math/Transforms
 
+  DEPENDS
+  MLIRMathTransformsIncGen
+
   LINK_LIBS PUBLIC
+  MLIRArithDialect
+  MLIRDialectUtils
   MLIRIR
-  MLIRLLVMIR
-  MLIRMath
+  MLIRMathDialect
+  MLIRSCFDialect
   MLIRPass
-  MLIRStandard
   MLIRTransforms
+  MLIRX86VectorDialect
+  MLIRVectorDialect
   )

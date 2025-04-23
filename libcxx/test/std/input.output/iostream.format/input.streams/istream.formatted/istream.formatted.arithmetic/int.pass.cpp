@@ -6,7 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-// XFAIL: use_system_cxx_lib && target={{.+}}-apple-macosx10.{{9|10|11|12|13|14}}
+// Requires 396145d in the built library.
+// XFAIL: using-built-library-before-llvm-9
 
 // <istream>
 
@@ -18,6 +19,8 @@
 #include <istream>
 #include <limits>
 #include <cassert>
+#include <streambuf>
+
 #include "test_macros.h"
 
 template <class CharT>
@@ -70,6 +73,7 @@ int main(int, char**)
         assert(!is.eof());
         assert(!is.fail());
     }
+#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L" -1234567890123456 ");
         std::wistream is(&sb);
@@ -79,6 +83,7 @@ int main(int, char**)
         assert(!is.eof());
         assert( is.fail());
     }
+#endif
 #ifndef TEST_HAS_NO_EXCEPTIONS
     {
         testbuf<char> sb;

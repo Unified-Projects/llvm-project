@@ -4,10 +4,10 @@
 --- |
   target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
 
-  define void @cmpxchg_i8(i8* %addr) { ret void }
-  define void @cmpxchg_i16(i16* %addr) { ret void }
-  define void @cmpxchg_i32(i32* %addr) { ret void }
-  define void @cmpxchg_i64(i64* %addr) { ret void }
+  define void @cmpxchg_i8(ptr %addr) { ret void }
+  define void @cmpxchg_i16(ptr %addr) { ret void }
+  define void @cmpxchg_i32(ptr %addr) { ret void }
+  define void @cmpxchg_i64(ptr %addr) { ret void }
 ...
 
 ---
@@ -20,8 +20,7 @@ body:             |
     ; CHECK: [[COPY:%[0-9]+]]:_(p0) = COPY $x0
     ; CHECK: [[C:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
     ; CHECK: [[ATOMICRMW_ADD:%[0-9]+]]:_(s32) = G_ATOMICRMW_ADD [[COPY]](p0), [[C]] :: (load store monotonic (s8) on %ir.addr)
-    ; CHECK: [[COPY1:%[0-9]+]]:_(s32) = COPY [[ATOMICRMW_ADD]](s32)
-    ; CHECK: $w0 = COPY [[COPY1]](s32)
+    ; CHECK: $w0 = COPY [[ATOMICRMW_ADD]](s32)
     %0:_(p0) = COPY $x0
     %1:_(s8) = G_CONSTANT i8 1
     %2:_(s8) = G_ATOMICRMW_ADD %0, %1 :: (load store monotonic (s8) on %ir.addr)
@@ -39,8 +38,7 @@ body:             |
     ; CHECK: [[COPY:%[0-9]+]]:_(p0) = COPY $x0
     ; CHECK: [[C:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
     ; CHECK: [[ATOMICRMW_ADD:%[0-9]+]]:_(s32) = G_ATOMICRMW_ADD [[COPY]](p0), [[C]] :: (load store monotonic (s16) on %ir.addr)
-    ; CHECK: [[COPY1:%[0-9]+]]:_(s32) = COPY [[ATOMICRMW_ADD]](s32)
-    ; CHECK: $w0 = COPY [[COPY1]](s32)
+    ; CHECK: $w0 = COPY [[ATOMICRMW_ADD]](s32)
     %0:_(p0) = COPY $x0
     %1:_(s16) = G_CONSTANT i16 1
     %2:_(s16) = G_ATOMICRMW_ADD %0, %1 :: (load store monotonic (s16) on %ir.addr)

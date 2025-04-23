@@ -9,7 +9,7 @@
 // This file declares the WasmObjectFile class, which implements the ObjectFile
 // interface for Wasm files.
 //
-// See: https://github.com/WebAssembly/design/blob/master/BinaryEncoding.md
+// See: https://github.com/WebAssembly/design/blob/main/BinaryEncoding.md
 //
 //===----------------------------------------------------------------------===//
 
@@ -37,15 +37,17 @@ public:
   WasmSymbol(const wasm::WasmSymbolInfo &Info,
              const wasm::WasmGlobalType *GlobalType,
              const wasm::WasmTableType *TableType,
-             const wasm::WasmTagType *TagType,
              const wasm::WasmSignature *Signature)
       : Info(Info), GlobalType(GlobalType), TableType(TableType),
-        TagType(TagType), Signature(Signature) {}
+        Signature(Signature) {
+    assert(!Signature || Signature->Kind != wasm::WasmSignature::Placeholder);
+  }
 
-  const wasm::WasmSymbolInfo &Info;
+  // Symbol info as represented in the symbol's 'syminfo' entry of an object
+  // file's symbol table.
+  wasm::WasmSymbolInfo Info;
   const wasm::WasmGlobalType *GlobalType;
   const wasm::WasmTableType *TableType;
-  const wasm::WasmTagType *TagType;
   const wasm::WasmSignature *Signature;
 
   bool isTypeFunction() const {
@@ -106,12 +108,14 @@ public:
 struct WasmSection {
   WasmSection() = default;
 
-  uint32_t Type = 0;         // Section type (See below)
-  uint32_t Offset = 0;       // Offset with in the file
+  uint32_t Type = 0;
+  uint32_t Offset = 0;       // Offset within the file
   StringRef Name;            // Section name (User-defined sections only)
   uint32_t Comdat = UINT32_MAX; // From the "comdat info" section
-  ArrayRef<uint8_t> Content; // Section content
-  std::vector<wasm::WasmRelocation> Relocations; // Relocations for this section
+  ArrayRef<uint8_t> Content;
+  std::vector<wasm::WasmRelocation> Relocations;
+  // Length of the LEB encoding of the section header's size field
+  std::optional<uint8_t> HeaderSecSizeEncodingLen;
 };
 
 struct WasmSegment {
@@ -138,14 +142,12 @@ public:
     return TargetFeatures;
   }
   ArrayRef<wasm::WasmSignature> types() const { return Signatures; }
-  ArrayRef<uint32_t> functionTypes() const { return FunctionTypes; }
   ArrayRef<wasm::WasmImport> imports() const { return Imports; }
   ArrayRef<wasm::WasmTable> tables() const { return Tables; }
   ArrayRef<wasm::WasmLimits> memories() const { return Memories; }
   ArrayRef<wasm::WasmGlobal> globals() const { return Globals; }
   ArrayRef<wasm::WasmTag> tags() const { return Tags; }
   ArrayRef<wasm::WasmExport> exports() const { return Exports; }
-  ArrayRef<WasmSymbol> syms() const { return Symbols; }
   const wasm::WasmLinkingData &linkingData() const { return LinkingData; }
   uint32_t getNumberOfSymbols() const { return Symbols.size(); }
   ArrayRef<wasm::WasmElemSegment> elements() const { return ElemSegments; }
@@ -167,6 +169,8 @@ public:
   basic_symbol_iterator symbol_end() const override;
   Expected<StringRef> getSymbolName(DataRefImpl Symb) const override;
 
+  bool is64Bit() const override { return false; }
+
   Expected<uint64_t> getSymbolAddress(DataRefImpl Symb) const override;
   uint64_t getWasmSymbolValue(const WasmSymbol &Sym) const;
   uint64_t getSymbolValueImpl(DataRefImpl Symb) const override;
@@ -175,6 +179,7 @@ public:
   Expected<SymbolRef::Type> getSymbolType(DataRefImpl Symb) const override;
   Expected<section_iterator> getSymbolSection(DataRefImpl Symb) const override;
   uint32_t getSymbolSectionId(SymbolRef Sym) const;
+  uint32_t getSymbolSize(SymbolRef Sym) const;
 
   // Overrides from SectionRef.
   void moveSectionNext(DataRefImpl &Sec) const override;
@@ -206,9 +211,10 @@ public:
   uint8_t getBytesInAddress() const override;
   StringRef getFileFormatName() const override;
   Triple::ArchType getArch() const override;
-  SubtargetFeatures getFeatures() const override;
+  Expected<SubtargetFeatures> getFeatures() const override;
   bool isRelocatableObject() const override;
   bool isSharedObject() const;
+  bool hasUnmodeledTypes() const { return HasUnmodeledTypes; }
 
   struct ReadContext {
     const uint8_t *Start;
@@ -233,7 +239,7 @@ private:
   bool isValidSectionSymbol(uint32_t Index) const;
   wasm::WasmFunction &getDefinedFunction(uint32_t Index);
   const wasm::WasmFunction &getDefinedFunction(uint32_t Index) const;
-  wasm::WasmGlobal &getDefinedGlobal(uint32_t Index);
+  const wasm::WasmGlobal &getDefinedGlobal(uint32_t Index) const;
   wasm::WasmTag &getDefinedTag(uint32_t Index);
 
   const WasmSection &getWasmSection(DataRefImpl Ref) const;
@@ -260,6 +266,7 @@ private:
 
   // Custom section types
   Error parseDylinkSection(ReadContext &Ctx);
+  Error parseDylink0Section(ReadContext &Ctx);
   Error parseNameSection(ReadContext &Ctx);
   Error parseLinkingSection(ReadContext &Ctx);
   Error parseLinkingSectionSymtab(ReadContext &Ctx);
@@ -274,7 +281,6 @@ private:
   wasm::WasmProducerInfo ProducerInfo;
   std::vector<wasm::WasmFeatureEntry> TargetFeatures;
   std::vector<wasm::WasmSignature> Signatures;
-  std::vector<uint32_t> FunctionTypes;
   std::vector<wasm::WasmTable> Tables;
   std::vector<wasm::WasmLimits> Memories;
   std::vector<wasm::WasmGlobal> Globals;
@@ -283,15 +289,15 @@ private:
   std::vector<wasm::WasmExport> Exports;
   std::vector<wasm::WasmElemSegment> ElemSegments;
   std::vector<WasmSegment> DataSegments;
-  llvm::Optional<size_t> DataCount;
+  std::optional<size_t> DataCount;
   std::vector<wasm::WasmFunction> Functions;
   std::vector<WasmSymbol> Symbols;
   std::vector<wasm::WasmDebugName> DebugNames;
   uint32_t StartFunction = -1;
   bool HasLinkingSection = false;
   bool HasDylinkSection = false;
-  bool SeenCodeSection = false;
   bool HasMemory64 = false;
+  bool HasUnmodeledTypes = false;
   wasm::WasmLinkingData LinkingData;
   uint32_t NumImportedGlobals = 0;
   uint32_t NumImportedTables = 0;

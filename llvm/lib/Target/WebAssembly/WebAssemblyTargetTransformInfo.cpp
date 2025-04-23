@@ -13,8 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "WebAssemblyTargetTransformInfo.h"
-#include "llvm/CodeGen/CostTable.h"
-#include "llvm/Support/Debug.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "wasmtti"
@@ -52,14 +50,13 @@ TypeSize WebAssemblyTTIImpl::getRegisterBitWidth(
 
 InstructionCost WebAssemblyTTIImpl::getArithmeticInstrCost(
     unsigned Opcode, Type *Ty, TTI::TargetCostKind CostKind,
-    TTI::OperandValueKind Opd1Info, TTI::OperandValueKind Opd2Info,
-    TTI::OperandValueProperties Opd1PropInfo,
-    TTI::OperandValueProperties Opd2PropInfo, ArrayRef<const Value *> Args,
+    TTI::OperandValueInfo Op1Info, TTI::OperandValueInfo Op2Info,
+    ArrayRef<const Value *> Args,
     const Instruction *CxtI) {
 
   InstructionCost Cost =
       BasicTTIImplBase<WebAssemblyTTIImpl>::getArithmeticInstrCost(
-          Opcode, Ty, CostKind, Opd1Info, Opd2Info, Opd1PropInfo, Opd2PropInfo);
+          Opcode, Ty, CostKind, Op1Info, Op2Info);
 
   if (auto *VTy = dyn_cast<VectorType>(Ty)) {
     switch (Opcode) {
@@ -68,9 +65,8 @@ InstructionCost WebAssemblyTTIImpl::getArithmeticInstrCost(
     case Instruction::Shl:
       // SIMD128's shifts currently only accept a scalar shift count. For each
       // element, we'll need to extract, op, insert. The following is a rough
-      // approxmation.
-      if (Opd2Info != TTI::OK_UniformValue &&
-          Opd2Info != TTI::OK_UniformConstantValue)
+      // approximation.
+      if (!Op2Info.isUniform())
         Cost =
             cast<FixedVectorType>(VTy)->getNumElements() *
             (TargetTransformInfo::TCC_Basic +
@@ -82,11 +78,12 @@ InstructionCost WebAssemblyTTIImpl::getArithmeticInstrCost(
   return Cost;
 }
 
-InstructionCost WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode,
-                                                       Type *Val,
-                                                       unsigned Index) {
-  InstructionCost Cost =
-      BasicTTIImplBase::getVectorInstrCost(Opcode, Val, Index);
+InstructionCost
+WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode, Type *Val,
+                                       TTI::TargetCostKind CostKind,
+                                       unsigned Index, Value *Op0, Value *Op1) {
+  InstructionCost Cost = BasicTTIImplBase::getVectorInstrCost(
+      Opcode, Val, CostKind, Index, Op0, Op1);
 
   // SIMD128's insert/extract currently only take constant indices.
   if (Index == -1u)
@@ -95,26 +92,21 @@ InstructionCost WebAssemblyTTIImpl::getVectorInstrCost(unsigned Opcode,
   return Cost;
 }
 
-bool WebAssemblyTTIImpl::areInlineCompatible(const Function *Caller,
-                                             const Function *Callee) const {
-  // Allow inlining only when the Callee has a subset of the Caller's
-  // features. In principle, we should be able to inline regardless of any
-  // features because WebAssembly supports features at module granularity, not
-  // function granularity, but without this restriction it would be possible for
-  // a module to "forget" about features if all the functions that used them
-  // were inlined.
-  const TargetMachine &TM = getTLI()->getTargetMachine();
+TTI::ReductionShuffle WebAssemblyTTIImpl::getPreferredExpandedReductionShuffle(
+    const IntrinsicInst *II) const {
 
-  const FeatureBitset &CallerBits =
-      TM.getSubtargetImpl(*Caller)->getFeatureBits();
-  const FeatureBitset &CalleeBits =
-      TM.getSubtargetImpl(*Callee)->getFeatureBits();
-
-  return (CallerBits & CalleeBits) == CalleeBits;
+  switch (II->getIntrinsicID()) {
+  default:
+    break;
+  case Intrinsic::vector_reduce_fadd:
+    return TTI::ReductionShuffle::Pairwise;
+  }
+  return TTI::ReductionShuffle::SplitHalf;
 }
 
 void WebAssemblyTTIImpl::getUnrollingPreferences(
-  Loop *L, ScalarEvolution &SE, TTI::UnrollingPreferences &UP) const {
+    Loop *L, ScalarEvolution &SE, TTI::UnrollingPreferences &UP,
+    OptimizationRemarkEmitter *ORE) const {
   // Scan the loop: don't unroll loops with calls. This is a standard approach
   // for most (all?) targets.
   for (BasicBlock *BB : L->blocks())
@@ -137,4 +129,32 @@ void WebAssemblyTTIImpl::getUnrollingPreferences(
   // Set number of instructions optimized when "back edge"
   // becomes "fall through" to default value of 2.
   UP.BEInsns = 2;
+}
+
+bool WebAssemblyTTIImpl::supportsTailCalls() const {
+  return getST()->hasTailCall();
+}
+
+bool WebAssemblyTTIImpl::isProfitableToSinkOperands(
+    Instruction *I, SmallVectorImpl<Use *> &Ops) const {
+  using namespace llvm::PatternMatch;
+
+  if (!I->getType()->isVectorTy() || !I->isShift())
+    return false;
+
+  Value *V = I->getOperand(1);
+  // We dont need to sink constant splat.
+  if (dyn_cast<Constant>(V))
+    return false;
+
+  if (match(V, m_Shuffle(m_InsertElt(m_Value(), m_Value(), m_ZeroInt()),
+                         m_Value(), m_ZeroMask()))) {
+    // Sink insert
+    Ops.push_back(&cast<Instruction>(V)->getOperandUse(0));
+    // Sink shuffle
+    Ops.push_back(&I->getOperandUse(1));
+    return true;
+  }
+
+  return false;
 }

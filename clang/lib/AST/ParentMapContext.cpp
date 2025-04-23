@@ -12,10 +12,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/ParentMapContext.h"
-#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/TemplateBase.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 using namespace clang;
 
@@ -50,7 +51,7 @@ DynTypedNode ParentMapContext::traverseIgnored(const DynTypedNode &N) const {
 }
 
 template <typename T, typename... U>
-std::tuple<bool, DynTypedNodeList, const T *, const U *...>
+static std::tuple<bool, DynTypedNodeList, const T *, const U *...>
 matchParents(const DynTypedNodeList &NodeList,
              ParentMapContext::ParentMap *ParentMap);
 
@@ -61,7 +62,30 @@ class ParentMapContext::ParentMap {
   template <typename, typename...> friend struct ::MatchParents;
 
   /// Contains parents of a node.
-  using ParentVector = llvm::SmallVector<DynTypedNode, 2>;
+  class ParentVector {
+  public:
+    ParentVector() = default;
+    explicit ParentVector(size_t N, const DynTypedNode &Value) {
+      Items.reserve(N);
+      for (; N > 0; --N)
+        push_back(Value);
+    }
+    bool contains(const DynTypedNode &Value) const {
+      const void *Identity = Value.getMemoizationData();
+      assert(Identity);
+      return Dedup.contains(Identity);
+    }
+    void push_back(const DynTypedNode &Value) {
+      const void *Identity = Value.getMemoizationData();
+      if (!Identity || Dedup.insert(Identity).second) {
+        Items.push_back(Value);
+      }
+    }
+    llvm::ArrayRef<DynTypedNode> view() const { return Items; }
+  private:
+    llvm::SmallVector<DynTypedNode, 1> Items;
+    llvm::SmallPtrSet<const void *, 2> Dedup;
+  };
 
   /// Maps from a node to its parents. This is used for nodes that have
   /// pointer identity only, which are more common and we can save space by
@@ -84,11 +108,11 @@ class ParentMapContext::ParentMap {
 
   static DynTypedNode
   getSingleDynTypedNodeFromParentMap(ParentMapPointers::mapped_type U) {
-    if (const auto *D = U.dyn_cast<const Decl *>())
+    if (const auto *D = dyn_cast<const Decl *>(U))
       return DynTypedNode::create(*D);
-    if (const auto *S = U.dyn_cast<const Stmt *>())
+    if (const auto *S = dyn_cast<const Stmt *>(U))
       return DynTypedNode::create(*S);
-    return *U.get<DynTypedNode *>();
+    return *cast<DynTypedNode *>(U);
   }
 
   template <typename NodeTy, typename MapTy>
@@ -99,7 +123,7 @@ class ParentMapContext::ParentMap {
       return llvm::ArrayRef<DynTypedNode>();
     }
     if (const auto *V = I->second.template dyn_cast<ParentVector *>()) {
-      return llvm::makeArrayRef(*V);
+      return V->view();
     }
     return getSingleDynTypedNodeFromParentMap(I->second);
   }
@@ -108,17 +132,17 @@ public:
   ParentMap(ASTContext &Ctx);
   ~ParentMap() {
     for (const auto &Entry : PointerParents) {
-      if (Entry.second.is<DynTypedNode *>()) {
-        delete Entry.second.get<DynTypedNode *>();
-      } else if (Entry.second.is<ParentVector *>()) {
-        delete Entry.second.get<ParentVector *>();
+      if (auto *DTN = dyn_cast<DynTypedNode *>(Entry.second)) {
+        delete DTN;
+      } else if (auto *PV = dyn_cast<ParentVector *>(Entry.second)) {
+        delete PV;
       }
     }
     for (const auto &Entry : OtherParents) {
-      if (Entry.second.is<DynTypedNode *>()) {
-        delete Entry.second.get<DynTypedNode *>();
-      } else if (Entry.second.is<ParentVector *>()) {
-        delete Entry.second.get<ParentVector *>();
+      if (auto *DTN = dyn_cast<DynTypedNode *>(Entry.second)) {
+        delete DTN;
+      } else if (auto *PV = dyn_cast<ParentVector *>(Entry.second)) {
+        delete PV;
       }
     }
   }
@@ -252,7 +276,7 @@ public:
       const auto *S = It->second.dyn_cast<const Stmt *>();
       if (!S) {
         if (auto *Vec = It->second.dyn_cast<ParentVector *>())
-          return llvm::makeArrayRef(*Vec);
+          return Vec->view();
         return getSingleDynTypedNodeFromParentMap(It->second);
       }
       const auto *P = dyn_cast<Expr>(S);
@@ -265,16 +289,6 @@ public:
   }
 };
 
-template <typename Tuple, std::size_t... Is>
-auto tuple_pop_front_impl(const Tuple &tuple, std::index_sequence<Is...>) {
-  return std::make_tuple(std::get<1 + Is>(tuple)...);
-}
-
-template <typename Tuple> auto tuple_pop_front(const Tuple &tuple) {
-  return tuple_pop_front_impl(
-      tuple, std::make_index_sequence<std::tuple_size<Tuple>::value - 1>());
-}
-
 template <typename T, typename... U> struct MatchParents {
   static std::tuple<bool, DynTypedNodeList, const T *, const U *...>
   match(const DynTypedNodeList &NodeList,
@@ -285,10 +299,11 @@ template <typename T, typename... U> struct MatchParents {
       if (NextParentList.size() == 1) {
         auto TailTuple = MatchParents<U...>::match(NextParentList, ParentMap);
         if (std::get<bool>(TailTuple)) {
-          return std::tuple_cat(
-              std::make_tuple(true, std::get<DynTypedNodeList>(TailTuple),
-                              TypedNode),
-              tuple_pop_front(tuple_pop_front(TailTuple)));
+          return std::apply(
+              [TypedNode](bool, DynTypedNodeList NodeList, auto... TupleTail) {
+                return std::make_tuple(true, NodeList, TypedNode, TupleTail...);
+              },
+              TailTuple);
         }
       }
     }
@@ -328,6 +343,9 @@ template <> DynTypedNode createDynTypedNode(const TypeLoc &Node) {
 }
 template <>
 DynTypedNode createDynTypedNode(const NestedNameSpecifierLoc &Node) {
+  return DynTypedNode::create(Node);
+}
+template <> DynTypedNode createDynTypedNode(const ObjCProtocolLoc &Node) {
   return DynTypedNode::create(Node);
 }
 /// @}
@@ -379,31 +397,33 @@ private:
       else
         NodeOrVector = new DynTypedNode(ParentStack.back());
     } else {
-      if (!NodeOrVector.template is<ParentVector *>()) {
+      if (!isa<ParentVector *>(NodeOrVector)) {
         auto *Vector = new ParentVector(
             1, getSingleDynTypedNodeFromParentMap(NodeOrVector));
         delete NodeOrVector.template dyn_cast<DynTypedNode *>();
         NodeOrVector = Vector;
       }
 
-      auto *Vector = NodeOrVector.template get<ParentVector *>();
+      auto *Vector = cast<ParentVector *>(NodeOrVector);
       // Skip duplicates for types that have memoization data.
       // We must check that the type has memoization data before calling
-      // std::find() because DynTypedNode::operator== can't compare all
+      // llvm::is_contained() because DynTypedNode::operator== can't compare all
       // types.
       bool Found = ParentStack.back().getMemoizationData() &&
-                   std::find(Vector->begin(), Vector->end(),
-                             ParentStack.back()) != Vector->end();
+                   llvm::is_contained(*Vector, ParentStack.back());
       if (!Found)
         Vector->push_back(ParentStack.back());
     }
   }
 
+  template <typename T> static bool isNull(T Node) { return !Node; }
+  static bool isNull(ObjCProtocolLoc Node) { return false; }
+
   template <typename T, typename MapNodeTy, typename BaseTraverseFn,
             typename MapTy>
   bool TraverseNode(T Node, MapNodeTy MapNode, BaseTraverseFn BaseTraverse,
                     MapTy *Parents) {
-    if (!Node)
+    if (isNull(Node))
       return true;
     addParent(MapNode, Parents);
     ParentStack.push_back(createDynTypedNode(Node));
@@ -427,6 +447,17 @@ private:
     return TraverseNode(
         NNSLocNode, DynTypedNode::create(NNSLocNode),
         [&] { return VisitorBase::TraverseNestedNameSpecifierLoc(NNSLocNode); },
+        &Map.OtherParents);
+  }
+  bool TraverseAttr(Attr *AttrNode) {
+    return TraverseNode(
+        AttrNode, AttrNode, [&] { return VisitorBase::TraverseAttr(AttrNode); },
+        &Map.PointerParents);
+  }
+  bool TraverseObjCProtocolLoc(ObjCProtocolLoc ProtocolLocNode) {
+    return TraverseNode(
+        ProtocolLocNode, DynTypedNode::create(ProtocolLocNode),
+        [&] { return VisitorBase::TraverseObjCProtocolLoc(ProtocolLocNode); },
         &Map.OtherParents);
   }
 

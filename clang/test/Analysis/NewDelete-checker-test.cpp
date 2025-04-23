@@ -37,10 +37,6 @@ extern "C" void *malloc(size_t);
 extern "C" void free (void* ptr);
 int *global;
 
-//------------------
-// check for leaks
-//------------------
-
 //----- Standard non-placement operators
 void testGlobalOpNew() {
   void *p = operator new(0);
@@ -67,19 +63,6 @@ void testGlobalNoThrowPlacementExprNewBeforeOverload() {
   int *p = new(std::nothrow) int;
 } // leak-warning{{Potential leak of memory pointed to by 'p'}}
 
-//----- Standard pointer placement operators
-void testGlobalPointerPlacementNew() {
-  int i;
-
-  void *p1 = operator new(0, &i); // no warn
-
-  void *p2 = operator new[](0, &i); // no warn
-
-  int *p3 = new(&i) int; // no warn
-
-  int *p4 = new(&i) int[0]; // no warn
-}
-
 //----- Other cases
 void testNewMemoryIsInHeap() {
   int *p = new int;
@@ -105,13 +88,13 @@ void testNewInvalidationPlacement(PtrWrapper *w) {
 
 void testUseZeroAlloc1() {
   int *p = (int *)operator new(0);
-  *p = 1; // newdelete-warning {{Use of zero-allocated memory}}
+  *p = 1; // newdelete-warning {{Use of memory allocated with size zero}}
   delete p;
 }
 
 int testUseZeroAlloc2() {
   int *p = (int *)operator new[](0);
-  return p[0]; // newdelete-warning {{Use of zero-allocated memory}}
+  return p[0]; // newdelete-warning {{Use of memory allocated with size zero}}
   delete[] p;
 }
 
@@ -119,7 +102,7 @@ void f(int);
 
 void testUseZeroAlloc3() {
   int *p = new int[0];
-  f(*p); // newdelete-warning {{Use of zero-allocated memory}}
+  f(*p); // newdelete-warning {{Use of memory allocated with size zero}}
   delete[] p;
 }
 
@@ -385,7 +368,11 @@ class DerefClass{
 public:
   int *x;
   DerefClass() {}
-  ~DerefClass() {*x = 1;}
+  ~DerefClass() {
+    int i = 0;
+    x = &i;
+    *x = 1;
+  }
 };
 
 void testDoubleDeleteClassInstance() {
