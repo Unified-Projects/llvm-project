@@ -69,7 +69,7 @@ extern char **environ;
 
 #include <sys/types.h>
 #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
-    !defined(__linux__) && !defined(__FreeBSD_kernel__) && !defined(_AIX)
+    !defined(__linux__) && !defined(__FreeBSD_kernel__) && !defined(_AIX) && !defined(__unified__)
 #include <sys/statvfs.h>
 #define STATVFS statvfs
 #define FSTATVFS fstatvfs
@@ -101,6 +101,7 @@ typedef uint_t uint;
 #else
 #include <sys/mount.h>
 #endif
+#include <sys/statfs.h>
 #define STATVFS statfs
 #define FSTATVFS fstatfs
 #define STATVFS_F_FRSIZE(vfs) static_cast<uint64_t>(vfs.f_bsize)
@@ -124,7 +125,7 @@ const file_t kInvalidFile = -1;
 #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||      \
     defined(__FreeBSD_kernel__) || defined(__linux__) || defined(__CYGWIN__) || \
     defined(__DragonFly__) || defined(_AIX) || defined(__GNU__) ||              \
-    (defined(__sun__) && defined(__svr4__) || defined(__HAIKU__))
+    (defined(__sun__) && defined(__svr4__) || defined(__HAIKU__)) || defined(__unified__)
 static int test_dir(char ret[PATH_MAX], const char *dir, const char *bin) {
   struct stat sb;
   char fullpath[PATH_MAX];
