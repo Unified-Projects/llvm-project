@@ -1,16 +1,16 @@
 if (CLANGD_ENABLE_REMOTE)
-  generate_clang_protos_library(clangdRemoteIndexProto "Index.proto")
-  generate_clang_protos_library(clangdMonitoringServiceProto "MonitoringService.proto"
+  generate_protos(RemoteIndexProto "Index.proto")
+  generate_protos(MonitoringServiceProto "MonitoringService.proto"
     GRPC)
-  generate_clang_protos_library(clangdRemoteIndexServiceProto "Service.proto"
+  generate_protos(RemoteIndexServiceProto "Service.proto"
     DEPENDS "Index.proto"
     GRPC)
   # FIXME: Move this into generate_protos. Currently we only mention proto
   # filename as a dependency, but linking requires target name.
-  target_link_libraries(clangdRemoteIndexServiceProto
+  target_link_libraries(RemoteIndexServiceProto
     PRIVATE
-    clangdRemoteIndexProto
-    clangdMonitoringServiceProto
+    RemoteIndexProto
+    MonitoringServiceProto
     )
   include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -19,24 +19,20 @@ if (CLANGD_ENABLE_REMOTE)
   # target-local?
   add_definitions(-DGOOGLE_PROTOBUF_NO_RTTI=1)
 
-  add_clang_library(clangdRemoteIndex STATIC
+  add_clang_library(clangdRemoteIndex
     Client.cpp
 
     LINK_LIBS
-    clangdRemoteIndexProto
-    clangdRemoteIndexServiceProto
+    RemoteIndexProto
+    RemoteIndexServiceProto
     clangdRemoteMarshalling
+    clangBasic
     clangDaemon
     clangdSupport
 
     DEPENDS
-    clangdRemoteIndexProto
-    clangdRemoteIndexServiceProto
-    )
-
-  clang_target_link_libraries(clangdRemoteIndex
-    PRIVATE
-    clangBasic
+    RemoteIndexProto
+    RemoteIndexServiceProto
     )
 
   add_subdirectory(marshalling)

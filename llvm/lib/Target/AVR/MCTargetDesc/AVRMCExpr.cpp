@@ -8,6 +8,7 @@
 
 #include "AVRMCExpr.h"
 
+#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
@@ -18,15 +19,16 @@ namespace llvm {
 namespace {
 
 const struct ModifierEntry {
-  const char *const Spelling;
+  const char * const Spelling;
   AVRMCExpr::VariantKind VariantKind;
 } ModifierNames[] = {
     {"lo8", AVRMCExpr::VK_AVR_LO8},       {"hi8", AVRMCExpr::VK_AVR_HI8},
     {"hh8", AVRMCExpr::VK_AVR_HH8}, // synonym with hlo8
     {"hlo8", AVRMCExpr::VK_AVR_HH8},      {"hhi8", AVRMCExpr::VK_AVR_HHI8},
 
-    {"pm", AVRMCExpr::VK_AVR_PM},         {"pm_lo8", AVRMCExpr::VK_AVR_PM_LO8},
-    {"pm_hi8", AVRMCExpr::VK_AVR_PM_HI8}, {"pm_hh8", AVRMCExpr::VK_AVR_PM_HH8},
+    {"pm", AVRMCExpr::VK_AVR_PM},
+    {"pm_lo8", AVRMCExpr::VK_AVR_PM_LO8}, {"pm_hi8", AVRMCExpr::VK_AVR_PM_HI8},
+    {"pm_hh8", AVRMCExpr::VK_AVR_PM_HH8},
 
     {"lo8_gs", AVRMCExpr::VK_AVR_LO8_GS}, {"hi8_gs", AVRMCExpr::VK_AVR_HI8_GS},
     {"gs", AVRMCExpr::VK_AVR_GS},
@@ -41,12 +43,12 @@ const AVRMCExpr *AVRMCExpr::create(VariantKind Kind, const MCExpr *Expr,
 
 void AVRMCExpr::printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const {
   assert(Kind != VK_AVR_None);
+
+  if (isNegated())
+    OS << '-';
+
   OS << getName() << '(';
-  if (isNegated())
-    OS << '-' << '(';
   getSubExpr()->print(OS, MAI);
-  if (isNegated())
-    OS << ')';
   OS << ')';
 }
 
@@ -68,10 +70,10 @@ bool AVRMCExpr::evaluateAsConstant(int64_t &Result) const {
 }
 
 bool AVRMCExpr::evaluateAsRelocatableImpl(MCValue &Result,
-                                          const MCAssembler *Asm,
+                                          const MCAsmLayout *Layout,
                                           const MCFixup *Fixup) const {
   MCValue Value;
-  bool isRelocatable = SubExpr->evaluateAsRelocatable(Value, Asm, Fixup);
+  bool isRelocatable = SubExpr->evaluateAsRelocatable(Value, Layout, Fixup);
 
   if (!isRelocatable)
     return false;
@@ -79,10 +81,9 @@ bool AVRMCExpr::evaluateAsRelocatableImpl(MCValue &Result,
   if (Value.isAbsolute()) {
     Result = MCValue::get(evaluateAsInt64(Value.getConstant()));
   } else {
-    if (!Asm || !Asm->hasLayout())
-      return false;
+    if (!Layout) return false;
 
-    MCContext &Context = Asm->getContext();
+    MCContext &Context = Layout->getAssembler().getContext();
     const MCSymbolRefExpr *Sym = Value.getSymA();
     MCSymbolRefExpr::VariantKind Modifier = Sym->getKind();
     if (Modifier != MCSymbolRefExpr::VK_None)
@@ -218,3 +219,4 @@ AVRMCExpr::VariantKind AVRMCExpr::getKindByName(StringRef Name) {
 }
 
 } // end of namespace llvm
+

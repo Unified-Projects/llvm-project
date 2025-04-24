@@ -27,38 +27,36 @@
 
 template <class C>
 void test(int expected_num_allocs = 1) {
-  test_allocator_statistics alloc_stats;
   {
-    alloc_stats.clear();
+    test_alloc_base::clear();
     using AllocT = typename C::allocator_type;
-    C v(AllocT(42, 101, &alloc_stats));
+    C v(AllocT(42, 101));
 
-    assert(alloc_stats.count == expected_num_allocs);
+    assert(test_alloc_base::count == expected_num_allocs);
 
-    const int num_stored_allocs = alloc_stats.count;
+    const int num_stored_allocs = test_alloc_base::count;
     {
       const AllocT& a = v.get_allocator();
-      assert(alloc_stats.count == 1 + num_stored_allocs);
+      assert(test_alloc_base::count == 1 + num_stored_allocs);
       assert(a.get_data() == 42);
       assert(a.get_id() == 101);
     }
-    assert(alloc_stats.count == num_stored_allocs);
-    alloc_stats.clear_ctor_counters();
+    assert(test_alloc_base::count == num_stored_allocs);
+    test_alloc_base::clear_ctor_counters();
 
     C v2 = std::move(v);
-    assert(alloc_stats.count == num_stored_allocs * 2);
-    assert(alloc_stats.copied == 0);
-    assert(alloc_stats.moved == num_stored_allocs);
+    assert(test_alloc_base::count == num_stored_allocs * 2);
+    assert(test_alloc_base::copied == 0);
+    assert(test_alloc_base::moved == num_stored_allocs);
     {
-      const AllocT& a1 = v.get_allocator();
-      assert(a1.get_id() == test_alloc_base::moved_value);
-      assert(a1.get_data() == 42);
-
-      const AllocT& a2 = v2.get_allocator();
-      assert(a2.get_id() == 101);
-      assert(a2.get_data() == 42);
-
-      assert(a1 == a2);
+      const AllocT& a = v.get_allocator();
+      assert(a.get_id() == test_alloc_base::moved_value);
+      assert(a.get_data() == test_alloc_base::moved_value);
+    }
+    {
+      const AllocT& a = v2.get_allocator();
+      assert(a.get_id() == 101);
+      assert(a.get_data() == 42);
     }
   }
 }

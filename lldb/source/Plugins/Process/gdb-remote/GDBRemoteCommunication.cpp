@@ -13,6 +13,7 @@
 #include <future>
 #include <sys/stat.h>
 
+#include "lldb/Core/StreamFile.h"
 #include "lldb/Host/Config.h"
 #include "lldb/Host/ConnectionFileDescriptor.h"
 #include "lldb/Host/FileSystem.h"
@@ -21,6 +22,7 @@
 #include "lldb/Host/Pipe.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
 #include "lldb/Host/Socket.h"
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Host/ThreadLauncher.h"
 #include "lldb/Host/common/TCPSocket.h"
 #include "lldb/Host/posix/ConnectionFileDescriptorPosix.h"
@@ -29,9 +31,9 @@
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegularExpression.h"
+#include "lldb/Utility/Reproducer.h"
 #include "lldb/Utility/StreamString.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/Config/llvm-config.h" // for LLVM_ENABLE_ZLIB
 #include "llvm/Support/ScopedPrinter.h"
 
 #include "ProcessGDBRemoteLog.h"
@@ -57,16 +59,17 @@ using namespace lldb_private;
 using namespace lldb_private::process_gdb_remote;
 
 // GDBRemoteCommunication constructor
-GDBRemoteCommunication::GDBRemoteCommunication()
-    : Communication(),
+GDBRemoteCommunication::GDBRemoteCommunication(const char *comm_name,
+                                               const char *listener_name)
+    : Communication(comm_name),
 #ifdef LLDB_CONFIGURATION_DEBUG
       m_packet_timeout(1000),
 #else
       m_packet_timeout(1),
 #endif
       m_echo_number(0), m_supports_qEcho(eLazyBoolCalculate), m_history(512),
-      m_send_acks(true), m_is_platform(false),
-      m_compression_type(CompressionType::None), m_listen_url() {
+      m_send_acks(true), m_compression_type(CompressionType::None),
+      m_listen_url() {
 }
 
 // Destructor
@@ -79,6 +82,11 @@ GDBRemoteCommunication::~GDBRemoteCommunication() {
   if (m_decompression_scratch)
     free (m_decompression_scratch);
 #endif
+
+  // Stop the communications read thread which is used to parse all incoming
+  // packets.  This function will block until the read thread returns.
+  if (m_read_thread_enabled)
+    StopReadThread();
 }
 
 char GDBRemoteCommunication::CalculcateChecksum(llvm::StringRef payload) {
@@ -91,20 +99,20 @@ char GDBRemoteCommunication::CalculcateChecksum(llvm::StringRef payload) {
 }
 
 size_t GDBRemoteCommunication::SendAck() {
-  Log *log = GetLog(GDBRLog::Packets);
+  Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PACKETS));
   ConnectionStatus status = eConnectionStatusSuccess;
   char ch = '+';
-  const size_t bytes_written = WriteAll(&ch, 1, status, nullptr);
+  const size_t bytes_written = Write(&ch, 1, status, nullptr);
   LLDB_LOGF(log, "<%4" PRIu64 "> send packet: %c", (uint64_t)bytes_written, ch);
   m_history.AddPacket(ch, GDBRemotePacket::ePacketTypeSend, bytes_written);
   return bytes_written;
 }
 
 size_t GDBRemoteCommunication::SendNack() {
-  Log *log = GetLog(GDBRLog::Packets);
+  Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PACKETS));
   ConnectionStatus status = eConnectionStatusSuccess;
   char ch = '-';
-  const size_t bytes_written = WriteAll(&ch, 1, status, nullptr);
+  const size_t bytes_written = Write(&ch, 1, status, nullptr);
   LLDB_LOGF(log, "<%4" PRIu64 "> send packet: %c", (uint64_t)bytes_written, ch);
   m_history.AddPacket(ch, GDBRemotePacket::ePacketTypeSend, bytes_written);
   return bytes_written;
@@ -123,37 +131,14 @@ GDBRemoteCommunication::SendPacketNoLock(llvm::StringRef payload) {
 }
 
 GDBRemoteCommunication::PacketResult
-GDBRemoteCommunication::SendNotificationPacketNoLock(
-    llvm::StringRef notify_type, std::deque<std::string> &queue,
-    llvm::StringRef payload) {
-  PacketResult ret = PacketResult::Success;
-
-  // If there are no notification in the queue, send the notification
-  // packet.
-  if (queue.empty()) {
-    StreamString packet(0, 4, eByteOrderBig);
-    packet.PutChar('%');
-    packet.Write(notify_type.data(), notify_type.size());
-    packet.PutChar(':');
-    packet.Write(payload.data(), payload.size());
-    packet.PutChar('#');
-    packet.PutHex8(CalculcateChecksum(payload));
-    ret = SendRawPacketNoLock(packet.GetString(), true);
-  }
-
-  queue.push_back(payload.str());
-  return ret;
-}
-
-GDBRemoteCommunication::PacketResult
 GDBRemoteCommunication::SendRawPacketNoLock(llvm::StringRef packet,
                                             bool skip_ack) {
   if (IsConnected()) {
-    Log *log = GetLog(GDBRLog::Packets);
+    Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PACKETS));
     ConnectionStatus status = eConnectionStatusSuccess;
     const char *packet_data = packet.data();
     const size_t packet_length = packet.size();
-    size_t bytes_written = WriteAll(packet_data, packet_length, status, nullptr);
+    size_t bytes_written = Write(packet_data, packet_length, status, nullptr);
     if (log) {
       size_t binary_start_offset = 0;
       if (strncmp(packet_data, "$vFile:pwrite:", strlen("$vFile:pwrite:")) ==
@@ -209,7 +194,7 @@ GDBRemoteCommunication::SendRawPacketNoLock(llvm::StringRef packet,
 
 GDBRemoteCommunication::PacketResult GDBRemoteCommunication::GetAck() {
   StringExtractorGDBRemote packet;
-  PacketResult result = WaitForPacketNoLock(packet, GetPacketTimeout(), false);
+  PacketResult result = ReadPacket(packet, GetPacketTimeout(), false);
   if (result == PacketResult::Success) {
     if (packet.GetResponseType() ==
         StringExtractorGDBRemote::ResponseType::eAck)
@@ -221,21 +206,60 @@ GDBRemoteCommunication::PacketResult GDBRemoteCommunication::GetAck() {
 }
 
 GDBRemoteCommunication::PacketResult
+GDBRemoteCommunication::ReadPacketWithOutputSupport(
+    StringExtractorGDBRemote &response, Timeout<std::micro> timeout,
+    bool sync_on_timeout,
+    llvm::function_ref<void(llvm::StringRef)> output_callback) {
+  auto result = ReadPacket(response, timeout, sync_on_timeout);
+  while (result == PacketResult::Success && response.IsNormalResponse() &&
+         response.PeekChar() == 'O') {
+    response.GetChar();
+    std::string output;
+    if (response.GetHexByteString(output))
+      output_callback(output);
+    result = ReadPacket(response, timeout, sync_on_timeout);
+  }
+  return result;
+}
+
+GDBRemoteCommunication::PacketResult
 GDBRemoteCommunication::ReadPacket(StringExtractorGDBRemote &response,
                                    Timeout<std::micro> timeout,
                                    bool sync_on_timeout) {
-  using ResponseType = StringExtractorGDBRemote::ResponseType;
+  if (m_read_thread_enabled)
+    return PopPacketFromQueue(response, timeout);
+  else
+    return WaitForPacketNoLock(response, timeout, sync_on_timeout);
+}
 
-  Log *log = GetLog(GDBRLog::Packets);
-  for (;;) {
-    PacketResult result =
-        WaitForPacketNoLock(response, timeout, sync_on_timeout);
-    if (result != PacketResult::Success ||
-        (response.GetResponseType() != ResponseType::eAck &&
-         response.GetResponseType() != ResponseType::eNack))
-      return result;
-    LLDB_LOG(log, "discarding spurious `{0}` packet", response.GetStringRef());
+// This function is called when a packet is requested.
+// A whole packet is popped from the packet queue and returned to the caller.
+// Packets are placed into this queue from the communication read thread. See
+// GDBRemoteCommunication::AppendBytesToCache.
+GDBRemoteCommunication::PacketResult
+GDBRemoteCommunication::PopPacketFromQueue(StringExtractorGDBRemote &response,
+                                           Timeout<std::micro> timeout) {
+  auto pred = [&] { return !m_packet_queue.empty() && IsConnected(); };
+  // lock down the packet queue
+  std::unique_lock<std::mutex> lock(m_packet_queue_mutex);
+
+  if (!timeout)
+    m_condition_queue_not_empty.wait(lock, pred);
+  else {
+    if (!m_condition_queue_not_empty.wait_for(lock, *timeout, pred))
+      return PacketResult::ErrorReplyTimeout;
+    if (!IsConnected())
+      return PacketResult::ErrorDisconnected;
   }
+
+  // get the front element of the queue
+  response = m_packet_queue.front();
+
+  // remove the front element
+  m_packet_queue.pop();
+
+  // we got a packet
+  return PacketResult::Success;
 }
 
 GDBRemoteCommunication::PacketResult
@@ -245,7 +269,7 @@ GDBRemoteCommunication::WaitForPacketNoLock(StringExtractorGDBRemote &packet,
   uint8_t buffer[8192];
   Status error;
 
-  Log *log = GetLog(GDBRLog::Packets);
+  Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PACKETS));
 
   // Check for a packet from our cache first without trying any reading...
   if (CheckForPacket(nullptr, 0, packet) != PacketType::Invalid)
@@ -386,7 +410,7 @@ GDBRemoteCommunication::WaitForPacketNoLock(StringExtractorGDBRemote &packet,
 }
 
 bool GDBRemoteCommunication::DecompressPacket() {
-  Log *log = GetLog(GDBRLog::Packets);
+  Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PACKETS));
 
   if (!CompressionIsEnabled())
     return true;
@@ -540,8 +564,9 @@ bool GDBRemoteCommunication::DecompressPacket() {
       else if (m_compression_type == CompressionType::ZlibDeflate)
         scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_ZLIB);
       else if (m_compression_type == CompressionType::LZMA)
-        scratchbuf_size =
-            compression_decode_scratch_buffer_size(COMPRESSION_LZMA);
+        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_LZMA);
+      else if (m_compression_type == CompressionType::LZFSE)
+        scratchbuf_size = compression_decode_scratch_buffer_size (COMPRESSION_LZFSE);
       if (scratchbuf_size > 0) {
         m_decompression_scratch = (void*) malloc (scratchbuf_size);
         m_decompression_scratch_type = m_compression_type;
@@ -619,7 +644,7 @@ GDBRemoteCommunication::CheckForPacket(const uint8_t *src, size_t src_len,
   // Put the packet data into the buffer in a thread safe fashion
   std::lock_guard<std::recursive_mutex> guard(m_bytes_mutex);
 
-  Log *log = GetLog(GDBRLog::Packets);
+  Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PACKETS));
 
   if (src && src_len > 0) {
     if (log && log->GetVerbose()) {
@@ -659,7 +684,7 @@ GDBRemoteCommunication::CheckForPacket(const uint8_t *src, size_t src_len,
 
     case '%': // Async notify packet
       isNotifyPacket = true;
-      [[fallthrough]];
+      LLVM_FALLTHROUGH;
 
     case '$':
       // Look for a standard gdb packet?
@@ -836,7 +861,7 @@ GDBRemoteCommunication::CheckForPacket(const uint8_t *src, size_t src_len,
 Status GDBRemoteCommunication::StartListenThread(const char *hostname,
                                                  uint16_t port) {
   if (m_listen_thread.IsJoinable())
-    return Status::FromErrorString("listen thread already running");
+    return Status("listen thread already running");
 
   char listen_url[512];
   if (hostname && hostname[0])
@@ -846,9 +871,9 @@ Status GDBRemoteCommunication::StartListenThread(const char *hostname,
   m_listen_url = listen_url;
   SetConnection(std::make_unique<ConnectionFileDescriptor>());
   llvm::Expected<HostThread> listen_thread = ThreadLauncher::LaunchThread(
-      listen_url, [this] { return GDBRemoteCommunication::ListenThread(); });
+      listen_url, GDBRemoteCommunication::ListenThread, this);
   if (!listen_thread)
-    return Status::FromError(listen_thread.takeError());
+    return Status(listen_thread.takeError());
   m_listen_thread = *listen_thread;
 
   return Status();
@@ -860,31 +885,35 @@ bool GDBRemoteCommunication::JoinListenThread() {
   return true;
 }
 
-lldb::thread_result_t GDBRemoteCommunication::ListenThread() {
+lldb::thread_result_t
+GDBRemoteCommunication::ListenThread(lldb::thread_arg_t arg) {
+  GDBRemoteCommunication *comm = (GDBRemoteCommunication *)arg;
   Status error;
   ConnectionFileDescriptor *connection =
-      (ConnectionFileDescriptor *)GetConnection();
+      (ConnectionFileDescriptor *)comm->GetConnection();
 
   if (connection) {
     // Do the listen on another thread so we can continue on...
-    if (connection->Connect(
-            m_listen_url.c_str(),
-            [this](llvm::StringRef port_str) {
-              uint16_t port = 0;
-              llvm::to_integer(port_str, port, 10);
-              m_port_promise.set_value(port);
-            },
-            &error) != eConnectionStatusSuccess)
-      SetConnection(nullptr);
+    if (connection->Connect(comm->m_listen_url.c_str(), &error) !=
+        eConnectionStatusSuccess)
+      comm->SetConnection(nullptr);
   }
   return {};
 }
 
-FileSpec GDBRemoteCommunication::GetDebugserverPath(Platform *platform) {
-  Log *log = GetLog(GDBRLog::Process);
+Status GDBRemoteCommunication::StartDebugserverProcess(
+    const char *url, Platform *platform, ProcessLaunchInfo &launch_info,
+    uint16_t *port, const Args *inferior_args, int pass_comm_fd) {
+  Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PROCESS));
+  LLDB_LOGF(log, "GDBRemoteCommunication::%s(url=%s, port=%" PRIu16 ")",
+            __FUNCTION__, url ? url : "<empty>", port ? *port : uint16_t(0));
+
+  Status error;
   // If we locate debugserver, keep that located version around
   static FileSpec g_debugserver_file_spec;
-  FileSpec debugserver_file_spec;
+
+  char debugserver_path[PATH_MAX];
+  FileSpec &debugserver_file_spec = launch_info.GetExecutableFile();
 
   Environment host_env = Host::GetEnvironment();
 
@@ -936,20 +965,9 @@ FileSpec GDBRemoteCommunication::GetDebugserverPath(Platform *platform) {
       }
     }
   }
-  return debugserver_file_spec;
-}
 
-Status GDBRemoteCommunication::StartDebugserverProcess(
-    const char *url, Platform *platform, ProcessLaunchInfo &launch_info,
-    uint16_t *port, const Args *inferior_args, shared_fd_t pass_comm_fd) {
-  Log *log = GetLog(GDBRLog::Process);
-  LLDB_LOGF(log, "GDBRemoteCommunication::%s(url=%s, port=%" PRIu16 ")",
-            __FUNCTION__, url ? url : "<empty>", port ? *port : uint16_t(0));
-
-  Status error;
-  FileSpec &debugserver_file_spec = launch_info.GetExecutableFile();
-  if ((debugserver_file_spec = GetDebugserverPath(platform))) {
-    std::string debugserver_path = debugserver_file_spec.GetPath();
+  if (debugserver_exists) {
+    debugserver_file_spec.GetPath(debugserver_path, sizeof(debugserver_path));
 
     Args &debugserver_args = launch_info.GetArguments();
     debugserver_args.Clear();
@@ -963,19 +981,16 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
 #endif
 
     // If a url is supplied then use it
-    if (url && url[0])
+    if (url)
       debugserver_args.AppendArgument(llvm::StringRef(url));
 
-    if (pass_comm_fd != SharedSocket::kInvalidFD) {
+    if (pass_comm_fd >= 0) {
       StreamString fd_arg;
-      fd_arg.Printf("--fd=%" PRIi64, (int64_t)pass_comm_fd);
+      fd_arg.Printf("--fd=%i", pass_comm_fd);
       debugserver_args.AppendArgument(fd_arg.GetString());
       // Send "pass_comm_fd" down to the inferior so it can use it to
-      // communicate back with this process. Ignored on Windows.
-#ifndef _WIN32
-      launch_info.AppendDuplicateFileAction((int)pass_comm_fd,
-                                            (int)pass_comm_fd);
-#endif
+      // communicate back with this process
+      launch_info.AppendDuplicateFileAction(pass_comm_fd, pass_comm_fd);
     }
 
     // use native registers, not the GDB registers
@@ -995,7 +1010,7 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
     // port is null when debug server should listen on domain socket - we're
     // not interested in port value but rather waiting for debug server to
     // become available.
-    if (pass_comm_fd == SharedSocket::kInvalidFD) {
+    if (pass_comm_fd == -1) {
       if (url) {
 // Create a temporary file to get the stdout/stderr and redirect the output of
 // the command into this file. We will later read this file if all goes well
@@ -1042,12 +1057,10 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
           return error;
         }
 
+        ConnectionFileDescriptor *connection =
+            (ConnectionFileDescriptor *)GetConnection();
         // Wait for 10 seconds to resolve the bound port
-        std::future<uint16_t> port_future = m_port_promise.get_future();
-        uint16_t port_ = port_future.wait_for(std::chrono::seconds(10)) ==
-                                 std::future_status::ready
-                             ? port_future.get()
-                             : 0;
+        uint16_t port_ = connection->GetListeningPort(std::chrono::seconds(10));
         if (port_ > 0) {
           char port_cstr[32];
           snprintf(port_cstr, sizeof(port_cstr), "127.0.0.1:%i", port_);
@@ -1059,15 +1072,13 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
           if (port)
             *port = port_;
         } else {
+          error.SetErrorString("failed to bind to port 0 on 127.0.0.1");
           LLDB_LOGF(log, "GDBRemoteCommunication::%s() failed: %s",
                     __FUNCTION__, error.AsCString());
-          return Status::FromErrorString(
-              "failed to bind to port 0 on 127.0.0.1");
+          return error;
         }
       }
     }
-
-    Environment host_env = Host::GetEnvironment();
     std::string env_debugserver_log_file =
         host_env.lookup("LLDB_DEBUGSERVER_LOG_FILE");
     if (!env_debugserver_log_file.empty()) {
@@ -1141,7 +1152,7 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
 
     if (error.Success() &&
         (launch_info.GetProcessID() != LLDB_INVALID_PROCESS_ID) &&
-        pass_comm_fd == SharedSocket::kInvalidFD) {
+        pass_comm_fd == -1) {
       if (named_pipe_path.size() > 0) {
         error = socket_pipe.OpenAsReader(named_pipe_path, false);
         if (error.Fail())
@@ -1154,17 +1165,15 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
       if (socket_pipe.CanWrite())
         socket_pipe.CloseWriteFileDescriptor();
       if (socket_pipe.CanRead()) {
-        // The port number may be up to "65535\0".
-        char port_cstr[6] = {0};
+        char port_cstr[PATH_MAX] = {0};
+        port_cstr[0] = '\0';
         size_t num_bytes = sizeof(port_cstr);
         // Read port from pipe with 10 second timeout.
         error = socket_pipe.ReadWithTimeout(
             port_cstr, num_bytes, std::chrono::seconds{10}, num_bytes);
         if (error.Success() && (port != nullptr)) {
           assert(num_bytes > 0 && port_cstr[num_bytes - 1] == '\0');
-          uint16_t child_port = 0;
-          // FIXME: improve error handling
-          llvm::to_integer(port_cstr, child_port);
+          uint16_t child_port = StringConvert::ToUInt32(port_cstr, 0);
           if (*port == 0 || *port == child_port) {
             *port = child_port;
             LLDB_LOGF(log,
@@ -1200,7 +1209,7 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
       JoinListenThread();
     }
   } else {
-    error = Status::FromErrorString("unable to locate " DEBUGSERVER_BASENAME);
+    error.SetErrorStringWithFormat("unable to locate " DEBUGSERVER_BASENAME);
   }
 
   if (error.Fail()) {
@@ -1213,14 +1222,24 @@ Status GDBRemoteCommunication::StartDebugserverProcess(
 
 void GDBRemoteCommunication::DumpHistory(Stream &strm) { m_history.Dump(strm); }
 
+void GDBRemoteCommunication::SetPacketRecorder(
+    repro::PacketRecorder *recorder) {
+  m_history.SetRecorder(recorder);
+}
+
 llvm::Error
 GDBRemoteCommunication::ConnectLocally(GDBRemoteCommunication &client,
                                        GDBRemoteCommunication &server) {
+  const bool child_processes_inherit = false;
   const int backlog = 5;
-  TCPSocket listen_socket(true);
+  TCPSocket listen_socket(true, child_processes_inherit);
   if (llvm::Error error =
           listen_socket.Listen("localhost:0", backlog).ToError())
     return error;
+
+  Socket *accept_socket;
+  std::future<Status> accept_status = std::async(
+      std::launch::async, [&] { return listen_socket.Accept(accept_socket); });
 
   llvm::SmallString<32> remote_addr;
   llvm::raw_svector_ostream(remote_addr)
@@ -1233,15 +1252,10 @@ GDBRemoteCommunication::ConnectLocally(GDBRemoteCommunication &client,
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "Unable to connect: %s", status.AsCString());
 
-  // The connection was already established above, so a short timeout is
-  // sufficient.
-  Socket *accept_socket = nullptr;
-  if (Status accept_status =
-          listen_socket.Accept(std::chrono::seconds(1), accept_socket);
-      accept_status.Fail())
-    return accept_status.takeError();
-
   client.SetConnection(std::move(conn_up));
+  if (llvm::Error error = accept_status.get().ToError())
+    return error;
+
   server.SetConnection(
       std::make_unique<ConnectionFileDescriptor>(accept_socket));
   return llvm::Error::success();
@@ -1249,7 +1263,7 @@ GDBRemoteCommunication::ConnectLocally(GDBRemoteCommunication &client,
 
 GDBRemoteCommunication::ScopedTimeout::ScopedTimeout(
     GDBRemoteCommunication &gdb_comm, std::chrono::seconds timeout)
-    : m_gdb_comm(gdb_comm), m_saved_timeout(0), m_timeout_modified(false) {
+    : m_gdb_comm(gdb_comm), m_timeout_modified(false) {
   auto curr_timeout = gdb_comm.GetPacketTimeout();
   // Only update the timeout if the timeout is greater than the current
   // timeout. If the current timeout is larger, then just use that.
@@ -1263,6 +1277,53 @@ GDBRemoteCommunication::ScopedTimeout::~ScopedTimeout() {
   // Only restore the timeout if we set it in the constructor.
   if (m_timeout_modified)
     m_gdb_comm.SetPacketTimeout(m_saved_timeout);
+}
+
+// This function is called via the Communications class read thread when bytes
+// become available for this connection. This function will consume all
+// incoming bytes and try to parse whole packets as they become available. Full
+// packets are placed in a queue, so that all packet requests can simply pop
+// from this queue. Async notification packets will be dispatched immediately
+// to the ProcessGDBRemote Async thread via an event.
+void GDBRemoteCommunication::AppendBytesToCache(const uint8_t *bytes,
+                                                size_t len, bool broadcast,
+                                                lldb::ConnectionStatus status) {
+  StringExtractorGDBRemote packet;
+
+  while (true) {
+    PacketType type = CheckForPacket(bytes, len, packet);
+
+    // scrub the data so we do not pass it back to CheckForPacket on future
+    // passes of the loop
+    bytes = nullptr;
+    len = 0;
+
+    // we may have received no packet so lets bail out
+    if (type == PacketType::Invalid)
+      break;
+
+    if (type == PacketType::Standard) {
+      // scope for the mutex
+      {
+        // lock down the packet queue
+        std::lock_guard<std::mutex> guard(m_packet_queue_mutex);
+        // push a new packet into the queue
+        m_packet_queue.push(packet);
+        // Signal condition variable that we have a packet
+        m_condition_queue_not_empty.notify_one();
+      }
+    }
+
+    if (type == PacketType::Notify) {
+      // put this packet into an event
+      const char *pdata = packet.GetStringRef().data();
+
+      // as the communication class, we are a broadcaster and the async thread
+      // is tuned to listen to us
+      BroadcastEvent(eBroadcastBitGdbReadThreadGotNotify,
+                     new EventDataBytes(pdata));
+    }
+  }
 }
 
 void llvm::format_provider<GDBRemoteCommunication::PacketResult>::format(

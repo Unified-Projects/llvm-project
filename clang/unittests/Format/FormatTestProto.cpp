@@ -16,10 +16,10 @@
 namespace clang {
 namespace format {
 
-class FormatTestProto : public testing::Test {
+class FormatTestProto : public ::testing::Test {
 protected:
-  static std::string format(StringRef Code, unsigned Offset, unsigned Length,
-                            const FormatStyle &Style) {
+  static std::string format(llvm::StringRef Code, unsigned Offset,
+                            unsigned Length, const FormatStyle &Style) {
     LLVM_DEBUG(llvm::errs() << "---\n");
     LLVM_DEBUG(llvm::errs() << Code << "\n\n");
     std::vector<tooling::Range> Ranges(1, tooling::Range(Offset, Length));
@@ -30,13 +30,13 @@ protected:
     return *Result;
   }
 
-  static std::string format(StringRef Code) {
+  static std::string format(llvm::StringRef Code) {
     FormatStyle Style = getGoogleStyle(FormatStyle::LK_Proto);
     Style.ColumnLimit = 60; // To make writing tests easier.
     return format(Code, 0, Code.size(), Style);
   }
 
-  static void verifyFormat(StringRef Code) {
+  static void verifyFormat(llvm::StringRef Code) {
     EXPECT_EQ(Code.str(), format(Code)) << "Expected code is not stable";
     EXPECT_EQ(Code.str(), format(test::messUp(Code)));
   }
@@ -113,13 +113,6 @@ TEST_F(FormatTestProto, EnumAsFieldName) {
                "}");
 }
 
-TEST_F(FormatTestProto, CaseAsFieldName) {
-  verifyFormat("message SomeMessage {\n"
-               "  required string case = 1;\n"
-               "  repeated int32 fizz = 2;\n"
-               "}");
-}
-
 TEST_F(FormatTestProto, UnderstandsReturns) {
   verifyFormat("rpc Search(SearchRequest) returns (SearchResponse);");
 }
@@ -190,7 +183,6 @@ TEST_F(FormatTestProto, MessageFieldAttributes) {
                "    aaaaaaaaaaaaaaaa: true\n"
                "  }\n"
                "];");
-  verifyFormat("repeated A a = 1 [(annotation).int32.repeated.test = true];");
 }
 
 TEST_F(FormatTestProto, DoesntWrapFileOptions) {
@@ -202,7 +194,7 @@ TEST_F(FormatTestProto, DoesntWrapFileOptions) {
 }
 
 TEST_F(FormatTestProto, TrailingCommentAfterFileOption) {
-  verifyFormat("option java_package = \"foo.pkg\";  // comment");
+  verifyFormat("option java_package = \"foo.pkg\";  // comment\n");
 }
 
 TEST_F(FormatTestProto, FormatsOptions) {
@@ -412,7 +404,7 @@ TEST_F(FormatTestProto, DoesntWrapPackageStatements) {
 }
 
 TEST_F(FormatTestProto, TrailingCommentAfterPackage) {
-  verifyFormat("package foo.pkg;  // comment");
+  verifyFormat("package foo.pkg;  // comment\n");
 }
 
 TEST_F(FormatTestProto, FormatsService) {
@@ -517,6 +509,8 @@ TEST_F(FormatTestProto, AcceptsOperatorAsKeyInOptions) {
 }
 
 TEST_F(FormatTestProto, BreaksEntriesOfSubmessagesContainingSubmessages) {
+  FormatStyle Style = getGoogleStyle(FormatStyle::LK_TextProto);
+  Style.ColumnLimit = 60;
   // The column limit allows for the keys submessage to be put on 1 line, but we
   // break it since it contains a submessage an another entry.
   verifyFormat("option (MyProto.options) = {\n"

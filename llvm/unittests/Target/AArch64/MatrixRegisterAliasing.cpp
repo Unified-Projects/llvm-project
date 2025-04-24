@@ -1,5 +1,5 @@
 #include "AArch64Subtarget.h"
-#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include "gtest/gtest.h"
@@ -7,7 +7,7 @@
 using namespace llvm;
 
 namespace {
-std::unique_ptr<TargetMachine> createTargetMachine() {
+std::unique_ptr<LLVMTargetMachine> createTargetMachine() {
   auto TT(Triple::normalize("aarch64--"));
   std::string CPU("generic");
   std::string FS("+sme");
@@ -19,21 +19,20 @@ std::unique_ptr<TargetMachine> createTargetMachine() {
   std::string Error;
   const Target *TheTarget = TargetRegistry::lookupTarget(TT, Error);
 
-  return std::unique_ptr<TargetMachine>(
-      TheTarget->createTargetMachine(TT, CPU, FS, TargetOptions(), std::nullopt,
-                                     std::nullopt, CodeGenOptLevel::Default));
+  return std::unique_ptr<LLVMTargetMachine>(
+      static_cast<LLVMTargetMachine *>(TheTarget->createTargetMachine(
+          TT, CPU, FS, TargetOptions(), None, None, CodeGenOpt::Default)));
 }
 
 std::unique_ptr<AArch64InstrInfo> createInstrInfo(TargetMachine *TM) {
   AArch64Subtarget ST(TM->getTargetTriple(), std::string(TM->getTargetCPU()),
-                      std::string(TM->getTargetCPU()),
                       std::string(TM->getTargetFeatureString()), *TM,
                       /* isLittle */ false);
   return std::make_unique<AArch64InstrInfo>(ST);
 }
 
 TEST(MatrixRegisterAliasing, Aliasing) {
-  std::unique_ptr<TargetMachine> TM = createTargetMachine();
+  std::unique_ptr<LLVMTargetMachine> TM = createTargetMachine();
   ASSERT_TRUE(TM);
   std::unique_ptr<AArch64InstrInfo> II = createInstrInfo(TM.get());
 

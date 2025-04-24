@@ -21,8 +21,9 @@
  */
 
 #include <clc/clc.h>
-#include <clc/math/math.h>
-#include <clc/math/tables.h>
+
+#include "math.h"
+#include "tables.h"
 
 #ifdef cl_khr_fp64
 

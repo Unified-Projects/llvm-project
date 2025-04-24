@@ -11,12 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/AST/DeclTemplate.h"
-#include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/AST/RecordLayout.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Driver/DriverDiagnostic.h"
-#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
@@ -32,7 +32,7 @@ using namespace ento;
 namespace {
 class PaddingChecker : public Checker<check::ASTDecl<TranslationUnitDecl>> {
 private:
-  const BugType PaddingBug{this, "Excessive Padding", "Performance"};
+  mutable std::unique_ptr<BugType> PaddingBug;
   mutable BugReporter *BR;
 
 public:
@@ -45,17 +45,16 @@ public:
     // The calls to checkAST* from AnalysisConsumer don't
     // visit template instantiations or lambda classes. We
     // want to visit those, so we make our own RecursiveASTVisitor.
-    struct LocalVisitor : DynamicRecursiveASTVisitor {
+    struct LocalVisitor : public RecursiveASTVisitor<LocalVisitor> {
       const PaddingChecker *Checker;
-      explicit LocalVisitor(const PaddingChecker *Checker) : Checker(Checker) {
-        ShouldVisitTemplateInstantiations = true;
-        ShouldVisitImplicitCode = true;
-      }
-      bool VisitRecordDecl(RecordDecl *RD) override {
+      bool shouldVisitTemplateInstantiations() const { return true; }
+      bool shouldVisitImplicitCode() const { return true; }
+      explicit LocalVisitor(const PaddingChecker *Checker) : Checker(Checker) {}
+      bool VisitRecordDecl(const RecordDecl *RD) {
         Checker->visitRecord(RD);
         return true;
       }
-      bool VisitVarDecl(VarDecl *VD) override {
+      bool VisitVarDecl(const VarDecl *VD) {
         Checker->visitVariable(VD);
         return true;
       }
@@ -118,7 +117,7 @@ public:
       return;
     uint64_t Elts = 0;
     if (const ConstantArrayType *CArrTy = dyn_cast<ConstantArrayType>(ArrTy))
-      Elts = CArrTy->getZExtSize();
+      Elts = CArrTy->getSize().getZExtValue();
     if (Elts == 0)
       return;
     const RecordType *RT = ArrTy->getElementType()->getAs<RecordType>();
@@ -183,7 +182,7 @@ public:
       return false;
     };
 
-    if (llvm::any_of(RD->fields(), IsTrickyField))
+    if (std::any_of(RD->field_begin(), RD->field_end(), IsTrickyField))
       return true;
     return false;
   }
@@ -274,7 +273,7 @@ public:
     SmallVector<const FieldDecl *, 20> OptimalFieldsOrder;
     while (!Fields.empty()) {
       unsigned TrailingZeros =
-          llvm::countr_zero((unsigned long long)NewOffset.getQuantity());
+          llvm::countTrailingZeros((unsigned long long)NewOffset.getQuantity());
       // If NewOffset is zero, then countTrailingZeros will be 64. Shifting
       // 64 will overflow our unsigned long long. Shifting 63 will turn
       // our long long (and CharUnits internal type) negative. So shift 62.
@@ -311,6 +310,10 @@ public:
   void reportRecord(
       const RecordDecl *RD, CharUnits BaselinePad, CharUnits OptimalPad,
       const SmallVector<const FieldDecl *, 20> &OptimalFieldsOrder) const {
+    if (!PaddingBug)
+      PaddingBug =
+          std::make_unique<BugType>(this, "Excessive Padding", "Performance");
+
     SmallString<100> Buf;
     llvm::raw_svector_ostream Os(Buf);
     Os << "Excessive padding in '";
@@ -329,16 +332,17 @@ public:
     }
 
     Os << " (" << BaselinePad.getQuantity() << " padding bytes, where "
-       << OptimalPad.getQuantity() << " is optimal). "
-       << "Optimal fields order: ";
+       << OptimalPad.getQuantity() << " is optimal). \n"
+       << "Optimal fields order: \n";
     for (const auto *FD : OptimalFieldsOrder)
-      Os << FD->getName() << ", ";
+      Os << FD->getName() << ", \n";
     Os << "consider reordering the fields or adding explicit padding "
           "members.";
 
     PathDiagnosticLocation CELoc =
         PathDiagnosticLocation::create(RD, BR->getSourceManager());
-    auto Report = std::make_unique<BasicBugReport>(PaddingBug, Os.str(), CELoc);
+    auto Report =
+        std::make_unique<BasicBugReport>(*PaddingBug, Os.str(), CELoc);
     Report->setDeclWithIssue(RD);
     Report->addRange(RD->getSourceRange());
     BR->emitReport(std::move(Report));

@@ -18,7 +18,6 @@
 #include "clang/AST/ParentMap.h"
 #include "clang/Edit/Commit.h"
 #include "clang/Lex/Lexer.h"
-#include <optional>
 
 using namespace clang;
 using namespace edit;
@@ -643,7 +642,7 @@ static bool shouldNotRewriteImmediateMessageArgs(const ObjCMessageExpr *Msg,
 static bool rewriteToCharLiteral(const ObjCMessageExpr *Msg,
                                    const CharacterLiteral *Arg,
                                    const NSAPI &NS, Commit &commit) {
-  if (Arg->getKind() != CharacterLiteralKind::Ascii)
+  if (Arg->getKind() != CharacterLiteral::Ascii)
     return false;
   if (NS.isNSNumberLiteralSelector(NSAPI::NSNumberWithChar,
                                    Msg->getSelector())) {
@@ -692,16 +691,20 @@ static bool getLiteralInfo(SourceRange literalRange,
   if (text.empty())
     return false;
 
-  std::optional<bool> UpperU, UpperL;
+  Optional<bool> UpperU, UpperL;
   bool UpperF = false;
 
   struct Suff {
     static bool has(StringRef suff, StringRef &text) {
-      return text.consume_back(suff);
+      if (text.endswith(suff)) {
+        text = text.substr(0, text.size()-suff.size());
+        return true;
+      }
+      return false;
     }
   };
 
-  while (true) {
+  while (1) {
     if (Suff::has("u", text)) {
       UpperU = false;
     } else if (Suff::has("U", text)) {
@@ -722,11 +725,11 @@ static bool getLiteralInfo(SourceRange literalRange,
       break;
   }
 
-  if (!UpperU && !UpperL)
+  if (!UpperU.hasValue() && !UpperL.hasValue())
     UpperU = UpperL = true;
-  else if (UpperU && !UpperL)
+  else if (UpperU.hasValue() && !UpperL.hasValue())
     UpperL = UpperU;
-  else if (UpperL && !UpperU)
+  else if (UpperL.hasValue() && !UpperU.hasValue())
     UpperU = UpperL;
 
   Info.U = *UpperU ? "U" : "u";
@@ -735,9 +738,9 @@ static bool getLiteralInfo(SourceRange literalRange,
   Info.F = UpperF ? "F" : "f";
 
   Info.Hex = Info.Octal = false;
-  if (text.starts_with("0x"))
+  if (text.startswith("0x"))
     Info.Hex = true;
-  else if (!isFloat && !isIntZero && text.starts_with("0"))
+  else if (!isFloat && !isIntZero && text.startswith("0"))
     Info.Octal = true;
 
   SourceLocation B = literalRange.getBegin();
@@ -772,8 +775,8 @@ static bool rewriteToNumberLiteral(const ObjCMessageExpr *Msg,
 
   ASTContext &Ctx = NS.getASTContext();
   Selector Sel = Msg->getSelector();
-  std::optional<NSAPI::NSNumberLiteralMethodKind> MKOpt =
-      NS.getNSNumberLiteralMethodKind(Sel);
+  Optional<NSAPI::NSNumberLiteralMethodKind>
+    MKOpt = NS.getNSNumberLiteralMethodKind(Sel);
   if (!MKOpt)
     return false;
   NSAPI::NSNumberLiteralMethodKind MK = *MKOpt;
@@ -793,28 +796,28 @@ static bool rewriteToNumberLiteral(const ObjCMessageExpr *Msg,
   case NSAPI::NSNumberWithUnsignedInt:
   case NSAPI::NSNumberWithUnsignedInteger:
     CallIsUnsigned = true;
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case NSAPI::NSNumberWithInt:
   case NSAPI::NSNumberWithInteger:
     break;
 
   case NSAPI::NSNumberWithUnsignedLong:
     CallIsUnsigned = true;
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case NSAPI::NSNumberWithLong:
     CallIsLong = true;
     break;
 
   case NSAPI::NSNumberWithUnsignedLongLong:
     CallIsUnsigned = true;
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case NSAPI::NSNumberWithLongLong:
     CallIsLongLong = true;
     break;
 
   case NSAPI::NSNumberWithDouble:
     CallIsDouble = true;
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case NSAPI::NSNumberWithFloat:
     CallIsFloating = true;
     break;
@@ -980,8 +983,8 @@ static bool rewriteToNumericBoxedExpression(const ObjCMessageExpr *Msg,
 
   ASTContext &Ctx = NS.getASTContext();
   Selector Sel = Msg->getSelector();
-  std::optional<NSAPI::NSNumberLiteralMethodKind> MKOpt =
-      NS.getNSNumberLiteralMethodKind(Sel);
+  Optional<NSAPI::NSNumberLiteralMethodKind>
+    MKOpt = NS.getNSNumberLiteralMethodKind(Sel);
   if (!MKOpt)
     return false;
   NSAPI::NSNumberLiteralMethodKind MK = *MKOpt;
@@ -1000,7 +1003,6 @@ static bool rewriteToNumericBoxedExpression(const ObjCMessageExpr *Msg,
     case CK_LValueToRValue:
     case CK_NoOp:
     case CK_UserDefinedConversion:
-    case CK_HLSLArrayRValue:
       break;
 
     case CK_IntegralCast: {
@@ -1083,10 +1085,6 @@ static bool rewriteToNumericBoxedExpression(const ObjCMessageExpr *Msg,
 
     case CK_BooleanToSignedIntegral:
       llvm_unreachable("OpenCL-specific cast in Objective-C?");
-
-    case CK_HLSLVectorTruncation:
-      llvm_unreachable("HLSL-specific cast in Objective-C?");
-      break;
 
     case CK_FloatingToFixedPoint:
     case CK_FixedPointToFloating:

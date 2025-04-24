@@ -6,12 +6,9 @@ lldb_tablegen(TargetPropertiesEnum.inc -gen-lldb-property-enum-defs
   SOURCE TargetProperties.td
   TARGET LLDBTargetPropertiesEnumGen)
 
-# TODO: Add property `NO_PLUGIN_DEPENDENCIES` to lldbTarget
 add_lldb_library(lldbTarget
   ABI.cpp
   AssertFrameRecognizer.cpp
-  DynamicRegisterInfo.cpp
-  CoreFileMemoryRanges.cpp
   ExecutionContext.cpp
   InstrumentationRuntime.cpp
   InstrumentationRuntimeStopInfo.cpp
@@ -22,7 +19,6 @@ add_lldb_library(lldbTarget
   Memory.cpp
   MemoryHistory.cpp
   MemoryRegionInfo.cpp
-  MemoryTagMap.cpp
   ModuleCache.cpp
   OperatingSystem.cpp
   PathMappingList.cpp
@@ -34,17 +30,14 @@ add_lldb_library(lldbTarget
   QueueList.cpp
   RegisterContext.cpp
   RegisterContextUnwind.cpp
-  RegisterFlags.cpp
   RegisterNumber.cpp
   RemoteAwarePlatform.cpp
-  ScriptedThreadPlan.cpp
   SectionLoadHistory.cpp
   SectionLoadList.cpp
   StackFrame.cpp
   StackFrameList.cpp
   StackFrameRecognizer.cpp
   StackID.cpp
-  Statistics.cpp
   StopInfo.cpp
   StructuredDataPlugin.cpp
   SystemRuntime.cpp
@@ -59,8 +52,8 @@ add_lldb_library(lldbTarget
   ThreadPlanCallFunctionUsingABI.cpp
   ThreadPlanCallOnFunctionExit.cpp
   ThreadPlanCallUserExpression.cpp
+  ThreadPlanPython.cpp
   ThreadPlanRunToAddress.cpp
-  ThreadPlanSingleThreadTimeout.cpp
   ThreadPlanShouldStopHere.cpp
   ThreadPlanStepInRange.cpp
   ThreadPlanStepInstruction.cpp
@@ -76,11 +69,10 @@ add_lldb_library(lldbTarget
   Trace.cpp
   TraceCursor.cpp
   TraceExporter.cpp
-  TraceDumper.cpp
+  TraceInstructionDumper.cpp
   UnixSignals.cpp
   UnwindAssembly.cpp
   UnwindLLDB.cpp
-  VerboseTrapFrameRecognizer.cpp
 
   LINK_LIBS
     lldbBreakpoint
@@ -90,7 +82,6 @@ add_lldb_library(lldbTarget
     lldbInterpreter
     lldbSymbol
     lldbUtility
-    lldbValueObject
     lldbPluginProcessUtility
 
   LINK_COMPONENTS

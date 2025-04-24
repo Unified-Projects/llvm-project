@@ -1,5 +1,4 @@
 // RUN: %clang_cc1 %s -verify -fsyntax-only
-// RUN: %clang_cc1 %s -verify -fsyntax-only -fexperimental-new-constant-interpreter
 
 typedef signed char BOOL;
 #define YES __objc_yes
@@ -7,7 +6,7 @@ typedef signed char BOOL;
 
 BOOL B;
 
-int main(void) {
+int main() {
   B = 0;
   B = 1;
   B = YES;

@@ -25,7 +25,6 @@ diag_groups = [
   "CrossTU",
   "Driver",
   "Frontend",
-  "InstallAPI",
   "Lex",
   "Parse",
   "Refactoring",
@@ -40,14 +39,6 @@ foreach(diag_group, diag_groups) {
     ]
     td_file = "Diagnostic.td"
   }
-
-  clang_tablegen("Diagnostic${diag_group}Enums") {
-    args = [
-      "-gen-clang-diags-enums",
-      "-clang-component=${diag_group}",
-    ]
-    td_file = "Diagnostic.td"
-  }
 }
 group("diags_tablegen") {
   # DiagnosticGroups and DiagnosticIndexName are intentionally not part of this
@@ -55,10 +46,7 @@ group("diags_tablegen") {
   # but almost nothing needs DiagnosticGroups.inc or DiagnosticIndexName.inc.
   public_deps = []
   foreach(diag_group, diag_groups) {
-    public_deps += [
-        ":Diagnostic${diag_group}Kinds",
-        ":Diagnostic${diag_group}Enums",
-    ]
+    public_deps += [ ":Diagnostic${diag_group}Kinds" ]
   }
 }
 
@@ -79,61 +67,14 @@ clang_tablegen("AttrList") {
   td_file = "Attr.td"
 }
 
-clang_tablegen("AttrParsedAttrList") {
-  args = [ "-gen-clang-attr-parsed-attr-list" ]
-  td_file = "../Basic/Attr.td"
-}
-
 clang_tablegen("AttrSubMatchRulesList") {
   args = [ "-gen-clang-attr-subject-match-rule-list" ]
-  td_file = "Attr.td"
-}
-
-clang_tablegen("RegularKeywordAttrInfo") {
-  args = [ "-gen-clang-regular-keyword-attr-info" ]
   td_file = "Attr.td"
 }
 
 clang_tablegen("AttrHasAttributeImpl") {
   args = [ "-gen-clang-attr-has-attribute-impl" ]
   td_file = "Attr.td"
-}
-
-clang_tablegen("CXX11AttributeInfo") {
-  args = [ "-gen-cxx11-attribute-info" ]
-  td_file = "../Basic/Attr.td"
-}
-
-clang_tablegen("Builtins") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsBPF") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsHexagon") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsNVPTX") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsRISCV") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsSPIRV") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsX86") {
-  args = [ "-gen-clang-builtins" ]
-}
-
-clang_tablegen("BuiltinsX86_64") {
-  args = [ "-gen-clang-builtins" ]
 }
 
 # ARM CDE, MVE, and NEON.
@@ -144,11 +85,6 @@ clang_tablegen("arm_neon") {
 
 clang_tablegen("arm_fp16") {
   args = [ "-gen-arm-neon-sema" ]
-}
-
-clang_tablegen("arm_immcheck_types") {
-  args = [ "-gen-arm-immcheck-types" ]
-  td_file = "arm_sve.td"
 }
 
 clang_tablegen("arm_mve_builtins") {
@@ -191,36 +127,6 @@ clang_tablegen("arm_sve_sema_rangechecks") {
   td_file = "arm_sve.td"
 }
 
-clang_tablegen("arm_sve_streaming_attrs") {
-  args = [ "-gen-arm-sve-streaming-attrs" ]
-  td_file = "arm_sve.td"
-}
-
-clang_tablegen("arm_sme_builtins") {
-  args = [ "-gen-arm-sme-builtins" ]
-  td_file = "arm_sme.td"
-}
-
-clang_tablegen("arm_sme_builtin_cg") {
-  args = [ "-gen-arm-sme-builtin-codegen" ]
-  td_file = "arm_sme.td"
-}
-
-clang_tablegen("arm_sme_sema_rangechecks") {
-  args = [ "-gen-arm-sme-sema-rangechecks" ]
-  td_file = "arm_sme.td"
-}
-
-clang_tablegen("arm_sme_streaming_attrs") {
-  args = [ "-gen-arm-sme-streaming-attrs" ]
-  td_file = "arm_sme.td"
-}
-
-clang_tablegen("arm_sme_builtins_za_state") {
-  args = [ "-gen-arm-sme-builtin-za-state" ]
-  td_file = "arm_sme.td"
-}
-
 clang_tablegen("arm_cde_builtins") {
   args = [ "-gen-arm-cde-builtin-def" ]
   td_file = "arm_cde.td"
@@ -251,24 +157,4 @@ clang_tablegen("riscv_vector_builtins") {
 clang_tablegen("riscv_vector_builtin_cg") {
   args = [ "-gen-riscv-vector-builtin-codegen" ]
   td_file = "riscv_vector.td"
-}
-
-clang_tablegen("riscv_vector_builtin_sema") {
-  args = [ "-gen-riscv-vector-builtin-sema" ]
-  td_file = "riscv_vector.td"
-}
-
-clang_tablegen("riscv_sifive_vector_builtins") {
-  args = [ "-gen-riscv-sifive-vector-builtins" ]
-  td_file = "riscv_sifive_vector.td"
-}
-
-clang_tablegen("riscv_sifive_vector_builtin_cg") {
-  args = [ "-gen-riscv-sifive-vector-builtin-codegen" ]
-  td_file = "riscv_sifive_vector.td"
-}
-
-clang_tablegen("riscv_sifive_vector_builtin_sema") {
-  args = [ "-gen-riscv-sifive-vector-builtin-sema" ]
-  td_file = "riscv_sifive_vector.td"
 }

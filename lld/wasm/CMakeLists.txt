@@ -21,7 +21,6 @@ add_lld_library(lldWasm
   LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
-  BitWriter
   Core
   Demangle
   LTO
@@ -29,9 +28,7 @@ add_lld_library(lldWasm
   Object
   Option
   Passes
-  ProfileData
   Support
-  TargetParser
 
   LINK_LIBS
   lldCommon

@@ -8,7 +8,6 @@ add_libc_fuzzer(
     SingleInputSingleOutputDiff.h
     TwoInputSingleOutputDiff.h
   DEPENDS
-    libc.hdr.math_macros
     libc.src.math.ceil
     libc.src.math.ceilf
     libc.src.math.ceill
@@ -46,8 +45,8 @@ add_libc_fuzzer(
     libc.src.math.trunc
     libc.src.math.truncf
     libc.src.math.truncl
-    libc.src.__support.FPUtil.fp_bits
-    libc.src.__support.CPP.type_traits
+    libc.utils.FPUtil.fputil
+    libc.utils.CPP.standalone_cpp
 )
 
 add_libc_fuzzer(
@@ -60,31 +59,4 @@ add_libc_fuzzer(
     libc.src.math.nextafter
     libc.src.math.nextafterf
     libc.src.math.nextafterl
-)
-
-add_libc_fuzzer(
-  sin_fuzz
-  NEED_MPFR
-  SRCS
-    sin_fuzz.cpp
-  DEPENDS
-    libc.src.math.sin
-)
-
-add_libc_fuzzer(
-  cos_fuzz
-  NEED_MPFR
-  SRCS
-    cos_fuzz.cpp
-  DEPENDS
-    libc.src.math.cos
-)
-
-add_libc_fuzzer(
-  tan_fuzz
-  NEED_MPFR
-  SRCS
-    tan_fuzz.cpp
-  DEPENDS
-    libc.src.math.tan
 )

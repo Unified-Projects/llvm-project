@@ -13,6 +13,7 @@
 #include "clang/AST/ParentMap.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "llvm/ADT/DenseMap.h"
 
@@ -32,20 +33,16 @@ static void BuildParentMap(MapTy& M, Stmt* S,
 
   switch (S->getStmtClass()) {
   case Stmt::PseudoObjectExprClass: {
+    assert(OVMode == OV_Transparent && "Should not appear alongside OVEs");
     PseudoObjectExpr *POE = cast<PseudoObjectExpr>(S);
-    Expr *SF = POE->getSyntacticForm();
 
-    auto [Iter, Inserted] = M.try_emplace(SF, S);
-    if (!Inserted) {
-      // Nothing more to do in opaque mode if we are updating an existing map.
-      if (OVMode == OV_Opaque)
-        break;
-      // Update the entry in transparent mode, and clear existing state.
-      Iter->second = S;
+    // If we are rebuilding the map, clear out any existing state.
+    if (M[POE->getSyntacticForm()])
       for (Stmt *SubStmt : S->children())
-        M.erase(SubStmt);
-    }
-    BuildParentMap(M, SF, OV_Transparent);
+        M[SubStmt] = nullptr;
+
+    M[POE->getSyntacticForm()] = S;
+    BuildParentMap(M, POE->getSyntacticForm(), OV_Transparent);
 
     for (PseudoObjectExpr::semantics_iterator I = POE->semantics_begin(),
                                               E = POE->semantics_end();
@@ -80,15 +77,10 @@ static void BuildParentMap(MapTy& M, Stmt* S,
     // The right thing to do is to give the OpaqueValueExpr its syntactic
     // parent, then not reassign that when traversing the semantic expressions.
     OpaqueValueExpr *OVE = cast<OpaqueValueExpr>(S);
-    Expr *SrcExpr = OVE->getSourceExpr();
-    auto [Iter, Inserted] = M.try_emplace(SrcExpr, S);
-    // Force update in transparent mode.
-    if (!Inserted && OVMode == OV_Transparent) {
-      Iter->second = S;
-      Inserted = true;
+    if (OVMode == OV_Transparent || !M[OVE->getSourceExpr()]) {
+      M[OVE->getSourceExpr()] = S;
+      BuildParentMap(M, OVE->getSourceExpr(), OV_Transparent);
     }
-    if (Inserted)
-      BuildParentMap(M, SrcExpr, OV_Transparent);
     break;
   }
   case Stmt::CapturedStmtClass:
@@ -141,13 +133,12 @@ void ParentMap::setParent(const Stmt *S, const Stmt *Parent) {
 
 Stmt* ParentMap::getParent(Stmt* S) const {
   MapTy* M = (MapTy*) Impl;
-  return M->lookup(S);
+  MapTy::iterator I = M->find(S);
+  return I == M->end() ? nullptr : I->second;
 }
 
 Stmt *ParentMap::getParentIgnoreParens(Stmt *S) const {
-  do {
-    S = getParent(S);
-  } while (isa_and_nonnull<ParenExpr>(S));
+  do { S = getParent(S); } while (S && isa<ParenExpr>(S));
   return S;
 }
 
@@ -163,8 +154,7 @@ Stmt *ParentMap::getParentIgnoreParenCasts(Stmt *S) const {
 Stmt *ParentMap::getParentIgnoreParenImpCasts(Stmt *S) const {
   do {
     S = getParent(S);
-  } while (isa_and_nonnull<Expr>(S) &&
-           cast<Expr>(S)->IgnoreParenImpCasts() != S);
+  } while (S && isa<Expr>(S) && cast<Expr>(S)->IgnoreParenImpCasts() != S);
 
   return S;
 }

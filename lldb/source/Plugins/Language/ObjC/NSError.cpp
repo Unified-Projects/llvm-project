@@ -11,14 +11,15 @@
 #include "Cocoa.h"
 
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
+#include "lldb/Core/ValueObject.h"
+#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/DataFormatters/FormattersHelpers.h"
+#include "lldb/Target/ProcessStructReader.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/Endian.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/Stream.h"
-#include "lldb/ValueObject/ValueObject.h"
-#include "lldb/ValueObject/ValueObjectConstResult.h"
 
 #include "Plugins/Language/ObjC/NSString.h"
 #include "Plugins/LanguageRuntime/ObjC/ObjCLanguageRuntime.h"
@@ -66,8 +67,8 @@ bool lldb_private::formatters::NSError_SummaryProvider(
   lldb::addr_t domain_location = ptr_value + 3 * ptr_size;
 
   Status error;
-  int64_t code = process_sp->ReadSignedIntegerFromMemory(code_location,
-                                                         ptr_size, 0, error);
+  uint64_t code = process_sp->ReadUnsignedIntegerFromMemory(code_location,
+                                                            ptr_size, 0, error);
   if (error.Fail())
     return false;
 
@@ -77,20 +78,18 @@ bool lldb_private::formatters::NSError_SummaryProvider(
     return false;
 
   if (!domain_str_value) {
-    stream.Printf("domain: nil - code: %" PRIi64, code);
+    stream.Printf("domain: nil - code: %" PRIu64, code);
     return true;
   }
 
   InferiorSizedWord isw(domain_str_value, *process_sp);
-  TypeSystemClangSP scratch_ts_sp =
-      ScratchTypeSystemClang::GetForTarget(process_sp->GetTarget());
 
-  if (!scratch_ts_sp)
-    return false;
   ValueObjectSP domain_str_sp = ValueObject::CreateValueObjectFromData(
       "domain_str", isw.GetAsData(process_sp->GetByteOrder()),
       valobj.GetExecutionContextRef(),
-      scratch_ts_sp->GetBasicType(lldb::eBasicTypeVoid).GetPointerType());
+      ScratchTypeSystemClang::GetForTarget(process_sp->GetTarget())
+          ->GetBasicType(lldb::eBasicTypeVoid)
+          .GetPointerType());
 
   if (!domain_str_sp)
     return false;
@@ -98,11 +97,11 @@ bool lldb_private::formatters::NSError_SummaryProvider(
   StreamString domain_str_summary;
   if (NSStringSummaryProvider(*domain_str_sp, domain_str_summary, options) &&
       !domain_str_summary.Empty()) {
-    stream.Printf("domain: %s - code: %" PRIi64, domain_str_summary.GetData(),
+    stream.Printf("domain: %s - code: %" PRIu64, domain_str_summary.GetData(),
                   code);
     return true;
   } else {
-    stream.Printf("domain: nil - code: %" PRIi64, code);
+    stream.Printf("domain: nil - code: %" PRIu64, code);
     return true;
   }
 }
@@ -116,7 +115,7 @@ public:
   // no need to delete m_child_ptr - it's kept alive by the cluster manager on
   // our behalf
 
-  llvm::Expected<uint32_t> CalculateNumChildren() override {
+  size_t CalculateNumChildren() override {
     if (m_child_ptr)
       return 1;
     if (m_child_sp)
@@ -124,7 +123,7 @@ public:
     return 0;
   }
 
-  lldb::ValueObjectSP GetChildAtIndex(uint32_t idx) override {
+  lldb::ValueObjectSP GetChildAtIndex(size_t idx) override {
     if (idx != 0)
       return lldb::ValueObjectSP();
 
@@ -133,17 +132,17 @@ public:
     return m_child_sp;
   }
 
-  lldb::ChildCacheState Update() override {
+  bool Update() override {
     m_child_ptr = nullptr;
     m_child_sp.reset();
 
     ProcessSP process_sp(m_backend.GetProcessSP());
     if (!process_sp)
-      return lldb::ChildCacheState::eRefetch;
+      return false;
 
     lldb::addr_t userinfo_location = DerefToNSErrorPointer(m_backend);
     if (userinfo_location == LLDB_INVALID_ADDRESS)
-      return lldb::ChildCacheState::eRefetch;
+      return false;
 
     size_t ptr_size = process_sp->GetAddressByteSize();
 
@@ -152,24 +151,21 @@ public:
     lldb::addr_t userinfo =
         process_sp->ReadPointerFromMemory(userinfo_location, error);
     if (userinfo == LLDB_INVALID_ADDRESS || error.Fail())
-      return lldb::ChildCacheState::eRefetch;
+      return false;
     InferiorSizedWord isw(userinfo, *process_sp);
-    TypeSystemClangSP scratch_ts_sp =
-        ScratchTypeSystemClang::GetForTarget(process_sp->GetTarget());
-    if (!scratch_ts_sp)
-      return lldb::ChildCacheState::eRefetch;
     m_child_sp = CreateValueObjectFromData(
         "_userInfo", isw.GetAsData(process_sp->GetByteOrder()),
         m_backend.GetExecutionContextRef(),
-        scratch_ts_sp->GetBasicType(lldb::eBasicTypeObjCID));
-    return lldb::ChildCacheState::eRefetch;
+        ScratchTypeSystemClang::GetForTarget(process_sp->GetTarget())
+            ->GetBasicType(lldb::eBasicTypeObjCID));
+    return false;
   }
 
   bool MightHaveChildren() override { return true; }
 
   size_t GetIndexOfChildWithName(ConstString name) override {
-    static ConstString g_userInfo("_userInfo");
-    if (name == g_userInfo)
+    static ConstString g___userInfo("_userInfo");
+    if (name == g___userInfo)
       return 0;
     return UINT32_MAX;
   }
@@ -181,7 +177,7 @@ private:
   // values to leak if the latter, then I need to store a SharedPointer to it -
   // so that it only goes away when everyone else in the cluster goes away oh
   // joy!
-  ValueObject *m_child_ptr = nullptr;
+  ValueObject *m_child_ptr;
   ValueObjectSP m_child_sp;
 };
 

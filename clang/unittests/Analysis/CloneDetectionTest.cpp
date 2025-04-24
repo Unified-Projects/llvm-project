@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/CloneDetection.h"
-#include "clang/AST/DynamicRecursiveASTVisitor.h"
 #include "clang/Tooling/Tooling.h"
 #include "gtest/gtest.h"
 
@@ -15,14 +15,15 @@ namespace clang {
 namespace analysis {
 namespace {
 
-class CloneDetectionVisitor : public DynamicRecursiveASTVisitor {
+class CloneDetectionVisitor
+    : public RecursiveASTVisitor<CloneDetectionVisitor> {
 
   CloneDetector &Detector;
 
 public:
   explicit CloneDetectionVisitor(CloneDetector &D) : Detector(D) {}
 
-  bool VisitFunctionDecl(FunctionDecl *D) override {
+  bool VisitFunctionDecl(FunctionDecl *D) {
     Detector.analyzeCodeBody(D);
     return true;
   }
@@ -41,7 +42,7 @@ public:
           for (const StmtSequence &Arg : {A, B}) {
             if (const auto *D =
                     dyn_cast<const FunctionDecl>(Arg.getContainingDecl())) {
-              if (D->getName().starts_with("bar"))
+              if (D->getName().startswith("bar"))
                 return false;
             }
           }
@@ -63,7 +64,7 @@ TEST(CloneDetector, FilterFunctionsByName) {
   CloneDetectionVisitor Visitor(Detector);
   Visitor.TraverseTranslationUnitDecl(TU);
 
-  // Find clones with the usual settings, but we want to filter out
+  // Find clones with the usual settings, but but we want to filter out
   // all statements from functions which names start with "bar".
   std::vector<CloneDetector::CloneGroup> CloneGroups;
   Detector.findClones(CloneGroups, NoBarFunctionConstraint(),

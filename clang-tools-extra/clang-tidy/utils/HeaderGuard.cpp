@@ -13,13 +13,15 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/Path.h"
 
-namespace clang::tidy::utils {
+namespace clang {
+namespace tidy {
+namespace utils {
 
 /// canonicalize a path by removing ./ and ../ components.
 static std::string cleanPath(StringRef Path) {
   SmallString<256> Result = Path;
   llvm::sys::path::remove_dots(Result, true);
-  return std::string(Result);
+  return std::string(Result.str());
 }
 
 namespace {
@@ -35,10 +37,9 @@ public:
     // guards.
     SourceManager &SM = PP->getSourceManager();
     if (Reason == EnterFile && FileType == SrcMgr::C_User) {
-      if (OptionalFileEntryRef FE =
-              SM.getFileEntryRefForID(SM.getFileID(Loc))) {
+      if (const FileEntry *FE = SM.getFileEntryForID(SM.getFileID(Loc))) {
         std::string FileName = cleanPath(FE->getName());
-        Files[FileName] = *FE;
+        Files[FileName] = FE;
       }
     }
   }
@@ -78,8 +79,8 @@ public:
       if (!MI->isUsedForHeaderGuard())
         continue;
 
-      OptionalFileEntryRef FE =
-          SM.getFileEntryRefForID(SM.getFileID(MI->getDefinitionLoc()));
+      const FileEntry *FE =
+          SM.getFileEntryForID(SM.getFileID(MI->getDefinitionLoc()));
       std::string FileName = cleanPath(FE->getName());
       Files.erase(FileName);
 
@@ -144,13 +145,13 @@ public:
         EndIfStr[FindEscapedNewline] == '\\')
       return false;
 
-    bool IsLineComment =
-        EndIfStr.consume_front("//") ||
-        (EndIfStr.consume_front("/*") && EndIfStr.consume_back("*/"));
-    if (!IsLineComment)
-      return Check->shouldSuggestEndifComment(FileName);
+    if (!Check->shouldSuggestEndifComment(FileName) &&
+        !(EndIfStr.startswith("//") ||
+          (EndIfStr.startswith("/*") && EndIfStr.endswith("*/"))))
+      return false;
 
-    return EndIfStr.trim() != HeaderGuard;
+    return (EndIfStr != "// " + HeaderGuard.str()) &&
+           (EndIfStr != "/* " + HeaderGuard.str() + " */");
   }
 
   /// Look for header guards that don't match the preferred style. Emit
@@ -163,11 +164,10 @@ public:
                                          StringRef CurHeaderGuard,
                                          std::vector<FixItHint> &FixIts) {
     std::string CPPVar = Check->getHeaderGuard(FileName, CurHeaderGuard);
-    CPPVar = Check->sanitizeHeaderGuard(CPPVar);
     std::string CPPVarUnder = CPPVar + '_';
 
-    // Allow a trailing underscore if and only if we don't have to change the
-    // endif comment too.
+    // Allow a trailing underscore iff we don't have to change the endif comment
+    // too.
     if (Ifndef.isValid() && CurHeaderGuard != CPPVar &&
         (CurHeaderGuard != CPPVarUnder ||
          wouldFixEndifComment(FileName, EndIf, CurHeaderGuard))) {
@@ -189,7 +189,7 @@ public:
   void checkEndifComment(StringRef FileName, SourceLocation EndIf,
                          StringRef HeaderGuard,
                          std::vector<FixItHint> &FixIts) {
-    size_t EndIfLen = 0;
+    size_t EndIfLen;
     if (wouldFixEndifComment(FileName, EndIf, HeaderGuard, &EndIfLen)) {
       FixIts.push_back(FixItHint::CreateReplacement(
           CharSourceRange::getCharRange(EndIf,
@@ -216,7 +216,6 @@ public:
         continue;
 
       std::string CPPVar = Check->getHeaderGuard(FileName);
-      CPPVar = Check->sanitizeHeaderGuard(CPPVar);
       std::string CPPVarUnder = CPPVar + '_'; // Allow a trailing underscore.
       // If there's a macro with a name that follows the header guard convention
       // but was not recognized by the preprocessor as a header guard there must
@@ -269,15 +268,14 @@ private:
 };
 } // namespace
 
+void HeaderGuardCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
+  Options.store(Opts, "HeaderFileExtensions", RawStringHeaderFileExtensions);
+}
+
 void HeaderGuardCheck::registerPPCallbacks(const SourceManager &SM,
                                            Preprocessor *PP,
                                            Preprocessor *ModuleExpanderPP) {
   PP->addPPCallbacks(std::make_unique<HeaderGuardPPCallbacks>(PP, this));
-}
-
-std::string HeaderGuardCheck::sanitizeHeaderGuard(StringRef Guard) {
-  // Only reserved identifiers are allowed to start with an '_'.
-  return Guard.ltrim('_').str();
 }
 
 bool HeaderGuardCheck::shouldSuggestEndifComment(StringRef FileName) {
@@ -293,4 +291,6 @@ bool HeaderGuardCheck::shouldSuggestToAddHeaderGuard(StringRef FileName) {
 std::string HeaderGuardCheck::formatEndIf(StringRef HeaderGuard) {
   return "endif // " + HeaderGuard.str();
 }
-} // namespace clang::tidy::utils
+} // namespace utils
+} // namespace tidy
+} // namespace clang

@@ -53,22 +53,18 @@ using namespace llvm;
 
 #define DEBUG_TYPE "uselistorder"
 
-static cl::OptionCategory Cat("verify-uselistorder Options");
-
 static cl::opt<std::string> InputFilename(cl::Positional,
                                           cl::desc("<input bitcode file>"),
                                           cl::init("-"),
                                           cl::value_desc("filename"));
 
 static cl::opt<bool> SaveTemps("save-temps", cl::desc("Save temp files"),
-                               cl::cat(Cat));
+                               cl::init(false));
 
 static cl::opt<unsigned>
     NumShuffles("num-shuffles",
                 cl::desc("Number of times to shuffle and verify use-lists"),
-                cl::init(1), cl::cat(Cat));
-
-extern cl::opt<cl::boolOrDefault> PreserveInputDbgFormat;
+                cl::init(1));
 
 namespace {
 
@@ -168,7 +164,6 @@ std::unique_ptr<Module> TempFile::readBitcode(LLVMContext &Context) const {
                           "verify-uselistorder: error: ");
     return nullptr;
   }
-
   return std::move(ModuleOr.get());
 }
 
@@ -176,7 +171,7 @@ std::unique_ptr<Module> TempFile::readAssembly(LLVMContext &Context) const {
   LLVM_DEBUG(dbgs() << " - read assembly\n");
   SMDiagnostic Err;
   std::unique_ptr<Module> M = parseAssemblyFile(Filename, Err, Context);
-  if (!M)
+  if (!M.get())
     Err.print("verify-uselistorder", errs());
   return M;
 }
@@ -207,9 +202,14 @@ ValueMapping::ValueMapping(const Module &M) {
     map(A.getAliasee());
   for (const GlobalIFunc &IF : M.ifuncs())
     map(IF.getResolver());
-  for (const Function &F : M)
-    for (Value *Op : F.operands())
-      map(Op);
+  for (const Function &F : M) {
+    if (F.hasPrefixData())
+      map(F.getPrefixData());
+    if (F.hasPrologueData())
+      map(F.getPrologueData());
+    if (F.hasPersonalityFn())
+      map(F.getPersonalityFn());
+  }
 
   // Function bodies.
   for (const Function &F : M) {
@@ -222,15 +222,8 @@ ValueMapping::ValueMapping(const Module &M) {
         map(&I);
 
     // Constants used by instructions.
-    for (const BasicBlock &BB : F) {
-      for (const Instruction &I : BB) {
-        for (const DbgVariableRecord &DVR :
-             filterDbgVars(I.getDbgRecordRange())) {
-          for (Value *Op : DVR.location_ops())
-            map(Op);
-          if (DVR.isDbgAssign())
-            map(DVR.getAddress());
-        }
+    for (const BasicBlock &BB : F)
+      for (const Instruction &I : BB)
         for (const Value *Op : I.operands()) {
           // Look through a metadata wrapper.
           if (const auto *MAV = dyn_cast<MetadataAsValue>(Op))
@@ -241,8 +234,6 @@ ValueMapping::ValueMapping(const Module &M) {
               isa<InlineAsm>(Op))
             map(Op);
         }
-      }
-    }
   }
 }
 
@@ -410,7 +401,7 @@ static void shuffleValueUseLists(Value *V, std::minstd_rand0 &Gen,
     return;
 
   // Generate random numbers between 10 and 99, which will line up nicely in
-  // debug output.  We're not worried about collisions here.
+  // debug output.  We're not worried about collisons here.
   LLVM_DEBUG(dbgs() << "V = "; V->dump());
   std::uniform_int_distribution<short> Dist(10, 99);
   SmallDenseMap<const Use *, short, 16> Order;
@@ -493,9 +484,14 @@ static void changeUseLists(Module &M, Changer changeValueUseList) {
     changeValueUseList(A.getAliasee());
   for (GlobalIFunc &IF : M.ifuncs())
     changeValueUseList(IF.getResolver());
-  for (Function &F : M)
-    for (Value *Op : F.operands())
-      changeValueUseList(Op);
+  for (Function &F : M) {
+    if (F.hasPrefixData())
+      changeValueUseList(F.getPrefixData());
+    if (F.hasPrologueData())
+      changeValueUseList(F.getPrologueData());
+    if (F.hasPersonalityFn())
+      changeValueUseList(F.getPersonalityFn());
+  }
 
   // Function bodies.
   for (Function &F : M) {
@@ -539,23 +535,22 @@ static void reverseUseLists(Module &M) {
 }
 
 int main(int argc, char **argv) {
-  PreserveInputDbgFormat = cl::boolOrDefault::BOU_TRUE;
   InitLLVM X(argc, argv);
 
   // Enable debug stream buffering.
   EnableDebugBuffering = true;
 
-  cl::HideUnrelatedOptions(Cat);
+  LLVMContext Context;
+
   cl::ParseCommandLineOptions(argc, argv,
                               "llvm tool to verify use-list order\n");
 
-  LLVMContext Context;
   SMDiagnostic Err;
 
   // Load the input module...
   std::unique_ptr<Module> M = parseIRFile(InputFilename, Err, Context);
 
-  if (!M) {
+  if (!M.get()) {
     Err.print(argv[0], errs());
     return 1;
   }

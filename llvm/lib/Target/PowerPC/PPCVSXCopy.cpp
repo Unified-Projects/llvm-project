@@ -12,8 +12,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/PPCPredicates.h"
 #include "PPC.h"
+#include "PPCHazardRecognizers.h"
+#include "PPCInstrBuilder.h"
 #include "PPCInstrInfo.h"
+#include "PPCMachineFunctionInfo.h"
 #include "PPCTargetMachine.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
@@ -22,7 +26,11 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -140,9 +148,11 @@ public:
 
       bool Changed = false;
 
-      for (MachineBasicBlock &B : llvm::make_early_inc_range(MF))
+      for (MachineFunction::iterator I = MF.begin(); I != MF.end();) {
+        MachineBasicBlock &B = *I++;
         if (processBlock(B))
           Changed = true;
+      }
 
       return Changed;
     }
@@ -159,3 +169,4 @@ INITIALIZE_PASS(PPCVSXCopy, DEBUG_TYPE,
 char PPCVSXCopy::ID = 0;
 FunctionPass*
 llvm::createPPCVSXCopyPass() { return new PPCVSXCopy(); }
+

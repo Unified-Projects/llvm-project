@@ -14,9 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/Remarks.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Demangle/Demangle.h"
-#include "llvm/Remarks/Remark.h"
 #include "llvm/Remarks/RemarkFormat.h"
 #include "llvm/Remarks/RemarkParser.h"
 #include "llvm/Support/CommandLine.h"
@@ -29,12 +27,10 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
-#include "llvm/Support/TypeSize.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdlib>
 #include <map>
-#include <optional>
 #include <set>
 
 using namespace llvm;
@@ -101,7 +97,7 @@ struct OptReportLocationInfo {
   OptReportLocationItemInfo Unrolled;
   OptReportLocationItemInfo Vectorized;
 
-  ElementCount VectorizationFactor = ElementCount::getFixed(1);
+  int VectorizationFactor = 1;
   int InterleaveCount = 1;
   int UnrollCount = 1;
 
@@ -110,9 +106,8 @@ struct OptReportLocationInfo {
     Unrolled |= RHS.Unrolled;
     Vectorized |= RHS.Vectorized;
 
-    if (ElementCount::isKnownLT(VectorizationFactor, RHS.VectorizationFactor))
-      VectorizationFactor = RHS.VectorizationFactor;
-
+    VectorizationFactor =
+      std::max(VectorizationFactor, RHS.VectorizationFactor);
     InterleaveCount = std::max(InterleaveCount, RHS.InterleaveCount);
     UnrollCount = std::max(UnrollCount, RHS.UnrollCount);
 
@@ -132,11 +127,9 @@ struct OptReportLocationInfo {
       return true;
     else if (RHS.Vectorized < Vectorized || Succinct)
       return false;
-    else if (ElementCount::isKnownLT(VectorizationFactor,
-                                     RHS.VectorizationFactor))
+    else if (VectorizationFactor < RHS.VectorizationFactor)
       return true;
-    else if (ElementCount::isKnownGT(VectorizationFactor,
-                                     RHS.VectorizationFactor))
+    else if (VectorizationFactor > RHS.VectorizationFactor)
       return false;
     else if (InterleaveCount < RHS.InterleaveCount)
       return true;
@@ -201,29 +194,20 @@ static bool readLocationInfo(LocationInfoTy &LocationInfo) {
 
     bool Transformed = Remark.RemarkType == remarks::Type::Passed;
 
-    ElementCount VectorizationFactor = ElementCount::getFixed(1);
+    int VectorizationFactor = 1;
     int InterleaveCount = 1;
     int UnrollCount = 1;
 
     for (const remarks::Argument &Arg : Remark.Args) {
-      if (Arg.Key == "VectorizationFactor") {
-        int MinValue = 1;
-        bool IsScalable = false;
-        if (Arg.Val.starts_with("vscale x ")) {
-          Arg.Val.drop_front(9).getAsInteger(10, MinValue);
-          IsScalable = true;
-        } else {
-          Arg.Val.getAsInteger(10, MinValue);
-        }
-        VectorizationFactor = ElementCount::get(MinValue, IsScalable);
-      } else if (Arg.Key == "InterleaveCount") {
+      if (Arg.Key == "VectorizationFactor")
+        Arg.Val.getAsInteger(10, VectorizationFactor);
+      else if (Arg.Key == "InterleaveCount")
         Arg.Val.getAsInteger(10, InterleaveCount);
-      } else if (Arg.Key == "UnrollCount") {
+      else if (Arg.Key == "UnrollCount")
         Arg.Val.getAsInteger(10, UnrollCount);
-      }
     }
 
-    const std::optional<remarks::RemarkLocation> &Loc = Remark.Loc;
+    const Optional<remarks::RemarkLocation> &Loc = Remark.Loc;
     if (!Loc)
       continue;
 
@@ -305,11 +289,7 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
     bool NothingUnrolled = !MaxLI.Unrolled.Transformed;
     bool NothingVectorized = !MaxLI.Vectorized.Transformed;
 
-    unsigned VFDigits =
-        llvm::utostr(MaxLI.VectorizationFactor.getKnownMinValue()).size();
-    if (MaxLI.VectorizationFactor.isScalable())
-      VFDigits += 2; // For "Nx..."
-
+    unsigned VFDigits = llvm::utostr(MaxLI.VectorizationFactor).size();
     unsigned ICDigits = llvm::utostr(MaxLI.InterleaveCount).size();
     unsigned UCDigits = llvm::utostr(MaxLI.UnrollCount).size();
 
@@ -356,11 +336,16 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
 
             bool Printed = false;
             if (!NoDemangle) {
-              if (char *Demangled = itaniumDemangle(FuncName)) {
+              int Status = 0;
+              char *Demangled =
+                itaniumDemangle(FuncName.c_str(), nullptr, nullptr, &Status);
+              if (Demangled && Status == 0) {
                 OS << Demangled;
                 Printed = true;
-                std::free(Demangled);
               }
+
+              if (Demangled)
+                std::free(Demangled);
             }
 
             if (!Printed)
@@ -387,10 +372,10 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
 
           if (!Succinct) {
             RS << LLI.UnrollCount;
-            RS << std::string(UCDigits - R.size(), ' ');
+            RS << std::string(UCDigits - RS.str().size(), ' ');
           }
 
-          return R;
+          return RS.str();
         };
 
         auto VStr = [VFDigits,
@@ -399,14 +384,11 @@ static bool writeReport(LocationInfoTy &LocationInfo) {
           raw_string_ostream RS(R);
 
           if (!Succinct) {
-            if (LLI.VectorizationFactor.isScalable())
-              RS << "Nx";
-            RS << LLI.VectorizationFactor.getKnownMinValue() << ","
-               << LLI.InterleaveCount;
-            RS << std::string(VFDigits + ICDigits + 1 - R.size(), ' ');
+            RS << LLI.VectorizationFactor << "," << LLI.InterleaveCount;
+            RS << std::string(VFDigits + ICDigits + 1 - RS.str().size(), ' ');
           }
 
-          return R;
+          return RS.str();
         };
 
         OS << llvm::format_decimal(L, LNDigits) << " ";

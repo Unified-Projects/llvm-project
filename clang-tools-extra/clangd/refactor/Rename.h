@@ -11,11 +11,10 @@
 
 #include "Protocol.h"
 #include "SourceCode.h"
-#include "clang/Basic/IdentifierTable.h"
+#include "support/Path.h"
 #include "clang/Basic/LangOptions.h"
-#include "llvm/ADT/SmallVector.h"
+#include "clang/Tooling/Core/Replacement.h"
 #include "llvm/Support/Error.h"
-#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -29,10 +28,6 @@ struct RenameOptions {
   size_t LimitFiles = 50;
   /// If true, format the rename edits, only meaningful in ClangdServer layer.
   bool WantFormat = false;
-  /// Allow rename of virtual method hierarchies.
-  /// Disable to support broken index implementations with missing relations.
-  /// FIXME: fix those implementations and remove this option.
-  bool RenameVirtual = true;
 };
 
 struct RenameInputs {
@@ -55,32 +50,11 @@ struct RenameInputs {
 struct RenameResult {
   // The range of the symbol that the user can attempt to rename.
   Range Target;
-  // Placeholder text for the rename operation if non-empty.
-  std::string Placeholder;
   // Rename occurrences for the current main file.
   std::vector<Range> LocalChanges;
   // Complete edits for the rename, including LocalChanges.
   // If the full set of changes is unknown, this field is empty.
   FileEdits GlobalChanges;
-};
-
-/// Represents a symbol range where the symbol can potentially have multiple
-/// tokens.
-struct SymbolRange {
-  /// Ranges for the tokens that make up the symbol's name.
-  /// Usually a single range, but there can be multiple ranges if the tokens for
-  /// the symbol are split, e.g. ObjC selectors.
-  std::vector<Range> Ranges;
-
-  SymbolRange(Range R);
-  SymbolRange(std::vector<Range> Ranges);
-
-  /// Returns the first range.
-  Range range() const;
-
-  friend bool operator==(const SymbolRange &LHS, const SymbolRange &RHS);
-  friend bool operator!=(const SymbolRange &LHS, const SymbolRange &RHS);
-  friend bool operator<(const SymbolRange &LHS, const SymbolRange &RHS);
 };
 
 /// Renames all occurrences of the symbol. The result edits are unformatted.
@@ -94,8 +68,8 @@ llvm::Expected<RenameResult> rename(const RenameInputs &RInputs);
 /// REQUIRED: Occurrences is sorted and doesn't have duplicated ranges.
 llvm::Expected<Edit> buildRenameEdit(llvm::StringRef AbsFilePath,
                                      llvm::StringRef InitialCode,
-                                     std::vector<SymbolRange> Occurrences,
-                                     llvm::ArrayRef<llvm::StringRef> NewNames);
+                                     std::vector<Range> Occurrences,
+                                     llvm::StringRef NewName);
 
 /// Adjusts indexed occurrences to match the current state of the file.
 ///
@@ -107,27 +81,25 @@ llvm::Expected<Edit> buildRenameEdit(llvm::StringRef AbsFilePath,
 /// The API assumes that Indexed contains only named occurrences (each
 /// occurrence has the same length).
 /// REQUIRED: Indexed is sorted.
-std::optional<std::vector<SymbolRange>>
+llvm::Optional<std::vector<Range>>
 adjustRenameRanges(llvm::StringRef DraftCode, llvm::StringRef Identifier,
-                   std::vector<Range> Indexed, const LangOptions &LangOpts,
-                   std::optional<Selector> Selector);
+                   std::vector<Range> Indexed, const LangOptions &LangOpts);
 
 /// Calculates the lexed occurrences that the given indexed occurrences map to.
-/// Returns std::nullopt if we don't find a mapping.
+/// Returns None if we don't find a mapping.
 ///
 /// Exposed for testing only.
 ///
 /// REQUIRED: Indexed and Lexed are sorted.
-std::optional<std::vector<SymbolRange>>
-getMappedRanges(ArrayRef<Range> Indexed, ArrayRef<SymbolRange> Lexed);
+llvm::Optional<std::vector<Range>> getMappedRanges(ArrayRef<Range> Indexed,
+                                                   ArrayRef<Range> Lexed);
 /// Evaluates how good the mapped result is. 0 indicates a perfect match.
 ///
 /// Exposed for testing only.
 ///
 /// REQUIRED: Indexed and Lexed are sorted, Indexed and MappedIndex have the
 /// same size.
-size_t renameRangeAdjustmentCost(ArrayRef<Range> Indexed,
-                                 ArrayRef<SymbolRange> Lexed,
+size_t renameRangeAdjustmentCost(ArrayRef<Range> Indexed, ArrayRef<Range> Lexed,
                                  ArrayRef<size_t> MappedIndex);
 
 } // namespace clangd

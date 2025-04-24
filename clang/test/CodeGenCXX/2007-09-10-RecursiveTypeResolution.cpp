@@ -55,7 +55,6 @@ namespace Manta
       vector < _Tp, _Alloc > > iterator;
     iterator end ()
     {
-      return {};
     }
   };
   class MantaInterface

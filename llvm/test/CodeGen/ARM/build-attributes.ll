@@ -187,12 +187,6 @@
 ; RUN: llc < %s -mtriple=armv8-none-linux-gnueabi -mcpu=exynos-m5 | FileCheck %s --check-prefix=NO-STRICT-ALIGN
 ; RUN: llc < %s -mtriple=armv8-none-linux-gnueabi -mcpu=exynos-m5 -mattr=+strict-align | FileCheck %s --check-prefix=STRICT-ALIGN
 
-; ARMv9a (AArch32)
-; RUN: llc < %s -mtriple=armv8-none-linux-gnueabi -mcpu=cortex-a510 | FileCheck %s --check-prefix=NO-STRICT-ALIGN
-; RUN: llc < %s -mtriple=armv8-none-linux-gnueabi -mcpu=cortex-a510 -mattr=+strict-align | FileCheck %s --check-prefix=STRICT-ALIGN
-; RUN: llc < %s -mtriple=armv8-none-linux-gnueabi -mcpu=cortex-a710 | FileCheck %s --check-prefix=NO-STRICT-ALIGN
-; RUN: llc < %s -mtriple=armv8-none-linux-gnueabi -mcpu=cortex-a710 -mattr=+strict-align | FileCheck %s --check-prefix=STRICT-ALIGN
-
 ; ARMv7a
 ; RUN: llc < %s -mtriple=armv7-none-linux-gnueabi -mcpu=cortex-a7 | FileCheck %s --check-prefix=NO-STRICT-ALIGN
 ; RUN: llc < %s -mtriple=armv7-none-linux-gnueabi -mcpu=cortex-a7 -mattr=+strict-align | FileCheck %s --check-prefix=STRICT-ALIGN
@@ -230,10 +224,6 @@
 ; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-r52 -mattr=-neon,-fp64,-d32 | FileCheck %s --check-prefix=ARMv8R --check-prefix=ARMv8R-SP
 ; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-r52 | FileCheck %s --check-prefix=ARMv8R --check-prefix=ARMv8R-NEON
 
-; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-r52plus -mattr=-vfp2sp,-fp16 | FileCheck %s --check-prefix=ARMv8R --check-prefix=ARMv8R-NOFPU
-; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-r52plus -mattr=-neon,-fp64,-d32 | FileCheck %s --check-prefix=ARMv8R --check-prefix=ARMv8R-SP
-; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-r52plus | FileCheck %s --check-prefix=ARMv8R --check-prefix=ARMv8R-NEON
-
 ; ARMv8-M
 ; RUN: llc < %s -mtriple=thumbv8-none-none-eabi -mcpu=cortex-m23 | FileCheck %s --check-prefix=STRICT-ALIGN
 ; RUN: llc < %s -mtriple=thumbv8-none-none-eabi -mcpu=cortex-m33 | FileCheck %s --check-prefix=NO-STRICT-ALIGN
@@ -243,10 +233,7 @@
 ; RUN: llc < %s -mtriple=thumbv8.1m.main-none-none-eabi | FileCheck %s --check-prefix=ARMv81M-MAIN
 ; RUN: llc < %s -mtriple=thumbv8.1m.main-none-none-eabi -mattr=+mve | FileCheck %s --check-prefix=ARMv81M-MAIN-MVEINT
 ; RUN: llc < %s -mtriple=thumbv8.1m.main-none-none-eabi -mattr=+mve.fp | FileCheck %s --check-prefix=ARMv81M-MAIN-MVEFP
-; RUN: llc < %s -mtriple=thumbv8.1m.main-none-none-eabi -mattr=+pacbti | FileCheck %s --check-prefix=ARMv81M-MAIN-PACBTI
 ; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-m55 | FileCheck %s --check-prefix=CORTEX-M55
-; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-m85 | FileCheck %s --check-prefix=CORTEX-M85
-; RUN: llc < %s -mtriple=arm-none-none-eabi -mcpu=cortex-m85+nopacbti | FileCheck %s --check-prefix=CHECK-NO-PACBTI
 
 ; CPU-SUPPORTED-NOT: is not a recognized processor for this target
 
@@ -1736,8 +1723,6 @@
 ; ARMv81M-MAIN-MVEINT: .eabi_attribute 48, 1 @ Tag_MVE_arch
 ; ARMv81M-MAIN-MVEFP: .eabi_attribute 6, 21 @ Tag_CPU_arch
 ; ARMv81M-MAIN-MVEFP: .eabi_attribute 48, 2 @ Tag_MVE_arch
-; ARMv81M-MAIN-PACBTI: .eabi_attribute 50, 2 @ Tag_PAC_extension
-; ARMv81M-MAIN-PACBTI: .eabi_attribute 52, 2 @ Tag_BTI_extension
 
 ; CORTEX-M55: .cpu cortex-m55
 ; CORTEX-M55: .eabi_attribute 6, 21
@@ -1759,23 +1744,6 @@
 ; CORTEX-M55-NOT: .eabi_attribute 28
 ; CORTEX-M55: .eabi_attribute 38, 1
 ; CORTEX-M55: .eabi_attribute 14, 0
-
-; CORTEX-M85: .cpu cortex-m85
-; CORTEX-M85: .eabi_attribute 6, 21   @ Tag_CPU_arch
-; CORTEX-M85: .eabi_attribute 7, 77   @ Tag_CPU_arch_profile
-; CORTEX-M85: .eabi_attribute 8, 0    @ Tag_ARM_ISA_use
-; CORTEX-M85: .eabi_attribute 9, 3    @ Tag_THUMB_ISA_use
-; CORTEX-M85: .fpu    fpv5-d16
-; CORTEX-M85: .eabi_attribute 36, 1   @ Tag_FP_HP_extension
-; CORTEX-M85: .eabi_attribute 48, 2   @ Tag_MVE_arch
-; CORTEX-M85: .eabi_attribute 46, 1   @ Tag_DSP_extension
-; CORTEX-M85: .eabi_attribute 34, 1   @ Tag_CPU_unaligned_access
-; CORTEX-M85: .eabi_attribute 50, 2   @ Tag_PAC_extension
-; CORTEX-M85: .eabi_attribute 52, 2   @ Tag_BTI_extension
-
-; CHECK-NO-PACBTI-NOT: .eabi_attribute 50
-; CHECK-NO-PACBTI-NOT: .eabi_attribute 52
-
 
 define i32 @f(i64 %z) {
     ret i32 0

@@ -6,7 +6,7 @@ typedef struct {
   int x;
 } S;
 
-void foo(void) {
+void foo() {
   ^{
     S s;
     return s; // no-crash

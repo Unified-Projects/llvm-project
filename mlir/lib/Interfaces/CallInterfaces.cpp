@@ -14,18 +14,21 @@ using namespace mlir;
 // CallOpInterface
 //===----------------------------------------------------------------------===//
 
+/// Resolve the callable operation for given callee to a CallableOpInterface, or
+/// nullptr if a valid callable was not resolved. `symbolTable` is an optional
+/// parameter that will allow for using a cached symbol table for symbol lookups
+/// instead of performing an O(N) scan.
 Operation *
-call_interface_impl::resolveCallable(CallOpInterface call,
-                                     SymbolTableCollection *symbolTable) {
-  CallInterfaceCallable callable = call.getCallableForCallee();
-  if (auto symbolVal = dyn_cast<Value>(callable))
+CallOpInterface::resolveCallable(SymbolTableCollection *symbolTable) {
+  CallInterfaceCallable callable = getCallableForCallee();
+  if (auto symbolVal = callable.dyn_cast<Value>())
     return symbolVal.getDefiningOp();
 
   // If the callable isn't a value, lookup the symbol reference.
-  auto symbolRef = cast<SymbolRefAttr>(callable);
+  auto symbolRef = callable.get<SymbolRefAttr>();
   if (symbolTable)
-    return symbolTable->lookupNearestSymbolFrom(call.getOperation(), symbolRef);
-  return SymbolTable::lookupNearestSymbolFrom(call.getOperation(), symbolRef);
+    return symbolTable->lookupNearestSymbolFrom(getOperation(), symbolRef);
+  return SymbolTable::lookupNearestSymbolFrom(getOperation(), symbolRef);
 }
 
 //===----------------------------------------------------------------------===//

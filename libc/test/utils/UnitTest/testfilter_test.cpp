@@ -6,9 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "test/UnitTest/LibcTest.h"
-
-using LIBC_NAMESPACE::testing::TestOptions;
+#include "utils/UnitTest/LibcTest.h"
 
 TEST(LlvmLibcTestFilterTest, CorrectFilter) {}
 
@@ -19,22 +17,22 @@ TEST(LlvmLibcTestFilterTest, IncorrectFilter) {}
 TEST(LlvmLibcTestFilterTest, NoFilter) {}
 
 TEST(LlvmLibcTestFilterTest, CheckCorrectFilter) {
-  TestOptions Options;
-  Options.TestFilter = "LlvmLibcTestFilterTest.NoFilter";
-  ASSERT_EQ(LIBC_NAMESPACE::testing::Test::runTests(Options), 0);
-
-  Options.TestFilter = "LlvmLibcTestFilterTest.IncorrFilter";
-  ASSERT_EQ(LIBC_NAMESPACE::testing::Test::runTests(Options), 1);
-
-  Options.TestFilter = "LlvmLibcTestFilterTest.CorrectFilter";
-  ASSERT_EQ(LIBC_NAMESPACE::testing::Test::runTests(Options), 0);
-
-  Options.TestFilter = "LlvmLibcTestFilterTest.CorrectFilter2";
-  ASSERT_EQ(LIBC_NAMESPACE::testing::Test::runTests(Options), 0);
+  ASSERT_EQ(
+      __llvm_libc::testing::Test::runTests("LlvmLibcTestFilterTest.NoFilter"),
+      0);
+  ASSERT_EQ(__llvm_libc::testing::Test::runTests(
+                "LlvmLibcTestFilterTest.IncorrFilter"),
+            1);
+  ASSERT_EQ(__llvm_libc::testing::Test::runTests(
+                "LlvmLibcTestFilterTest.CorrectFilter"),
+            0);
+  ASSERT_EQ(__llvm_libc::testing::Test::runTests(
+                "LlvmLibcTestFilterTest.CorrectFilter2"),
+            0);
 }
 
 int main() {
-  TestOptions Options{"LlvmLibcTestFilterTest.NoFilter", /*PrintColor=*/true};
-  LIBC_NAMESPACE::testing::Test::runTests(Options);
+  __llvm_libc::testing::Test::runTests(
+      "LlvmLibcTestFilterTest.CheckCorrectFilter");
   return 0;
 }

@@ -5,10 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-///
-/// \file
-/// This file implements the PackedVector class.
-///
+//
+// This file implements the PackedVector class.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_PACKEDVECTOR_H
@@ -141,9 +140,6 @@ public:
     Bits |= RHS.Bits;
     return *this;
   }
-
-  const BitVectorTy &raw_bits() const { return Bits; }
-  BitVectorTy &raw_bits() { return Bits; }
 };
 
 // Leave BitNum=0 undefined.

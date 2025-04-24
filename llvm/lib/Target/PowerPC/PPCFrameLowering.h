@@ -21,12 +21,12 @@ class PPCSubtarget;
 
 class PPCFrameLowering: public TargetFrameLowering {
   const PPCSubtarget &Subtarget;
-  const uint64_t ReturnSaveOffset;
-  const uint64_t TOCSaveOffset;
-  const uint64_t FramePointerSaveOffset;
+  const unsigned ReturnSaveOffset;
+  const unsigned TOCSaveOffset;
+  const unsigned FramePointerSaveOffset;
   const unsigned LinkageSize;
-  const uint64_t BasePointerSaveOffset;
-  const uint64_t CRSaveOffset;
+  const unsigned BasePointerSaveOffset;
+  const unsigned CRSaveOffset;
 
   // Map each group of one or two GPRs to corresponding VSR for spilling.
   // TODO: Use local table in methods to avoid this mutable member.
@@ -88,7 +88,7 @@ public:
   /**
    * Determine the frame layout and update the machine function.
    */
-  uint64_t determineFrameLayoutAndUpdate(MachineFunction &MF,
+  unsigned determineFrameLayoutAndUpdate(MachineFunction &MF,
                                          bool UseEstimate = false) const;
 
   /**
@@ -96,7 +96,7 @@ public:
    * The MachineFunction object can be const in this case as it is not
    * modified.
    */
-  uint64_t determineFrameLayout(const MachineFunction &MF,
+  unsigned determineFrameLayout(const MachineFunction &MF,
                                 bool UseEstimate = false,
                                 unsigned *NewMaxCallFrameSize = nullptr) const;
 
@@ -107,6 +107,7 @@ public:
   void inlineStackProbe(MachineFunction &MF,
                         MachineBasicBlock &PrologMBB) const override;
 
+  bool hasFP(const MachineFunction &MF) const override;
   bool needsFP(const MachineFunction &MF) const;
   void replaceFPWithRealFP(MachineFunction &MF) const;
 
@@ -145,19 +146,19 @@ public:
 
   /// getReturnSaveOffset - Return the previous frame offset to save the
   /// return address.
-  uint64_t getReturnSaveOffset() const { return ReturnSaveOffset; }
+  unsigned getReturnSaveOffset() const { return ReturnSaveOffset; }
 
   /// getTOCSaveOffset - Return the previous frame offset to save the
   /// TOC register -- 64-bit SVR4 ABI only.
-  uint64_t getTOCSaveOffset() const;
+  unsigned getTOCSaveOffset() const;
 
   /// getFramePointerSaveOffset - Return the previous frame offset to save the
   /// frame pointer.
-  uint64_t getFramePointerSaveOffset() const;
+  unsigned getFramePointerSaveOffset() const;
 
   /// getBasePointerSaveOffset - Return the previous frame offset to save the
   /// base pointer.
-  uint64_t getBasePointerSaveOffset() const;
+  unsigned getBasePointerSaveOffset() const;
 
   /// getLinkageSize - Return the size of the PowerPC ABI linkage area.
   ///
@@ -172,12 +173,6 @@ public:
   /// function prologue/epilogue.
   bool canUseAsPrologue(const MachineBasicBlock &MBB) const override;
   bool canUseAsEpilogue(const MachineBasicBlock &MBB) const override;
-  void updateCalleeSaves(const MachineFunction &MF, BitVector &SavedRegs) const;
-
-  uint64_t getStackThreshold() const override;
-
-protected:
-  bool hasFPImpl(const MachineFunction &MF) const override;
 };
 } // End llvm namespace
 

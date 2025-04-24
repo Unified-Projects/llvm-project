@@ -187,7 +187,7 @@ unsigned HexagonMCInstrInfo::iClassOfDuplexPair(unsigned Ga, unsigned Gb) {
 }
 
 unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
-  MCRegister DstReg, PredReg, SrcReg, Src1Reg, Src2Reg;
+  unsigned DstReg, PredReg, SrcReg, Src1Reg, Src2Reg;
 
   switch (MCI.getOpcode()) {
   default:
@@ -284,6 +284,8 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
   case Hexagon::J2_jumprf:
   case Hexagon::J2_jumprtnew:
   case Hexagon::J2_jumprfnew:
+  case Hexagon::J2_jumprtnewpt:
+  case Hexagon::J2_jumprfnewpt:
   case Hexagon::PS_jmprett:
   case Hexagon::PS_jmpretf:
   case Hexagon::PS_jmprettnew:
@@ -301,6 +303,8 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
   case Hexagon::L4_return_f:
   case Hexagon::L4_return_tnew_pnt:
   case Hexagon::L4_return_fnew_pnt:
+  case Hexagon::L4_return_tnew_pt:
+  case Hexagon::L4_return_fnew_pt:
     // [if ([!]p0[.new])] dealloc_return
     SrcReg = MCI.getOperand(1).getReg();
     if (Hexagon::P0 == SrcReg) {
@@ -533,7 +537,7 @@ unsigned HexagonMCInstrInfo::getDuplexCandidateGroup(MCInst const &MCI) {
 }
 
 bool HexagonMCInstrInfo::subInstWouldBeExtended(MCInst const &potentialDuplex) {
-  MCRegister DstReg, SrcReg;
+  unsigned DstReg, SrcReg;
   switch (potentialDuplex.getOpcode()) {
   case Hexagon::A2_addi:
     // testing for case of: Rx = add(Rx,#s7)
@@ -657,7 +661,7 @@ bool HexagonMCInstrInfo::isDuplexPair(MCInst const &MIa, MCInst const &MIb) {
 inline static void addOps(MCInst &subInstPtr, MCInst const &Inst,
                           unsigned opNum) {
   if (Inst.getOperand(opNum).isReg()) {
-    switch (Inst.getOperand(opNum).getReg().id()) {
+    switch (Inst.getOperand(opNum).getReg()) {
     default:
       llvm_unreachable("Not Duplexable Register");
       break;
@@ -695,7 +699,6 @@ inline static void addOps(MCInst &subInstPtr, MCInst const &Inst,
 
 MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
   MCInst Result;
-  Result.setLoc(Inst.getLoc());
   bool Absolute;
   int64_t Value;
   switch (Inst.getOpcode()) {
@@ -827,6 +830,7 @@ MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
     Result.setOpcode(Hexagon::SL2_jumpr31_f);
     break; //    none  SUBInst if (!p0) jumpr r31
   case Hexagon::J2_jumprfnew:
+  case Hexagon::J2_jumprfnewpt:
   case Hexagon::PS_jmpretfnewpt:
   case Hexagon::PS_jmpretfnew:
     Result.setOpcode(Hexagon::SL2_jumpr31_fnew);
@@ -836,6 +840,7 @@ MCInst HexagonMCInstrInfo::deriveSubInst(MCInst const &Inst) {
     Result.setOpcode(Hexagon::SL2_jumpr31_t);
     break; //    none  SUBInst if (p0) jumpr r31
   case Hexagon::J2_jumprtnew:
+  case Hexagon::J2_jumprtnewpt:
   case Hexagon::PS_jmprettnewpt:
   case Hexagon::PS_jmprettnew:
     Result.setOpcode(Hexagon::SL2_jumpr31_tnew);

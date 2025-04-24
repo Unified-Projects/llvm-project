@@ -9,12 +9,10 @@
 #ifndef LLVM_LIBC_SRC_CTYPE_TOUPPER_H
 #define LLVM_LIBC_SRC_CTYPE_TOUPPER_H
 
-#include "src/__support/macros/config.h"
-
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 int toupper(int c);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif //  LLVM_LIBC_SRC_CTYPE_TOUPPER_H

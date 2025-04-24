@@ -10,7 +10,7 @@
 #include "Symbols.h"
 #include "Target.h"
 #include "lld/Common/ErrorHandler.h"
-#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/Object/ELF.h"
 #include "llvm/Support/Endian.h"
 
 using namespace llvm;
@@ -25,23 +25,22 @@ class AMDGPU final : public TargetInfo {
 private:
   uint32_t calcEFlagsV3() const;
   uint32_t calcEFlagsV4() const;
-  uint32_t calcEFlagsV6() const;
 
 public:
-  AMDGPU(Ctx &);
+  AMDGPU();
   uint32_t calcEFlags() const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
   RelExpr getRelExpr(RelType type, const Symbol &s,
                      const uint8_t *loc) const override;
   RelType getDynRel(RelType type) const override;
-  int64_t getImplicitAddend(const uint8_t *buf, RelType type) const override;
 };
 } // namespace
 
-AMDGPU::AMDGPU(Ctx &ctx) : TargetInfo(ctx) {
+AMDGPU::AMDGPU() {
   relativeRel = R_AMDGPU_RELATIVE64;
   gotRel = R_AMDGPU_ABS64;
+  noneRel = R_AMDGPU_NONE;
   symbolicRel = R_AMDGPU_ABS64;
 }
 
@@ -50,30 +49,29 @@ static uint32_t getEFlags(InputFile *file) {
 }
 
 uint32_t AMDGPU::calcEFlagsV3() const {
-  uint32_t ret = getEFlags(ctx.objectFiles[0]);
+  uint32_t ret = getEFlags(objectFiles[0]);
 
   // Verify that all input files have the same e_flags.
-  for (InputFile *f : ArrayRef(ctx.objectFiles).slice(1)) {
+  for (InputFile *f : makeArrayRef(objectFiles).slice(1)) {
     if (ret == getEFlags(f))
       continue;
-    ErrAlways(ctx) << "incompatible e_flags: " << f;
+    error("incompatible e_flags: " + toString(f));
     return 0;
   }
   return ret;
 }
 
 uint32_t AMDGPU::calcEFlagsV4() const {
-  uint32_t retMach = getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_MACH;
-  uint32_t retXnack =
-      getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_FEATURE_XNACK_V4;
+  uint32_t retMach = getEFlags(objectFiles[0]) & EF_AMDGPU_MACH;
+  uint32_t retXnack = getEFlags(objectFiles[0]) & EF_AMDGPU_FEATURE_XNACK_V4;
   uint32_t retSramEcc =
-      getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_FEATURE_SRAMECC_V4;
+      getEFlags(objectFiles[0]) & EF_AMDGPU_FEATURE_SRAMECC_V4;
 
   // Verify that all input files have compatible e_flags (same mach, all
   // features in the same category are either ANY, ANY and ON, or ANY and OFF).
-  for (InputFile *f : ArrayRef(ctx.objectFiles).slice(1)) {
+  for (InputFile *f : makeArrayRef(objectFiles).slice(1)) {
     if (retMach != (getEFlags(f) & EF_AMDGPU_MACH)) {
-      Err(ctx) << "incompatible mach: " << f;
+      error("incompatible mach: " + toString(f));
       return 0;
     }
 
@@ -82,7 +80,7 @@ uint32_t AMDGPU::calcEFlagsV4() const {
             (getEFlags(f) & EF_AMDGPU_FEATURE_XNACK_V4)
                 != EF_AMDGPU_FEATURE_XNACK_ANY_V4)) {
       if (retXnack != (getEFlags(f) & EF_AMDGPU_FEATURE_XNACK_V4)) {
-        Err(ctx) << "incompatible xnack: " << f;
+        error("incompatible xnack: " + toString(f));
         return 0;
       }
     } else {
@@ -95,7 +93,7 @@ uint32_t AMDGPU::calcEFlagsV4() const {
             (getEFlags(f) & EF_AMDGPU_FEATURE_SRAMECC_V4) !=
                 EF_AMDGPU_FEATURE_SRAMECC_ANY_V4)) {
       if (retSramEcc != (getEFlags(f) & EF_AMDGPU_FEATURE_SRAMECC_V4)) {
-        Err(ctx) << "incompatible sramecc: " << f;
+        error("incompatible sramecc: " + toString(f));
         return 0;
       }
     } else {
@@ -107,43 +105,19 @@ uint32_t AMDGPU::calcEFlagsV4() const {
   return retMach | retXnack | retSramEcc;
 }
 
-uint32_t AMDGPU::calcEFlagsV6() const {
-  uint32_t flags = calcEFlagsV4();
-
-  uint32_t genericVersion =
-      getEFlags(ctx.objectFiles[0]) & EF_AMDGPU_GENERIC_VERSION;
-
-  // Verify that all input files have compatible generic version.
-  for (InputFile *f : ArrayRef(ctx.objectFiles).slice(1)) {
-    if (genericVersion != (getEFlags(f) & EF_AMDGPU_GENERIC_VERSION)) {
-      ErrAlways(ctx) << "incompatible generic version: " << f;
-      return 0;
-    }
-  }
-
-  flags |= genericVersion;
-  return flags;
-}
-
 uint32_t AMDGPU::calcEFlags() const {
-  if (ctx.objectFiles.empty())
-    return 0;
+  assert(!objectFiles.empty());
 
-  uint8_t abiVersion = cast<ObjFile<ELF64LE>>(ctx.objectFiles[0])
-                           ->getObj()
-                           .getHeader()
-                           .e_ident[EI_ABIVERSION];
+  uint8_t abiVersion = cast<ObjFile<ELF64LE>>(objectFiles[0])->getObj()
+      .getHeader().e_ident[EI_ABIVERSION];
   switch (abiVersion) {
   case ELFABIVERSION_AMDGPU_HSA_V2:
   case ELFABIVERSION_AMDGPU_HSA_V3:
     return calcEFlagsV3();
   case ELFABIVERSION_AMDGPU_HSA_V4:
-  case ELFABIVERSION_AMDGPU_HSA_V5:
     return calcEFlagsV4();
-  case ELFABIVERSION_AMDGPU_HSA_V6:
-    return calcEFlagsV6();
   default:
-    Err(ctx) << "unknown abi version: " << abiVersion;
+    error("unknown abi version: " + Twine(abiVersion));
     return 0;
   }
 }
@@ -167,7 +141,7 @@ void AMDGPU::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     break;
   case R_AMDGPU_REL16: {
     int64_t simm = (static_cast<int64_t>(val) - 4) / 4;
-    checkInt(ctx, loc, simm, 16, rel);
+    checkInt(loc, simm, 16, rel);
     write16le(loc, simm);
     break;
   }
@@ -193,8 +167,8 @@ RelExpr AMDGPU::getRelExpr(RelType type, const Symbol &s,
   case R_AMDGPU_GOTPCREL32_HI:
     return R_GOT_PC;
   default:
-    Err(ctx) << getErrorLoc(ctx, loc) << "unknown relocation (" << type.v
-             << ") against symbol " << &s;
+    error(getErrorLocation(loc) + "unknown relocation (" + Twine(type) +
+          ") against symbol " + toString(s));
     return R_NONE;
   }
 }
@@ -205,17 +179,7 @@ RelType AMDGPU::getDynRel(RelType type) const {
   return R_AMDGPU_NONE;
 }
 
-int64_t AMDGPU::getImplicitAddend(const uint8_t *buf, RelType type) const {
-  switch (type) {
-  case R_AMDGPU_NONE:
-    return 0;
-  case R_AMDGPU_ABS64:
-  case R_AMDGPU_RELATIVE64:
-    return read64(ctx, buf);
-  default:
-    InternalErr(ctx, buf) << "cannot read addend for relocation " << type;
-    return 0;
-  }
+TargetInfo *elf::getAMDGPUTargetInfo() {
+  static AMDGPU target;
+  return &target;
 }
-
-void elf::setAMDGPUTargetInfo(Ctx &ctx) { ctx.target.reset(new AMDGPU(ctx)); }

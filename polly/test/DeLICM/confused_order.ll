@@ -1,5 +1,5 @@
-; RUN: opt %loadNPMPolly '-passes=polly-import-jscop,print<polly-delicm>' -polly-import-jscop-postfix=transformed -disable-output < %s | FileCheck %s
-; RUN: opt %loadNPMPolly '-passes=polly-import-jscop,polly-delicm' -polly-import-jscop-postfix=transformed -disable-output -pass-remarks-missed=polly-delicm < %s 2>&1 | FileCheck %s -check-prefix=REMARKS
+; RUN: opt %loadPolly -polly-import-jscop -polly-import-jscop-postfix=transformed -polly-delicm -analyze < %s | FileCheck %s
+; RUN: opt %loadPolly -polly-import-jscop -polly-import-jscop-postfix=transformed -polly-delicm -disable-output -pass-remarks-missed=polly-delicm < %s 2>&1 | FileCheck %s -check-prefix=REMARKS
 ;
 ; ForwardOptree changes the SCoP and may already map some accesses.
 ; DeLICM must be prepared to encounter implicit reads
@@ -9,7 +9,7 @@
 
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 
-define void @confused_order(ptr nocapture %C, i32 %rows, i32 %cols) {
+define void @confused_order(double* nocapture %C, i32 %rows, i32 %cols) {
 entry:
   %0 = sext i32 %cols to i64
   %1 = sext i32 %rows to i64
@@ -21,13 +21,15 @@ for.body7.lr.ph:
 
 for.end103:
   %a_dot_b_domain.0.lcssa = phi double [ 0.000000e+00, %entry ], [ undef, %for.body7.lr.ph ]
-  store double %a_dot_b_domain.0.lcssa, ptr %C
+  %arrayidx107 = getelementptr inbounds double, double* %C, i64 0
+  store double %a_dot_b_domain.0.lcssa, double* %arrayidx107
   %cmp109 = icmp slt i64 0, %1
   %or.cond = and i1 %cmp108, %cmp109
   br i1 %or.cond, label %if.then110, label %for.inc116
 
 if.then110:
-  store double %a_dot_b_domain.0.lcssa, ptr %C
+  %arrayidx114 = getelementptr inbounds double, double* %C, i64 0
+  store double %a_dot_b_domain.0.lcssa, double* %arrayidx114
   br label %for.inc116
 
 for.inc116:

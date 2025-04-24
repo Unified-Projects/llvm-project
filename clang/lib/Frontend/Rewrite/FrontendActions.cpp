@@ -77,7 +77,7 @@ public:
     SmallString<128> Path(Filename);
     llvm::sys::path::replace_extension(Path,
       NewSuffix + llvm::sys::path::extension(Path));
-    return std::string(Path);
+    return std::string(Path.str());
   }
 };
 
@@ -88,7 +88,7 @@ public:
     llvm::sys::fs::createTemporaryFile(llvm::sys::path::filename(Filename),
                                        llvm::sys::path::extension(Filename).drop_front(), fd,
                                        Path);
-    return std::string(Path);
+    return std::string(Path.str());
   }
 };
 } // end anonymous namespace
@@ -165,11 +165,10 @@ RewriteObjCAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   if (std::unique_ptr<raw_ostream> OS =
           CI.createDefaultOutputFile(false, InFile, "cpp")) {
     if (CI.getLangOpts().ObjCRuntime.isNonFragile())
-      return CreateModernObjCRewriter(std::string(InFile), std::move(OS),
-                                      CI.getDiagnostics(), CI.getLangOpts(),
-                                      CI.getDiagnosticOpts().NoRewriteMacros,
-                                      (CI.getCodeGenOpts().getDebugInfo() !=
-                                       llvm::codegenoptions::NoDebugInfo));
+      return CreateModernObjCRewriter(
+          std::string(InFile), std::move(OS), CI.getDiagnostics(),
+          CI.getLangOpts(), CI.getDiagnosticOpts().NoRewriteMacros,
+          (CI.getCodeGenOpts().getDebugInfo() != codegenoptions::NoDebugInfo));
     return CreateObjCRewriter(std::string(InFile), std::move(OS),
                               CI.getDiagnostics(), CI.getLangOpts(),
                               CI.getDiagnosticOpts().NoRewriteMacros);
@@ -213,7 +212,7 @@ public:
 
   void visitModuleFile(StringRef Filename,
                        serialization::ModuleKind Kind) override {
-    auto File = CI.getFileManager().getOptionalFileRef(Filename);
+    auto File = CI.getFileManager().getFile(Filename);
     assert(File && "missing file for loaded module?");
 
     // Only rewrite each module file once.
@@ -232,7 +231,7 @@ public:
     assert(OS && "loaded module file after finishing rewrite action?");
 
     (*OS) << "#pragma clang module build ";
-    if (isValidAsciiIdentifier(MF->ModuleName))
+    if (isValidIdentifier(MF->ModuleName))
       (*OS) << MF->ModuleName;
     else {
       (*OS) << '"';
@@ -247,7 +246,6 @@ public:
     Instance.setInvocation(
         std::make_shared<CompilerInvocation>(CI.getInvocation()));
     Instance.createDiagnostics(
-        CI.getVirtualFileSystem(),
         new ForwardingDiagnosticConsumer(CI.getDiagnosticClient()),
         /*ShouldOwnClient=*/true);
     Instance.getFrontendOpts().DisableFree = false;

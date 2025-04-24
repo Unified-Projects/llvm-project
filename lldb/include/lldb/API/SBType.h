@@ -11,12 +11,6 @@
 
 #include "lldb/API/SBDefines.h"
 
-namespace lldb_private {
-namespace python {
-class SWIGBridge;
-}
-} // namespace lldb_private
-
 namespace lldb {
 
 class SBTypeList;
@@ -107,35 +101,6 @@ protected:
   lldb::TypeMemberFunctionImplSP m_opaque_sp;
 };
 
-class LLDB_API SBTypeStaticField {
-public:
-  SBTypeStaticField();
-
-  SBTypeStaticField(const lldb::SBTypeStaticField &rhs);
-  lldb::SBTypeStaticField &operator=(const lldb::SBTypeStaticField &rhs);
-
-  ~SBTypeStaticField();
-
-  explicit operator bool() const;
-
-  bool IsValid() const;
-
-  const char *GetName();
-
-  const char *GetMangledName();
-
-  lldb::SBType GetType();
-
-  lldb::SBValue GetConstantValue(lldb::SBTarget target);
-
-protected:
-  friend class SBType;
-
-  explicit SBTypeStaticField(lldb_private::CompilerDecl decl);
-
-  std::unique_ptr<lldb_private::CompilerDecl> m_opaque_up;
-};
-
 class SBType {
 public:
   SBType();
@@ -149,8 +114,6 @@ public:
   bool IsValid() const;
 
   uint64_t GetByteSize();
-
-  uint64_t GetByteAlign();
 
   bool IsPointerType();
 
@@ -169,8 +132,6 @@ public:
   bool IsAnonymousType();
 
   bool IsScopedEnumerationType();
-
-  bool IsAggregateType();
 
   lldb::SBType GetPointerType();
 
@@ -213,16 +174,12 @@ public:
 
   lldb::SBTypeMember GetVirtualBaseClassAtIndex(uint32_t idx);
 
-  lldb::SBTypeStaticField GetStaticFieldWithName(const char *name);
-
   lldb::SBTypeEnumMemberList GetEnumMembers();
 
   uint32_t GetNumberOfTemplateArguments();
 
   lldb::SBType GetTemplateArgumentType(uint32_t idx);
 
-  /// Return the TemplateArgumentKind of the template argument at index idx.
-  /// Variadic argument packs are automatically expanded.
   lldb::TemplateArgumentKind GetTemplateArgumentKind(uint32_t idx);
 
   lldb::SBType GetFunctionReturnType();
@@ -247,8 +204,6 @@ public:
 
   bool GetDescription(lldb::SBStream &description,
                       lldb::DescriptionLevel description_level);
-
-  lldb::SBType FindDirectNestedType(const char *name);
 
   lldb::SBType &operator=(const lldb::SBType &rhs);
 
@@ -275,12 +230,8 @@ protected:
   friend class SBTypeNameSpecifier;
   friend class SBTypeMember;
   friend class SBTypeMemberFunction;
-  friend class SBTypeStaticField;
   friend class SBTypeList;
   friend class SBValue;
-  friend class SBWatchpoint;
-
-  friend class lldb_private::python::SWIGBridge;
 
   SBType(const lldb_private::CompilerType &);
   SBType(const lldb::TypeSP &);

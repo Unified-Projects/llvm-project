@@ -12,6 +12,7 @@
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCFixupKindInfo.h"
@@ -33,8 +34,8 @@ class MSP430AsmBackend : public MCAsmBackend {
 
 public:
   MSP430AsmBackend(const MCSubtargetInfo &STI, uint8_t OSABI)
-      : MCAsmBackend(llvm::endianness::little), OSABI(OSABI) {}
-  ~MSP430AsmBackend() override = default;
+      : MCAsmBackend(support::little), OSABI(OSABI) {}
+  ~MSP430AsmBackend() override {}
 
   void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
                   const MCValue &Target, MutableArrayRef<char> Data,
@@ -46,10 +47,16 @@ public:
     return createMSP430ELFObjectWriter(OSABI);
   }
 
-  bool fixupNeedsRelaxationAdvanced(const MCAssembler &Asm,
-                                    const MCFixup &Fixup, bool Resolved,
+  bool fixupNeedsRelaxation(const MCFixup &Fixup, uint64_t Value,
+                            const MCRelaxableFragment *DF,
+                            const MCAsmLayout &Layout) const override {
+    return false;
+  }
+
+  bool fixupNeedsRelaxationAdvanced(const MCFixup &Fixup, bool Resolved,
                                     uint64_t Value,
                                     const MCRelaxableFragment *DF,
+                                    const MCAsmLayout &Layout,
                                     const bool WasForced) const override {
     return false;
   }
@@ -74,17 +81,16 @@ public:
       {"fixup_8",             0,  8, 0},
       {"fixup_sym_diff",      0, 32, 0},
     };
-    static_assert((std::size(Infos)) == MSP430::NumTargetFixupKinds,
+    static_assert((array_lengthof(Infos)) == MSP430::NumTargetFixupKinds,
                   "Not all fixup kinds added to Infos array");
-
+  
     if (Kind < FirstTargetFixupKind)
       return MCAsmBackend::getFixupKindInfo(Kind);
   
     return Infos[Kind - FirstTargetFixupKind];
   }
 
-  bool writeNopData(raw_ostream &OS, uint64_t Count,
-                    const MCSubtargetInfo *STI) const override;
+  bool writeNopData(raw_ostream &OS, uint64_t Count) const override;
 };
 
 uint64_t MSP430AsmBackend::adjustFixupValue(const MCFixup &Fixup,
@@ -141,8 +147,7 @@ void MSP430AsmBackend::applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
   }
 }
 
-bool MSP430AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
-                                    const MCSubtargetInfo *STI) const {
+bool MSP430AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count) const {
   if ((Count % 2) != 0)
     return false;
 

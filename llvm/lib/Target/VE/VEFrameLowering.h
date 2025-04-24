@@ -39,6 +39,7 @@ public:
   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator I) const override;
 
+  bool hasFP(const MachineFunction &MF) const override;
   bool hasBP(const MachineFunction &MF) const;
   bool hasGOT(const MachineFunction &MF) const;
 
@@ -61,14 +62,12 @@ public:
         {VE::SX25, 104}, {VE::SX26, 112}, {VE::SX27, 120}, {VE::SX28, 128},
         {VE::SX29, 136}, {VE::SX30, 144}, {VE::SX31, 152}, {VE::SX32, 160},
         {VE::SX33, 168}};
-    NumEntries = std::size(Offsets);
+    NumEntries = array_lengthof(Offsets);
     return Offsets;
   }
 
 protected:
   const VESubtarget &STI;
-
-  bool hasFPImpl(const MachineFunction &MF) const override;
 
 private:
   // Returns true if MF is a leaf procedure.

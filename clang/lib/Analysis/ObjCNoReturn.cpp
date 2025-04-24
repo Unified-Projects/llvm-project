@@ -17,8 +17,7 @@
 
 using namespace clang;
 
-static bool isSubclass(const ObjCInterfaceDecl *Class,
-                       const IdentifierInfo *II) {
+static bool isSubclass(const ObjCInterfaceDecl *Class, IdentifierInfo *II) {
   if (!Class)
     return false;
   if (Class->getIdentifier() == II)
@@ -31,7 +30,7 @@ ObjCNoReturn::ObjCNoReturn(ASTContext &C)
     NSExceptionII(&C.Idents.get("NSException"))
 {
   // Generate selectors.
-  SmallVector<const IdentifierInfo *, 3> II;
+  SmallVector<IdentifierInfo*, 3> II;
 
   // raise:format:
   II.push_back(&C.Idents.get("raise"));
@@ -55,9 +54,12 @@ bool ObjCNoReturn::isImplicitNoReturn(const ObjCMessageExpr *ME) {
   }
 
   if (const ObjCInterfaceDecl *ID = ME->getReceiverInterface()) {
-    if (isSubclass(ID, NSExceptionII) &&
-        llvm::is_contained(NSExceptionInstanceRaiseSelectors, S))
-      return true;
+    if (isSubclass(ID, NSExceptionII)) {
+      for (unsigned i = 0; i < NUM_RAISE_SELECTORS; ++i) {
+        if (S == NSExceptionInstanceRaiseSelectors[i])
+          return true;
+      }
+    }
   }
 
   return false;

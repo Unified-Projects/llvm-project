@@ -1,9 +1,7 @@
 // RUN: %clangxx_asan -O %s -o %t
 // RUN: not %run %t crash 2>&1 | FileCheck --check-prefix=CHECK-CRASH %s
 // RUN: not %run %t bad-bounds 2>&1 | FileCheck --check-prefix=CHECK-BAD-BOUNDS %s
-// RUN: not %run %t unaligned-bad-bounds 2>&1 | FileCheck --check-prefix=CHECK-UNALIGNED-BAD-BOUNDS %s --implicit-check-not="beg is not aligned by"
-// RUN: not %run %t odd-alignment 2>&1 | FileCheck --check-prefix=CHECK-CRASH %s
-// RUN: not %run %t odd-alignment-end 2>&1 | FileCheck --check-prefix=CHECK-CRASH %s
+// RUN: not %run %t bad-alignment 2>&1 | FileCheck --check-prefix=CHECK-BAD-ALIGNMENT %s
 // RUN: %env_asan_opts=detect_container_overflow=0 %run %t crash
 //
 // Test crash due to __sanitizer_annotate_contiguous_container.
@@ -36,27 +34,12 @@ void BadBounds() {
                                             &t[0] + 50);
 }
 
-void UnalignedBadBounds() {
-  char t[100];
-  // CHECK-UNALIGNED-BAD-BOUNDS: ERROR: AddressSanitizer: bad parameters to __sanitizer_annotate_contiguous_container
-  __sanitizer_annotate_contiguous_container(&t[1], &t[0] + 100, &t[0] + 101,
-                                            &t[0] + 50);
-}
-
-int OddAlignment() {
+void BadAlignment() {
   int t[100];
-  t[60] = 0;
-  __sanitizer_annotate_contiguous_container(&t[1], &t[0] + 100, &t[0] + 100,
-                                            &t[1] + 50);
-  return (int)t[60 * one]; // Touches the poisoned memory.
-}
-
-int OddAlignmentEnd() {
-  int t[99];
-  t[60] = 0;
-  __sanitizer_annotate_contiguous_container(&t[0], &t[0] + 98, &t[0] + 98,
+// CHECK-BAD-ALIGNMENT: ERROR: AddressSanitizer: bad parameters to __sanitizer_annotate_contiguous_container
+// CHECK-BAD-ALIGNMENT: ERROR: beg is not aligned by {{[0-9]+}}
+  __sanitizer_annotate_contiguous_container(&t[1], &t[0] + 100, &t[1] + 10,
                                             &t[0] + 50);
-  return (int)t[60 * one]; // Touches the poisoned memory.
 }
 
 int main(int argc, char **argv) {
@@ -65,11 +48,6 @@ int main(int argc, char **argv) {
     return TestCrash();
   else if (!strcmp(argv[1], "bad-bounds"))
     BadBounds();
-  else if (!strcmp(argv[1], "unaligned-bad-bounds"))
-    UnalignedBadBounds();
-  else if (!strcmp(argv[1], "odd-alignment"))
-    return OddAlignment();
-  else if (!strcmp(argv[1], "odd-alignment-end"))
-    return OddAlignmentEnd();
-  return 0;
+  else if (!strcmp(argv[1], "bad-alignment"))
+    BadAlignment();
 }

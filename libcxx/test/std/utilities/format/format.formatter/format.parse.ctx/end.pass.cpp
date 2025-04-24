@@ -1,5 +1,4 @@
 //===----------------------------------------------------------------------===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -7,6 +6,8 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
+// UNSUPPORTED: libcpp-no-concepts
+// UNSUPPORTED: libcpp-has-no-incomplete-format
 
 // <format>
 
@@ -23,7 +24,7 @@ template <class CharT>
 constexpr void test(const CharT* fmt) {
   {
     std::basic_format_parse_context<CharT> context(fmt);
-    assert(std::to_address(context.end()) == &fmt[3]);
+    assert(context.end() == &fmt[3]);
     ASSERT_NOEXCEPT(context.end());
   }
   {
@@ -36,14 +37,14 @@ constexpr void test(const CharT* fmt) {
 
 constexpr bool test() {
   test("abc");
-#ifndef TEST_HAS_NO_WIDE_CHARACTERS
   test(L"abc");
-#endif
-#ifndef TEST_HAS_NO_CHAR8_T
+#ifndef _LIBCPP_HAS_NO_CHAR8_T
   test(u8"abc");
 #endif
+#ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
   test(u"abc");
   test(U"abc");
+#endif
 
   return true;
 }

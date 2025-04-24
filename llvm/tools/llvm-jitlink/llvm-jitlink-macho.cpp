@@ -27,8 +27,8 @@ static bool isMachOStubsSection(Section &S) {
 }
 
 static Expected<Edge &> getFirstRelocationEdge(LinkGraph &G, Block &B) {
-  auto EItr =
-      llvm::find_if(B.edges(), [](Edge &E) { return E.isRelocation(); });
+  auto EItr = std::find_if(B.edges().begin(), B.edges().end(),
+                           [](Edge &E) { return E.isRelocation(); });
   if (EItr == B.edges().end())
     return make_error<StringError>("GOT entry in " + G.getName() + ", \"" +
                                        B.getSection().getName() +
@@ -69,8 +69,6 @@ static Expected<Symbol &> getMachOStubTarget(LinkGraph &G, Block &B) {
 namespace llvm {
 
 Error registerMachOGraphInfo(Session &S, LinkGraph &G) {
-  std::lock_guard<std::mutex> Lock(S.M);
-
   auto FileName = sys::path::filename(G.getName());
   if (S.FileInfos.count(FileName)) {
     return make_error<StringError>("When -check is passed, file names must be "
@@ -86,12 +84,13 @@ Error registerMachOGraphInfo(Session &S, LinkGraph &G) {
   for (auto &Sec : G.sections()) {
     LLVM_DEBUG({
       dbgs() << "  Section \"" << Sec.getName() << "\": "
-             << (Sec.symbols().empty() ? "empty. skipping." : "processing...")
+             << (llvm::empty(Sec.symbols()) ? "empty. skipping."
+                                            : "processing...")
              << "\n";
     });
 
     // Skip empty sections.
-    if (Sec.symbols().empty())
+    if (llvm::empty(Sec.symbols()))
       continue;
 
     if (FileInfo.SectionInfos.count(Sec.getName()))
@@ -113,30 +112,42 @@ Error registerMachOGraphInfo(Session &S, LinkGraph &G) {
         FirstSym = Sym;
       if (Sym->getAddress() > LastSym->getAddress())
         LastSym = Sym;
-      if (isGOTSection || isStubsSection) {
-        Error Err =
-            isGOTSection
-                ? FileInfo.registerGOTEntry(G, *Sym, getMachOGOTTarget)
-                : FileInfo.registerStubEntry(G, *Sym, getMachOStubTarget);
-        if (Err)
-          return Err;
+      if (isGOTSection) {
+        if (Sym->isSymbolZeroFill())
+          return make_error<StringError>("zero-fill atom in GOT section",
+                                         inconvertibleErrorCode());
+
+        if (auto TS = getMachOGOTTarget(G, Sym->getBlock()))
+          FileInfo.GOTEntryInfos[TS->getName()] = {Sym->getSymbolContent(),
+                                                   Sym->getAddress()};
+        else
+          return TS.takeError();
+        SectionContainsContent = true;
+      } else if (isStubsSection) {
+        if (Sym->isSymbolZeroFill())
+          return make_error<StringError>("zero-fill atom in Stub section",
+                                         inconvertibleErrorCode());
+
+        if (auto TS = getMachOStubTarget(G, Sym->getBlock()))
+          FileInfo.StubInfos[TS->getName()] = {Sym->getSymbolContent(),
+                                               Sym->getAddress()};
+        else
+          return TS.takeError();
         SectionContainsContent = true;
       } else if (Sym->hasName()) {
         if (Sym->isSymbolZeroFill()) {
-          S.SymbolInfos[Sym->getName()] = {Sym->getSize(),
-                                           Sym->getAddress().getValue()};
+          S.SymbolInfos[Sym->getName()] = {Sym->getSize(), Sym->getAddress()};
           SectionContainsZeroFill = true;
         } else {
           S.SymbolInfos[Sym->getName()] = {Sym->getSymbolContent(),
-                                           Sym->getAddress().getValue(),
-                                           Sym->getTargetFlags()};
+                                           Sym->getAddress()};
           SectionContainsContent = true;
         }
       }
     }
 
-    auto SecAddr = FirstSym->getAddress();
-    auto SecSize =
+    JITTargetAddress SecAddr = FirstSym->getAddress();
+    uint64_t SecSize =
         (LastSym->getBlock().getAddress() + LastSym->getBlock().getSize()) -
         SecAddr;
 
@@ -145,11 +156,11 @@ Error registerMachOGraphInfo(Session &S, LinkGraph &G) {
                                      "supported yet",
                                      inconvertibleErrorCode());
     if (SectionContainsZeroFill)
-      FileInfo.SectionInfos[Sec.getName()] = {SecSize, SecAddr.getValue()};
+      FileInfo.SectionInfos[Sec.getName()] = {SecSize, SecAddr};
     else
       FileInfo.SectionInfos[Sec.getName()] = {
           ArrayRef<char>(FirstSym->getBlock().getContent().data(), SecSize),
-          SecAddr.getValue(), FirstSym->getTargetFlags()};
+          SecAddr};
   }
 
   return Error::success();

@@ -14,7 +14,9 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::google {
+namespace clang {
+namespace tidy {
+namespace google {
 
 void ExplicitConstructorCheck::registerMatchers(MatchFinder *Finder) {
   Finder->addMatcher(
@@ -38,7 +40,7 @@ static SourceRange findToken(const SourceManager &Sources,
                              SourceLocation StartLoc, SourceLocation EndLoc,
                              bool (*Pred)(const Token &)) {
   if (StartLoc.isMacroID() || EndLoc.isMacroID())
-    return {};
+    return SourceRange();
   FileID File = Sources.getFileID(Sources.getSpellingLoc(StartLoc));
   StringRef Buf = Sources.getBufferData(File);
   const char *StartChar = Sources.getCharacterData(StartLoc);
@@ -50,11 +52,11 @@ static SourceRange findToken(const SourceManager &Sources,
     if (Pred(Tok)) {
       Token NextTok;
       Lex.LexFromRawLexer(NextTok);
-      return {Tok.getLocation(), NextTok.getLocation()};
+      return SourceRange(Tok.getLocation(), NextTok.getLocation());
     }
   } while (Tok.isNot(tok::eof) && Tok.getLocation() < EndLoc);
 
-  return {};
+  return SourceRange();
 }
 
 static bool declIsStdInitializerList(const NamedDecl *D) {
@@ -79,10 +81,8 @@ static bool isStdInitializerList(QualType Type) {
 }
 
 void ExplicitConstructorCheck::check(const MatchFinder::MatchResult &Result) {
-  constexpr char NoExpressionWarningMessage[] =
+  constexpr char WarningMessage[] =
       "%0 must be marked explicit to avoid unintentional implicit conversions";
-  constexpr char WithExpressionWarningMessage[] =
-      "%0 explicit expression evaluates to 'false'";
 
   if (const auto *Conversion =
       Result.Nodes.getNodeAs<CXXConversionDecl>("conversion")) {
@@ -93,7 +93,7 @@ void ExplicitConstructorCheck::check(const MatchFinder::MatchResult &Result) {
     // gmock to define matchers).
     if (Loc.isMacroID())
       return;
-    diag(Loc, NoExpressionWarningMessage)
+    diag(Loc, WarningMessage)
         << Conversion << FixItHint::CreateInsertion(Loc, "explicit ");
     return;
   }
@@ -103,11 +103,9 @@ void ExplicitConstructorCheck::check(const MatchFinder::MatchResult &Result) {
       Ctor->getMinRequiredArguments() > 1)
     return;
 
-  const ExplicitSpecifier ExplicitSpec = Ctor->getExplicitSpecifier();
-
   bool TakesInitializerList = isStdInitializerList(
       Ctor->getParamDecl(0)->getType().getNonReferenceType());
-  if (ExplicitSpec.isExplicit() &&
+  if (Ctor->isExplicit() &&
       (Ctor->isCopyOrMoveConstructor() || TakesInitializerList)) {
     auto IsKwExplicit = [](const Token &Tok) {
       return Tok.is(tok::raw_identifier) &&
@@ -134,31 +132,20 @@ void ExplicitConstructorCheck::check(const MatchFinder::MatchResult &Result) {
     return;
   }
 
-  if (ExplicitSpec.isExplicit() || Ctor->isCopyOrMoveConstructor() ||
+  if (Ctor->isExplicit() || Ctor->isCopyOrMoveConstructor() ||
       TakesInitializerList)
     return;
 
-  // Don't complain about explicit(false) or dependent expressions
-  const Expr *ExplicitExpr = ExplicitSpec.getExpr();
-  if (ExplicitExpr) {
-    ExplicitExpr = ExplicitExpr->IgnoreImplicit();
-    if (isa<CXXBoolLiteralExpr>(ExplicitExpr) ||
-        ExplicitExpr->isInstantiationDependent())
-      return;
-  }
-
-  const bool SingleArgument =
+  bool SingleArgument =
       Ctor->getNumParams() == 1 && !Ctor->getParamDecl(0)->isParameterPack();
   SourceLocation Loc = Ctor->getLocation();
-  auto Diag =
-      diag(Loc, ExplicitExpr ? WithExpressionWarningMessage
-                             : NoExpressionWarningMessage)
+  diag(Loc, WarningMessage)
       << (SingleArgument
               ? "single-argument constructors"
-              : "constructors that are callable with a single argument");
-
-  if (!ExplicitExpr)
-    Diag << FixItHint::CreateInsertion(Loc, "explicit ");
+              : "constructors that are callable with a single argument")
+      << FixItHint::CreateInsertion(Loc, "explicit ");
 }
 
-} // namespace clang::tidy::google
+} // namespace google
+} // namespace tidy
+} // namespace clang

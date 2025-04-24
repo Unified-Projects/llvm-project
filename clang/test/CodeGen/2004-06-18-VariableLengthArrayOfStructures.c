@@ -3,7 +3,7 @@
 
 struct S { };
 
-void xxxx(int a) {
+int xxxx(int a) {
   struct S comps[a];
   comps[0];
 }

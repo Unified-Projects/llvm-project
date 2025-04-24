@@ -2,6 +2,8 @@
 # RUN: yaml2obj %s -o %t
 # RUN: llvm-readobj --symbols --string-table %t | FileCheck %s
 
+## FIXME: The first item of StringTable should be `[     4]   .longname`.
+
 # CHECK:      AddressSize: 32bit
 # CHECK-NEXT: Symbols [
 # CHECK-NEXT:   Symbol {
@@ -24,8 +26,7 @@
 # CHECK-NEXT:   }
 # CHECK-NEXT: ]
 # CHECK-NEXT: StringTable {
-# CHECK-NEXT:   Length: 14
-# CHECK-NEXT:   [     4]   .longname
+# CHECK-NEXT:   [     3]   ..longname
 # CHECK-NEXT: }
 
 --- !XCOFF

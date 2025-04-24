@@ -1,5 +1,5 @@
-; RUN: llc -mtriple=bpfel -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
-; RUN: llc -mtriple=bpfeb -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
+; RUN: llc -march=bpfel -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
+; RUN: llc -march=bpfeb -filetype=asm -o - %s | FileCheck -check-prefixes=CHECK %s
 
 ; Source code:
 ;   struct key_type {
@@ -7,14 +7,14 @@
 ;     int b;
 ;   };
 ;   struct map_type {
-;     struct key_ptr key;
+;     struct key_type *key;
 ;     unsigned *value;
 ;   };
 ;   struct map_type __attribute__((section(".maps"))) hash_map;
 ; Compilation flag:
 ;   clang -target bpf -O2 -g -S -emit-llvm t.c
 
-%struct.map_type = type { ptr, ptr }
+%struct.map_type = type { %struct.key_type*, i32* }
 %struct.key_type = type { i32, i32 }
 
 @hash_map = dso_local local_unnamed_addr global %struct.map_type zeroinitializer, section ".maps", align 8, !dbg !0

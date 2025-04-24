@@ -6,186 +6,113 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/SCF/Transforms/Patterns.h"
+#include "PassDetail.h"
+#include "mlir/Dialect/SCF/Passes.h"
+#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/Transforms.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include <optional>
 
 using namespace mlir;
 using namespace mlir::scf;
 
 namespace {
-
-/// Flatten the given value ranges into a single vector of values.
-static SmallVector<Value> flattenValues(ArrayRef<ValueRange> values) {
-  SmallVector<Value> result;
-  for (const auto &vals : values)
-    llvm::append_range(result, vals);
-  return result;
-}
-
-/// Assert that the given value range contains a single value and return it.
-static Value getSingleValue(ValueRange values) {
-  assert(values.size() == 1 && "expected single value");
-  return values.front();
-}
-
-// CRTP
-// A base class that takes care of 1:N type conversion, which maps the converted
-// op results (computed by the derived class) and materializes 1:N conversion.
-template <typename SourceOp, typename ConcretePattern>
-class Structural1ToNConversionPattern : public OpConversionPattern<SourceOp> {
+class ConvertForOpTypes : public OpConversionPattern<ForOp> {
 public:
-  using OpConversionPattern<SourceOp>::typeConverter;
-  using OpConversionPattern<SourceOp>::OpConversionPattern;
-  using OneToNOpAdaptor =
-      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor;
-
-  //
-  // Derived classes should provide the following method which performs the
-  // actual conversion. It should return std::nullopt upon conversion failure
-  // and return the converted operation upon success.
-  //
-  // std::optional<SourceOp> convertSourceOp(
-  //     SourceOp op, OneToNOpAdaptor adaptor,
-  //     ConversionPatternRewriter &rewriter,
-  //     TypeRange dstTypes) const;
-
+  using OpConversionPattern::OpConversionPattern;
   LogicalResult
-  matchAndRewrite(SourceOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(ForOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Type> dstTypes;
-    SmallVector<unsigned> offsets;
-    offsets.push_back(0);
-    // Do the type conversion and record the offsets.
-    for (Type type : op.getResultTypes()) {
-      if (failed(typeConverter->convertTypes(type, dstTypes)))
-        return rewriter.notifyMatchFailure(op, "could not convert result type");
-      offsets.push_back(dstTypes.size());
+    SmallVector<Type, 6> newResultTypes;
+    for (auto type : op.getResultTypes()) {
+      Type newType = typeConverter->convertType(type);
+      if (!newType)
+        return rewriter.notifyMatchFailure(op, "not a 1:1 type conversion");
+      newResultTypes.push_back(newType);
     }
 
-    // Calls the actual converter implementation to convert the operation.
-    std::optional<SourceOp> newOp =
-        static_cast<const ConcretePattern *>(this)->convertSourceOp(
-            op, adaptor, rewriter, dstTypes);
-
-    if (!newOp)
-      return rewriter.notifyMatchFailure(op, "could not convert operation");
-
-    // Packs the return value.
-    SmallVector<ValueRange> packedRets;
-    for (unsigned i = 1, e = offsets.size(); i < e; i++) {
-      unsigned start = offsets[i - 1], end = offsets[i];
-      unsigned len = end - start;
-      ValueRange mappedValue = newOp->getResults().slice(start, len);
-      packedRets.push_back(mappedValue);
-    }
-
-    rewriter.replaceOpWithMultiple(op, packedRets);
-    return success();
-  }
-};
-
-class ConvertForOpTypes
-    : public Structural1ToNConversionPattern<ForOp, ConvertForOpTypes> {
-public:
-  using Structural1ToNConversionPattern::Structural1ToNConversionPattern;
-
-  // The callback required by CRTP.
-  std::optional<ForOp> convertSourceOp(ForOp op, OneToNOpAdaptor adaptor,
-                                       ConversionPatternRewriter &rewriter,
-                                       TypeRange dstTypes) const {
-    // Create a empty new op and inline the regions from the old op.
+    // Clone the op without the regions and inline the regions from the old op.
     //
     // This is a little bit tricky. We have two concerns here:
     //
     // 1. We cannot update the op in place because the dialect conversion
     // framework does not track type changes for ops updated in place, so it
     // won't insert appropriate materializations on the changed result types.
-    // PR47938 tracks this issue, but it seems hard to fix. Instead, we need
-    // to clone the op.
+    // PR47938 tracks this issue, but it seems hard to fix. Instead, we need to
+    // clone the op.
     //
-    // 2. We need to resue the original region instead of cloning it, otherwise
-    // the dialect conversion framework thinks that we just inserted all the
-    // cloned child ops. But what we want is to "take" the child regions and let
-    // the dialect conversion framework continue recursively into ops inside
-    // those regions (which are already in its worklist; inlining them into the
-    // new op's regions doesn't remove the child ops from the worklist).
+    // 2. We cannot simply call `op.clone()` to get the cloned op. Besides being
+    // inefficient to recursively clone the regions, there is a correctness
+    // issue: if we clone with the regions, then the dialect conversion
+    // framework thinks that we just inserted all the cloned child ops. But what
+    // we want is to "take" the child regions and let the dialect conversion
+    // framework continue recursively into ops inside those regions (which are
+    // already in its worklist; inlining them into the new op's regions doesn't
+    // remove the child ops from the worklist).
+    ForOp newOp = cast<ForOp>(rewriter.cloneWithoutRegions(*op.getOperation()));
+    // Take the region from the old op and put it in the new op.
+    rewriter.inlineRegionBefore(op.getLoopBody(), newOp.getLoopBody(),
+                                newOp.getLoopBody().end());
 
-    // convertRegionTypes already takes care of 1:N conversion.
-    if (failed(rewriter.convertRegionTypes(&op.getRegion(), *typeConverter)))
-      return std::nullopt;
+    // Now, update all the types.
 
-    // We can not do clone as the number of result types after conversion
-    // might be different.
-    ForOp newOp = rewriter.create<ForOp>(
-        op.getLoc(), getSingleValue(adaptor.getLowerBound()),
-        getSingleValue(adaptor.getUpperBound()),
-        getSingleValue(adaptor.getStep()),
-        flattenValues(adaptor.getInitArgs()));
-
-    // Reserve whatever attributes in the original op.
-    newOp->setAttrs(op->getAttrs());
-
-    // We do not need the empty block created by rewriter.
-    rewriter.eraseBlock(newOp.getBody(0));
-    // Inline the type converted region from the original operation.
-    rewriter.inlineRegionBefore(op.getRegion(), newOp.getRegion(),
-                                newOp.getRegion().end());
-
-    return newOp;
-  }
-};
-} // namespace
-
-namespace {
-class ConvertIfOpTypes
-    : public Structural1ToNConversionPattern<IfOp, ConvertIfOpTypes> {
-public:
-  using Structural1ToNConversionPattern::Structural1ToNConversionPattern;
-
-  std::optional<IfOp> convertSourceOp(IfOp op, OneToNOpAdaptor adaptor,
-                                      ConversionPatternRewriter &rewriter,
-                                      TypeRange dstTypes) const {
-
-    IfOp newOp = rewriter.create<IfOp>(
-        op.getLoc(), dstTypes, getSingleValue(adaptor.getCondition()), true);
-    newOp->setAttrs(op->getAttrs());
-
-    // We do not need the empty blocks created by rewriter.
-    rewriter.eraseBlock(newOp.elseBlock());
-    rewriter.eraseBlock(newOp.thenBlock());
-
-    // Inlines block from the original operation.
-    rewriter.inlineRegionBefore(op.getThenRegion(), newOp.getThenRegion(),
-                                newOp.getThenRegion().end());
-    rewriter.inlineRegionBefore(op.getElseRegion(), newOp.getElseRegion(),
-                                newOp.getElseRegion().end());
-
-    return newOp;
-  }
-};
-} // namespace
-
-namespace {
-class ConvertWhileOpTypes
-    : public Structural1ToNConversionPattern<WhileOp, ConvertWhileOpTypes> {
-public:
-  using Structural1ToNConversionPattern::Structural1ToNConversionPattern;
-
-  std::optional<WhileOp> convertSourceOp(WhileOp op, OneToNOpAdaptor adaptor,
-                                         ConversionPatternRewriter &rewriter,
-                                         TypeRange dstTypes) const {
-    auto newOp = rewriter.create<WhileOp>(op.getLoc(), dstTypes,
-                                          flattenValues(adaptor.getOperands()));
-
-    for (auto i : {0u, 1u}) {
-      if (failed(rewriter.convertRegionTypes(&op.getRegion(i), *typeConverter)))
-        return std::nullopt;
-      auto &dstRegion = newOp.getRegion(i);
-      rewriter.inlineRegionBefore(op.getRegion(i), dstRegion, dstRegion.end());
+    // Convert the type of the entry block of the ForOp's body.
+    if (failed(rewriter.convertRegionTypes(&newOp.getLoopBody(),
+                                           *getTypeConverter()))) {
+      return rewriter.notifyMatchFailure(op, "could not convert body types");
     }
-    return newOp;
+    // Change the clone to use the updated operands. We could have cloned with
+    // a BlockAndValueMapping, but this seems a bit more direct.
+    newOp->setOperands(operands);
+    // Update the result types to the new converted types.
+    for (auto t : llvm::zip(newOp.getResults(), newResultTypes))
+      std::get<0>(t).setType(std::get<1>(t));
+
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
+  }
+};
+} // namespace
+
+namespace {
+class ConvertIfOpTypes : public OpConversionPattern<IfOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(IfOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: Generalize this to any type conversion, not just 1:1.
+    //
+    // We need to implement something more sophisticated here that tracks which
+    // types convert to which other types and does the appropriate
+    // materialization logic.
+    // For example, it's possible that one result type converts to 0 types and
+    // another to 2 types, so newResultTypes would at least be the right size to
+    // not crash in the llvm::zip call below, but then we would set the the
+    // wrong type on the SSA values! These edge cases are also why we cannot
+    // safely use the TypeConverter::convertTypes helper here.
+    SmallVector<Type, 6> newResultTypes;
+    for (auto type : op.getResultTypes()) {
+      Type newType = typeConverter->convertType(type);
+      if (!newType)
+        return rewriter.notifyMatchFailure(op, "not a 1:1 type conversion");
+      newResultTypes.push_back(newType);
+    }
+
+    // See comments in the ForOp pattern for why we clone without regions and
+    // then inline.
+    IfOp newOp = cast<IfOp>(rewriter.cloneWithoutRegions(*op.getOperation()));
+    rewriter.inlineRegionBefore(op.thenRegion(), newOp.thenRegion(),
+                                newOp.thenRegion().end());
+    rewriter.inlineRegionBefore(op.elseRegion(), newOp.elseRegion(),
+                                newOp.elseRegion().end());
+
+    // Update the operands and types.
+    newOp->setOperands(operands);
+    for (auto t : llvm::zip(newOp.getResults(), newResultTypes))
+      std::get<0>(t).setType(std::get<1>(t));
+    rewriter.replaceOp(op, newOp.getResults());
+    return success();
   }
 };
 } // namespace
@@ -198,10 +125,38 @@ class ConvertYieldOpTypes : public OpConversionPattern<scf::YieldOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult
-  matchAndRewrite(scf::YieldOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(scf::YieldOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOpWithNewOp<scf::YieldOp>(
-        op, flattenValues(adaptor.getOperands()));
+    rewriter.replaceOpWithNewOp<scf::YieldOp>(op, operands);
+    return success();
+  }
+};
+} // namespace
+
+namespace {
+class ConvertWhileOpTypes : public OpConversionPattern<WhileOp> {
+public:
+  using OpConversionPattern<WhileOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WhileOp op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *converter = getTypeConverter();
+    assert(converter);
+    SmallVector<Type> newResultTypes;
+    if (failed(converter->convertTypes(op.getResultTypes(), newResultTypes)))
+      return failure();
+
+    WhileOp::Adaptor adaptor(operands);
+    auto newOp = rewriter.create<WhileOp>(op.getLoc(), newResultTypes,
+                                          adaptor.getOperands());
+    for (auto i : {0u, 1u}) {
+      auto &dstRegion = newOp.getRegion(i);
+      rewriter.inlineRegionBefore(op.getRegion(i), dstRegion, dstRegion.end());
+      if (failed(rewriter.convertRegionTypes(&dstRegion, *converter)))
+        return rewriter.notifyMatchFailure(op, "could not convert body types");
+    }
+    rewriter.replaceOp(op, newOp.getResults());
     return success();
   }
 };
@@ -212,24 +167,20 @@ class ConvertConditionOpTypes : public OpConversionPattern<ConditionOp> {
 public:
   using OpConversionPattern<ConditionOp>::OpConversionPattern;
   LogicalResult
-  matchAndRewrite(ConditionOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(ConditionOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.modifyOpInPlace(
-        op, [&]() { op->setOperands(flattenValues(adaptor.getOperands())); });
+    rewriter.updateRootInPlace(op, [&]() { op->setOperands(operands); });
     return success();
   }
 };
 } // namespace
 
-void mlir::scf::populateSCFStructuralTypeConversions(
-    const TypeConverter &typeConverter, RewritePatternSet &patterns) {
+void mlir::scf::populateSCFStructuralTypeConversionsAndLegality(
+    TypeConverter &typeConverter, RewritePatternSet &patterns,
+    ConversionTarget &target) {
   patterns.add<ConvertForOpTypes, ConvertIfOpTypes, ConvertYieldOpTypes,
                ConvertWhileOpTypes, ConvertConditionOpTypes>(
       typeConverter, patterns.getContext());
-}
-
-void mlir::scf::populateSCFStructuralTypeConversionTarget(
-    const TypeConverter &typeConverter, ConversionTarget &target) {
   target.addDynamicallyLegalOp<ForOp, IfOp>([&](Operation *op) {
     return typeConverter.isLegal(op->getResultTypes());
   });
@@ -242,11 +193,4 @@ void mlir::scf::populateSCFStructuralTypeConversionTarget(
   });
   target.addDynamicallyLegalOp<WhileOp, ConditionOp>(
       [&](Operation *op) { return typeConverter.isLegal(op); });
-}
-
-void mlir::scf::populateSCFStructuralTypeConversionsAndLegality(
-    const TypeConverter &typeConverter, RewritePatternSet &patterns,
-    ConversionTarget &target) {
-  populateSCFStructuralTypeConversions(typeConverter, patterns);
-  populateSCFStructuralTypeConversionTarget(typeConverter, target);
 }

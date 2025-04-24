@@ -26,10 +26,10 @@
 #include "clang/Basic/Specifiers.h"
 #include "clang/Sema/Sema.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include <cassert>
-#include <optional>
 #include <utility>
 
 namespace clang {
@@ -117,17 +117,6 @@ public:
     /// @endcode
     AmbiguousReference,
 
-    /// Name lookup results in an ambiguity because multiple placeholder
-    /// variables were found in the same scope.
-    /// @code
-    /// void f() {
-    ///    int _ = 0;
-    ///    int _ = 0;
-    ///    return _; // ambiguous use of placeholder variable
-    /// }
-    /// @endcode
-    AmbiguousReferenceToPlaceholderVariable,
-
     /// Name lookup results in an ambiguity because an entity with a
     /// tag name was hidden by an entity with an ordinary name from
     /// a different context.
@@ -153,30 +142,26 @@ public:
 
   using iterator = UnresolvedSetImpl::iterator;
 
-  LookupResult(
-      Sema &SemaRef, const DeclarationNameInfo &NameInfo,
-      Sema::LookupNameKind LookupKind,
-      RedeclarationKind Redecl = RedeclarationKind::NotForRedeclaration)
+  LookupResult(Sema &SemaRef, const DeclarationNameInfo &NameInfo,
+               Sema::LookupNameKind LookupKind,
+               Sema::RedeclarationKind Redecl = Sema::NotForRedeclaration)
       : SemaPtr(&SemaRef), NameInfo(NameInfo), LookupKind(LookupKind),
-        Redecl(Redecl != RedeclarationKind::NotForRedeclaration),
-        ExternalRedecl(Redecl == RedeclarationKind::ForExternalRedeclaration),
-        DiagnoseAccess(Redecl == RedeclarationKind::NotForRedeclaration),
-        DiagnoseAmbiguous(Redecl == RedeclarationKind::NotForRedeclaration) {
+        Redecl(Redecl != Sema::NotForRedeclaration),
+        ExternalRedecl(Redecl == Sema::ForExternalRedeclaration),
+        Diagnose(Redecl == Sema::NotForRedeclaration) {
     configure();
   }
 
   // TODO: consider whether this constructor should be restricted to take
   // as input a const IdentifierInfo* (instead of Name),
   // forcing other cases towards the constructor taking a DNInfo.
-  LookupResult(
-      Sema &SemaRef, DeclarationName Name, SourceLocation NameLoc,
-      Sema::LookupNameKind LookupKind,
-      RedeclarationKind Redecl = RedeclarationKind::NotForRedeclaration)
+  LookupResult(Sema &SemaRef, DeclarationName Name,
+               SourceLocation NameLoc, Sema::LookupNameKind LookupKind,
+               Sema::RedeclarationKind Redecl = Sema::NotForRedeclaration)
       : SemaPtr(&SemaRef), NameInfo(Name, NameLoc), LookupKind(LookupKind),
-        Redecl(Redecl != RedeclarationKind::NotForRedeclaration),
-        ExternalRedecl(Redecl == RedeclarationKind::ForExternalRedeclaration),
-        DiagnoseAccess(Redecl == RedeclarationKind::NotForRedeclaration),
-        DiagnoseAmbiguous(Redecl == RedeclarationKind::NotForRedeclaration) {
+        Redecl(Redecl != Sema::NotForRedeclaration),
+        ExternalRedecl(Redecl == Sema::ForExternalRedeclaration),
+        Diagnose(Redecl == Sema::NotForRedeclaration) {
     configure();
   }
 
@@ -207,14 +192,12 @@ public:
         Redecl(std::move(Other.Redecl)),
         ExternalRedecl(std::move(Other.ExternalRedecl)),
         HideTags(std::move(Other.HideTags)),
-        DiagnoseAccess(std::move(Other.DiagnoseAccess)),
-        DiagnoseAmbiguous(std::move(Other.DiagnoseAmbiguous)),
+        Diagnose(std::move(Other.Diagnose)),
         AllowHidden(std::move(Other.AllowHidden)),
         Shadowed(std::move(Other.Shadowed)),
         TemplateNameLookup(std::move(Other.TemplateNameLookup)) {
     Other.Paths = nullptr;
-    Other.DiagnoseAccess = false;
-    Other.DiagnoseAmbiguous = false;
+    Other.Diagnose = false;
   }
 
   LookupResult &operator=(LookupResult &&Other) {
@@ -232,22 +215,17 @@ public:
     Redecl = std::move(Other.Redecl);
     ExternalRedecl = std::move(Other.ExternalRedecl);
     HideTags = std::move(Other.HideTags);
-    DiagnoseAccess = std::move(Other.DiagnoseAccess);
-    DiagnoseAmbiguous = std::move(Other.DiagnoseAmbiguous);
+    Diagnose = std::move(Other.Diagnose);
     AllowHidden = std::move(Other.AllowHidden);
     Shadowed = std::move(Other.Shadowed);
     TemplateNameLookup = std::move(Other.TemplateNameLookup);
     Other.Paths = nullptr;
-    Other.DiagnoseAccess = false;
-    Other.DiagnoseAmbiguous = false;
+    Other.Diagnose = false;
     return *this;
   }
 
   ~LookupResult() {
-    if (DiagnoseAccess)
-      diagnoseAccess();
-    if (DiagnoseAmbiguous)
-      diagnoseAmbiguous();
+    if (Diagnose) diagnose();
     if (Paths) deletePaths(Paths);
   }
 
@@ -287,10 +265,9 @@ public:
     return ExternalRedecl;
   }
 
-  RedeclarationKind redeclarationKind() const {
-    return ExternalRedecl ? RedeclarationKind::ForExternalRedeclaration
-           : Redecl       ? RedeclarationKind::ForVisibleRedeclaration
-                          : RedeclarationKind::NotForRedeclaration;
+  Sema::RedeclarationKind redeclarationKind() const {
+    return ExternalRedecl ? Sema::ForExternalRedeclaration :
+           Redecl ? Sema::ForVisibleRedeclaration : Sema::NotForRedeclaration;
   }
 
   /// Specify whether hidden declarations are visible, e.g.,
@@ -342,7 +319,7 @@ public:
   }
 
   LookupResultKind getResultKind() const {
-    assert(checkDebugAssumptions());
+    assert(sanity());
     return ResultKind;
   }
 
@@ -369,39 +346,15 @@ public:
 
   /// Determine whether the given declaration is visible to the
   /// program.
-  static bool isVisible(Sema &SemaRef, NamedDecl *D);
+  static bool isVisible(Sema &SemaRef, NamedDecl *D) {
+    // If this declaration is not hidden, it's visible.
+    if (D->isUnconditionallyVisible())
+      return true;
 
-  static bool isReachable(Sema &SemaRef, NamedDecl *D);
-
-  static bool isAcceptable(Sema &SemaRef, NamedDecl *D,
-                           Sema::AcceptableKind Kind) {
-    return Kind == Sema::AcceptableKind::Visible ? isVisible(SemaRef, D)
-                                                 : isReachable(SemaRef, D);
+    // During template instantiation, we can refer to hidden declarations, if
+    // they were visible in any module along the path of instantiation.
+    return isVisibleSlow(SemaRef, D);
   }
-
-  /// Determine whether this lookup is permitted to see the declaration.
-  /// Note that a reachable but not visible declaration inhabiting a namespace
-  /// is not allowed to be seen during name lookup.
-  ///
-  /// For example:
-  /// ```
-  /// // m.cppm
-  /// export module m;
-  /// struct reachable { int v; }
-  /// export auto func() { return reachable{43}; }
-  /// // Use.cpp
-  /// import m;
-  /// auto Use() {
-  ///   // Not valid. We couldn't see reachable here.
-  ///   // So isAvailableForLookup would return false when we look
-  ///   up 'reachable' here.
-  ///   // return reachable(43).v;
-  ///   // Valid. The field name 'v' is allowed during name lookup.
-  ///   // So isAvailableForLookup would return true when we look up 'v' here.
-  ///   return func().v;
-  /// }
-  /// ```
-  static bool isAvailableForLookup(Sema &SemaRef, NamedDecl *ND);
 
   /// Retrieve the accepted (re)declaration of the given declaration,
   /// if there is one.
@@ -409,16 +362,14 @@ public:
     if (!D->isInIdentifierNamespace(IDNS))
       return nullptr;
 
-    if (isAvailableForLookup(getSema(), D) || isHiddenDeclarationVisible(D))
+    if (isVisible(getSema(), D) || isHiddenDeclarationVisible(D))
       return D;
 
     return getAcceptableDeclSlow(D);
   }
 
 private:
-  static bool isAcceptableSlow(Sema &SemaRef, NamedDecl *D,
-                               Sema::AcceptableKind Kind);
-  static bool isReachableSlow(Sema &SemaRef, NamedDecl *D);
+  static bool isVisibleSlow(Sema &SemaRef, NamedDecl *D);
   NamedDecl *getAcceptableDeclSlow(NamedDecl *D) const;
 
 public:
@@ -499,9 +450,7 @@ public:
   /// Note that while no result was found in the current instantiation,
   /// there were dependent base classes that could not be searched.
   void setNotFoundInCurrentInstantiation() {
-    assert((ResultKind == NotFound ||
-            ResultKind == NotFoundInCurrentInstantiation) &&
-           Decls.empty());
+    assert(ResultKind == NotFound && Decls.empty());
     ResultKind = NotFoundInCurrentInstantiation;
   }
 
@@ -532,7 +481,7 @@ public:
         Paths = nullptr;
       }
     } else {
-      std::optional<AmbiguityKind> SavedAK;
+      llvm::Optional<AmbiguityKind> SavedAK;
       bool WasAmbiguous = false;
       if (ResultKind == Ambiguous) {
         SavedAK = Ambiguity;
@@ -546,7 +495,7 @@ public:
       if (ResultKind == Ambiguous) {
         (void)WasAmbiguous;
         assert(WasAmbiguous);
-        Ambiguity = *SavedAK;
+        Ambiguity = SavedAK.getValue();
       } else if (Paths) {
         deletePaths(Paths);
         Paths = nullptr;
@@ -620,9 +569,9 @@ public:
   }
 
   /// Change this lookup's redeclaration kind.
-  void setRedeclarationKind(RedeclarationKind RK) {
-    Redecl = (RK != RedeclarationKind::NotForRedeclaration);
-    ExternalRedecl = (RK == RedeclarationKind::ForExternalRedeclaration);
+  void setRedeclarationKind(Sema::RedeclarationKind RK) {
+    Redecl = (RK != Sema::NotForRedeclaration);
+    ExternalRedecl = (RK == Sema::ForExternalRedeclaration);
     configure();
   }
 
@@ -632,20 +581,13 @@ public:
   /// Suppress the diagnostics that would normally fire because of this
   /// lookup.  This happens during (e.g.) redeclaration lookups.
   void suppressDiagnostics() {
-    DiagnoseAccess = false;
-    DiagnoseAmbiguous = false;
+    Diagnose = false;
   }
 
-  /// Suppress the diagnostics that would normally fire because of this
-  /// lookup due to access control violations.
-  void suppressAccessDiagnostics() { DiagnoseAccess = false; }
-
-  /// Determines whether this lookup is suppressing access control diagnostics.
-  bool isSuppressingAccessDiagnostics() const { return !DiagnoseAccess; }
-
-  /// Determines whether this lookup is suppressing ambiguous lookup
-  /// diagnostics.
-  bool isSuppressingAmbiguousDiagnostics() const { return !DiagnoseAmbiguous; }
+  /// Determines whether this lookup is suppressing diagnostics.
+  bool isSuppressingDiagnostics() const {
+    return !Diagnose;
+  }
 
   /// Sets a 'context' source range.
   void setContextRange(SourceRange SR) {
@@ -688,15 +630,6 @@ public:
           CalledDone(F.CalledDone) {
       F.CalledDone = true;
     }
-
-    // The move assignment operator is defined as deleted pending
-    // further motivation.
-    Filter &operator=(Filter &&) = delete;
-
-    // The copy constrcutor and copy assignment operator is defined as deleted
-    // pending further motivation.
-    Filter(const Filter &) = delete;
-    Filter &operator=(const Filter &) = delete;
 
     ~Filter() {
       assert(CalledDone &&
@@ -758,15 +691,11 @@ public:
   }
 
 private:
-  void diagnoseAccess() {
-    if (!isAmbiguous() && isClassLookup() &&
-        getSema().getLangOpts().AccessControl)
-      getSema().CheckLookupAccess(*this);
-  }
-
-  void diagnoseAmbiguous() {
+  void diagnose() {
     if (isAmbiguous())
       getSema().DiagnoseAmbiguousLookup(*this);
+    else if (isClassLookup() && getSema().getLangOpts().AccessControl)
+      getSema().CheckLookupAccess(*this);
   }
 
   void setAmbiguous(AmbiguityKind AK) {
@@ -777,9 +706,10 @@ private:
   void addDeclsFromBasePaths(const CXXBasePaths &P);
   void configure();
 
-  bool checkDebugAssumptions() const;
+  // Sanity checks.
+  bool sanity() const;
 
-  bool checkUnresolved() const {
+  bool sanityCheckUnresolved() const {
     for (iterator I = begin(), E = end(); I != E; ++I)
       if (isa<UnresolvedUsingValueDecl>((*I)->getUnderlyingDecl()))
         return true;
@@ -812,8 +742,7 @@ private:
   ///   are present
   bool HideTags = true;
 
-  bool DiagnoseAccess = false;
-  bool DiagnoseAmbiguous = false;
+  bool Diagnose = false;
 
   /// True if we should allow hidden declarations to be 'visible'.
   bool AllowHidden = false;

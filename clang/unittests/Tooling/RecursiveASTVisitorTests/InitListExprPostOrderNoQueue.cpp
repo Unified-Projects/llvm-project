@@ -1,4 +1,4 @@
-//===- InitListExprPostOrderNoQueue.cpp -----------------------------------===//
+//===- unittest/Tooling/RecursiveASTVisitorTests/InitListExprPostOrderNoQueue.cpp -===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,19 +6,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "CRTPTestVisitor.h"
+#include "TestVisitor.h"
 
 using namespace clang;
 
 namespace {
 
 class InitListExprPostOrderNoQueueVisitor
-    : public CRTPExpectedLocationVisitor<InitListExprPostOrderNoQueueVisitor> {
+    : public ExpectedLocationVisitor<InitListExprPostOrderNoQueueVisitor> {
 public:
   bool shouldTraversePostOrder() const { return true; }
 
   bool TraverseInitListExpr(InitListExpr *ILE) {
-    return CRTPExpectedLocationVisitor::TraverseInitListExpr(ILE);
+    return ExpectedLocationVisitor::TraverseInitListExpr(ILE);
   }
 
   bool VisitInitListExpr(InitListExpr *ILE) {

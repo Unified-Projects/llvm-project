@@ -1,8 +1,9 @@
 //===--- TestLexer.h - Format C++ code --------------------------*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -28,7 +29,7 @@
 namespace clang {
 namespace format {
 
-typedef SmallVector<FormatToken *, 8> TokenList;
+typedef llvm::SmallVector<FormatToken *, 8> TokenList;
 
 inline std::ostream &operator<<(std::ostream &Stream, const FormatToken &Tok) {
   Stream << "(" << Tok.Tok.getName() << ", \"" << Tok.TokenText.str() << "\" , "
@@ -37,8 +38,9 @@ inline std::ostream &operator<<(std::ostream &Stream, const FormatToken &Tok) {
 }
 inline std::ostream &operator<<(std::ostream &Stream, const TokenList &Tokens) {
   Stream << "{";
-  for (size_t I = 0, E = Tokens.size(); I != E; ++I)
+  for (size_t I = 0, E = Tokens.size(); I != E; ++I) {
     Stream << (I > 0 ? ", " : "") << *Tokens[I];
+  }
   Stream << "} (" << Tokens.size() << " tokens)";
   return Stream;
 }
@@ -48,7 +50,7 @@ inline TokenList uneof(const TokenList &Tokens) {
   return TokenList(Tokens.begin(), std::prev(Tokens.end()));
 }
 
-inline std::string text(ArrayRef<FormatToken *> Tokens) {
+inline std::string text(llvm::ArrayRef<FormatToken *> Tokens) {
   return std::accumulate(Tokens.begin(), Tokens.end(), std::string(),
                          [](const std::string &R, FormatToken *Tok) {
                            return (R + Tok->TokenText).str();
@@ -63,17 +65,16 @@ public:
       : Allocator(Allocator), Buffers(Buffers), Style(Style),
         SourceMgr("test.cpp", ""), IdentTable(getFormattingLangOpts(Style)) {}
 
-  TokenList lex(StringRef Code) {
+  TokenList lex(llvm::StringRef Code) {
     FormatTokenLexer Lex = getNewLexer(Code);
     ArrayRef<FormatToken *> Result = Lex.lex();
     return TokenList(Result.begin(), Result.end());
   }
 
-  TokenList annotate(StringRef Code) {
+  TokenList annotate(llvm::StringRef Code) {
     FormatTokenLexer Lex = getNewLexer(Code);
     auto Tokens = Lex.lex();
-    UnwrappedLineParser Parser(SourceMgr.get(), Style, Lex.getKeywords(), 0,
-                               Tokens, *this, Allocator, IdentTable);
+    UnwrappedLineParser Parser(Style, Lex.getKeywords(), 0, Tokens, *this);
     Parser.parse();
     TokenAnnotator Annotator(Style, Lex.getKeywords());
     for (auto &Line : UnwrappedLines) {
@@ -85,7 +86,7 @@ public:
     return TokenList(Tokens.begin(), Tokens.end());
   }
 
-  FormatToken *id(StringRef Code) {
+  FormatToken *id(llvm::StringRef Code) {
     auto Result = uneof(lex(Code));
     assert(Result.size() == 1U && "Code must expand to 1 token.");
     return Result[0];
@@ -100,18 +101,18 @@ protected:
   FormatTokenLexer getNewLexer(StringRef Code) {
     Buffers.push_back(
         llvm::MemoryBuffer::getMemBufferCopy(Code, "<scratch space>"));
-    FileID FID =
+    clang::FileID FID =
         SourceMgr.get().createFileID(Buffers.back()->getMemBufferRef());
     return FormatTokenLexer(SourceMgr.get(), FID, 0, Style, Encoding, Allocator,
                             IdentTable);
   }
 
 public:
-  llvm::SpecificBumpPtrAllocator<FormatToken> &Allocator;
-  std::vector<std::unique_ptr<llvm::MemoryBuffer>> &Buffers;
+  llvm::SpecificBumpPtrAllocator<FormatToken>& Allocator;
+  std::vector<std::unique_ptr<llvm::MemoryBuffer>>& Buffers;
   FormatStyle Style;
   encoding::Encoding Encoding = encoding::Encoding_UTF8;
-  SourceManagerForFile SourceMgr;
+  clang::SourceManagerForFile SourceMgr;
   IdentifierTable IdentTable;
   SmallVector<UnwrappedLine, 16> UnwrappedLines;
 };

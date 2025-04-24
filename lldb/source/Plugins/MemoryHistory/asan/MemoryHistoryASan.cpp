@@ -15,12 +15,12 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginInterface.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Core/ValueObject.h"
 #include "lldb/Expression/UserExpression.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Target/ThreadList.h"
-#include "lldb/ValueObject/ValueObject.h"
 #include "lldb/lldb-private.h"
 
 #include <sstream>
@@ -56,6 +56,11 @@ void MemoryHistoryASan::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
 }
 
+ConstString MemoryHistoryASan::GetPluginNameStatic() {
+  static ConstString g_name("asan");
+  return g_name;
+}
+
 MemoryHistoryASan::MemoryHistoryASan(const ProcessSP &process_sp) {
   if (process_sp)
     m_process_wp = process_sp;
@@ -67,19 +72,21 @@ const char *memory_history_asan_command_prefix = R"(
         size_t __asan_get_alloc_stack(void *addr, void **trace, size_t size, int *thread_id);
         size_t __asan_get_free_stack(void *addr, void **trace, size_t size, int *thread_id);
     }
+
+    struct data {
+        void *alloc_trace[256];
+        size_t alloc_count;
+        int alloc_tid;
+        
+        void *free_trace[256];
+        size_t free_count;
+        int free_tid;
+    };
 )";
 
 const char *memory_history_asan_command_format =
     R"(
-    struct {
-        void *alloc_trace[256];
-        size_t alloc_count;
-        int alloc_tid;
-
-        void *free_trace[256];
-        size_t free_count;
-        int free_tid;
-    } t;
+    data t;
 
     t.alloc_count = __asan_get_alloc_stack((void *)0x%)" PRIx64
     R"(, t.alloc_trace, 256, &t.alloc_tid);
@@ -107,7 +114,7 @@ static void CreateHistoryThreadFromValueObject(ProcessSP process_sp,
     return;
 
   int count = count_sp->GetValueAsUnsigned(0);
-  lldb::tid_t tid = tid_sp->GetValueAsUnsigned(0) + 1;
+  tid_t tid = tid_sp->GetValueAsUnsigned(0) + 1;
 
   if (count <= 0)
     return;
@@ -120,7 +127,7 @@ static void CreateHistoryThreadFromValueObject(ProcessSP process_sp,
 
   std::vector<lldb::addr_t> pcs;
   for (int i = 0; i < count; i++) {
-    addr_t pc = trace_sp->GetChildAtIndex(i)->GetValueAsUnsigned(0);
+    addr_t pc = trace_sp->GetChildAtIndex(i, true)->GetValueAsUnsigned(0);
     if (pc == 0 || pc == 1 || pc == LLDB_INVALID_ADDRESS)
       continue;
     pcs.push_back(pc);
@@ -154,14 +161,14 @@ HistoryThreads MemoryHistoryASan::GetHistoryThreads(lldb::addr_t address) {
   if (!thread_sp)
     return result;
 
-  StackFrameSP frame_sp =
-      thread_sp->GetSelectedFrame(DoNoSelectMostRelevantFrame);
+  StackFrameSP frame_sp = thread_sp->GetSelectedFrame();
   if (!frame_sp)
     return result;
 
   ExecutionContext exe_ctx(frame_sp);
   ValueObjectSP return_value_sp;
   StreamString expr;
+  Status eval_error;
   expr.Printf(memory_history_asan_command_format, address, address);
 
   EvaluateExpressionOptions options;
@@ -175,14 +182,11 @@ HistoryThreads MemoryHistoryASan::GetHistoryThreads(lldb::addr_t address) {
   options.SetLanguage(eLanguageTypeObjC_plus_plus);
 
   ExpressionResults expr_result = UserExpression::Evaluate(
-      exe_ctx, options, expr.GetString(), "", return_value_sp);
+      exe_ctx, options, expr.GetString(), "", return_value_sp, eval_error);
   if (expr_result != eExpressionCompleted) {
-    StreamString ss;
-    ss << "cannot evaluate AddressSanitizer expression:\n";
-    if (return_value_sp)
-      ss << return_value_sp->GetError().AsCString();
-    Debugger::ReportWarning(ss.GetString().str(),
-                            process_sp->GetTarget().GetDebugger().GetID());
+    process_sp->GetTarget().GetDebugger().GetAsyncOutputStream()->Printf(
+        "Warning: Cannot evaluate AddressSanitizer expression:\n%s\n",
+        eval_error.AsCString());
     return result;
   }
 

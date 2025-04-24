@@ -1,4 +1,3 @@
-// UNSUPPORTED: target={{.*}}-zos{{.*}}, target={{.*}}-aix{{.*}}
 // RUN: rm -rf %t
 // Test that only forward declarations are emitted for types defined in modules.
 
@@ -75,8 +74,7 @@ int foo(ObjCClass *c) {
 
 // CHECK: !DICompositeType(tag: DW_TAG_structure_type, name: "ObjCClass",
 // CHECK-SAME:             scope: ![[MOD]],
-// CHECK-SAME:             flags: DIFlagFwdDecl,
-// CHECK-SAME:             runtimeLang: DW_LANG_ObjC)
+// CHECK-SAME:             flags: DIFlagFwdDecl)
 
 // CHECK-NOT: !DICompositeType(tag: DW_TAG_structure_type,
 // CHECK: !DICompositeType(tag: DW_TAG_enumeration_type,

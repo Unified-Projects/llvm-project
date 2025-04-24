@@ -12,6 +12,8 @@
 
 #include "clang/Serialization/PCHContainerOperations.h"
 #include "clang/AST/ASTConsumer.h"
+#include "clang/Lex/ModuleLoader.h"
+#include "llvm/Bitstream/BitstreamReader.h"
 #include "llvm/Support/raw_ostream.h"
 #include <utility>
 
@@ -53,11 +55,6 @@ std::unique_ptr<ASTConsumer> RawPCHContainerWriter::CreatePCHContainerGenerator(
     const std::string &OutputFileName, std::unique_ptr<llvm::raw_pwrite_stream> OS,
     std::shared_ptr<PCHBuffer> Buffer) const {
   return std::make_unique<RawPCHContainerGenerator>(std::move(OS), Buffer);
-}
-
-ArrayRef<llvm::StringRef> RawPCHContainerReader::getFormats() const {
-  static StringRef Raw("raw");
-  return ArrayRef(Raw);
 }
 
 StringRef

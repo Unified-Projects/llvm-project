@@ -5,17 +5,15 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-///
-/// \file
-/// This file defines the StringMap class.
-///
+//
+// This file defines the StringMap class.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ADT_STRINGMAP_H
 #define LLVM_ADT_STRINGMAP_H
 
 #include "llvm/ADT/StringMapEntry.h"
-#include "llvm/ADT/iterator.h"
 #include "llvm/Support/AllocatorBase.h"
 #include "llvm/Support/PointerLikeTypeTraits.h"
 #include <initializer_list>
@@ -53,7 +51,6 @@ protected:
   }
 
   StringMapImpl(unsigned InitSize, unsigned ItemSize);
-  ~StringMapImpl() { free(TheTable); }
   unsigned RehashTable(unsigned BucketNo = 0);
 
   /// LookupBucketFor - Look up the bucket that the specified string should end
@@ -61,20 +58,12 @@ protected:
   /// specified bucket will be non-null.  Otherwise, it will be null.  In either
   /// case, the FullHashValue field of the bucket will be set to the hash value
   /// of the string.
-  unsigned LookupBucketFor(StringRef Key) {
-    return LookupBucketFor(Key, hash(Key));
-  }
-
-  /// Overload that explicitly takes precomputed hash(Key).
-  unsigned LookupBucketFor(StringRef Key, uint32_t FullHashValue);
+  unsigned LookupBucketFor(StringRef Key);
 
   /// FindKey - Look up the bucket that contains the specified key. If it exists
   /// in the map, return the bucket number of the key.  Otherwise return -1.
   /// This does not modify the map.
-  int FindKey(StringRef Key) const { return FindKey(Key, hash(Key)); }
-
-  /// Overload that explicitly takes precomputed hash(Key).
-  int FindKey(StringRef Key, uint32_t FullHashValue) const;
+  int FindKey(StringRef Key) const;
 
   /// RemoveKey - Remove the specified StringMapEntry from the table, but do not
   /// delete it.  This aborts if the value isn't in the table.
@@ -103,13 +92,6 @@ public:
   bool empty() const { return NumItems == 0; }
   unsigned size() const { return NumItems; }
 
-  /// Returns the hash value that will be used for the given string.
-  /// This allows precomputing the value and passing it explicitly
-  /// to some of the functions.
-  /// The implementation of this function is not guaranteed to be stable
-  /// and may change.
-  static uint32_t hash(StringRef Key);
-
   void swap(StringMapImpl &Other) {
     std::swap(TheTable, Other.TheTable);
     std::swap(NumBuckets, Other.NumBuckets);
@@ -123,10 +105,8 @@ public:
 /// funky memory allocation and hashing things to make it extremely efficient,
 /// storing the string data *after* the value in the map.
 template <typename ValueTy, typename AllocatorTy = MallocAllocator>
-class LLVM_ALLOCATORHOLDER_EMPTYBASE StringMap
-    : public StringMapImpl,
-      private detail::AllocatorHolder<AllocatorTy> {
-  using AllocTy = detail::AllocatorHolder<AllocatorTy>;
+class StringMap : public StringMapImpl {
+  AllocatorTy Allocator;
 
 public:
   using MapEntryTy = StringMapEntry<ValueTy>;
@@ -137,23 +117,26 @@ public:
       : StringMapImpl(InitialSize, static_cast<unsigned>(sizeof(MapEntryTy))) {}
 
   explicit StringMap(AllocatorTy A)
-      : StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))), AllocTy(A) {}
+      : StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))), Allocator(A) {
+  }
 
   StringMap(unsigned InitialSize, AllocatorTy A)
       : StringMapImpl(InitialSize, static_cast<unsigned>(sizeof(MapEntryTy))),
-        AllocTy(A) {}
+        Allocator(A) {}
 
   StringMap(std::initializer_list<std::pair<StringRef, ValueTy>> List)
       : StringMapImpl(List.size(), static_cast<unsigned>(sizeof(MapEntryTy))) {
-    insert(List);
+    for (const auto &P : List) {
+      insert(P);
+    }
   }
 
   StringMap(StringMap &&RHS)
-      : StringMapImpl(std::move(RHS)), AllocTy(std::move(RHS.getAllocator())) {}
+      : StringMapImpl(std::move(RHS)), Allocator(std::move(RHS.Allocator)) {}
 
   StringMap(const StringMap &RHS)
       : StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))),
-        AllocTy(RHS.getAllocator()) {
+        Allocator(RHS.Allocator) {
     if (RHS.empty())
       return;
 
@@ -172,8 +155,8 @@ public:
         continue;
       }
 
-      TheTable[I] = MapEntryTy::create(
-          static_cast<MapEntryTy *>(Bucket)->getKey(), getAllocator(),
+      TheTable[I] = MapEntryTy::Create(
+          static_cast<MapEntryTy *>(Bucket)->getKey(), Allocator,
           static_cast<MapEntryTy *>(Bucket)->getValue());
       HashTable[I] = RHSHashTable[I];
     }
@@ -188,7 +171,7 @@ public:
 
   StringMap &operator=(StringMap RHS) {
     StringMapImpl::swap(RHS);
-    std::swap(getAllocator(), RHS.getAllocator());
+    std::swap(Allocator, RHS.Allocator);
     return *this;
   }
 
@@ -200,13 +183,15 @@ public:
       for (unsigned I = 0, E = NumBuckets; I != E; ++I) {
         StringMapEntryBase *Bucket = TheTable[I];
         if (Bucket && Bucket != getTombstoneVal()) {
-          static_cast<MapEntryTy *>(Bucket)->Destroy(getAllocator());
+          static_cast<MapEntryTy *>(Bucket)->Destroy(Allocator);
         }
       }
     }
+    free(TheTable);
   }
 
-  using AllocTy::getAllocator;
+  AllocatorTy &getAllocator() { return Allocator; }
+  const AllocatorTy &getAllocator() const { return Allocator; }
 
   using key_type = const char *;
   using mapped_type = ValueTy;
@@ -230,19 +215,15 @@ public:
                       StringMapKeyIterator<ValueTy>(end()));
   }
 
-  iterator find(StringRef Key) { return find(Key, hash(Key)); }
-
-  iterator find(StringRef Key, uint32_t FullHashValue) {
-    int Bucket = FindKey(Key, FullHashValue);
+  iterator find(StringRef Key) {
+    int Bucket = FindKey(Key);
     if (Bucket == -1)
       return end();
     return iterator(TheTable + Bucket, true);
   }
 
-  const_iterator find(StringRef Key) const { return find(Key, hash(Key)); }
-
-  const_iterator find(StringRef Key, uint32_t FullHashValue) const {
-    int Bucket = FindKey(Key, FullHashValue);
+  const_iterator find(StringRef Key) const {
+    int Bucket = FindKey(Key);
     if (Bucket == -1)
       return end();
     return const_iterator(TheTable + Bucket, true);
@@ -251,29 +232,18 @@ public:
   /// lookup - Return the entry for the specified key, or a default
   /// constructed value if no such entry exists.
   ValueTy lookup(StringRef Key) const {
-    const_iterator Iter = find(Key);
-    if (Iter != end())
-      return Iter->second;
+    const_iterator it = find(Key);
+    if (it != end())
+      return it->second;
     return ValueTy();
-  }
-
-  /// at - Return the entry for the specified key, or abort if no such
-  /// entry exists.
-  const ValueTy &at(StringRef Val) const {
-    auto Iter = this->find(std::move(Val));
-    assert(Iter != this->end() && "StringMap::at failed due to a missing key");
-    return Iter->second;
   }
 
   /// Lookup the ValueTy for the \p Key, or create a default constructed value
   /// if the key is not in the map.
   ValueTy &operator[](StringRef Key) { return try_emplace(Key).first->second; }
 
-  /// contains - Return true if the element is in the map, false otherwise.
-  bool contains(StringRef Key) const { return find(Key) != end(); }
-
   /// count - Return 1 if the element is in the map, 0 otherwise.
-  size_type count(StringRef Key) const { return contains(Key) ? 1 : 0; }
+  size_type count(StringRef Key) const { return find(Key) == end() ? 0 : 1; }
 
   template <typename InputTy>
   size_type count(const StringMapEntry<InputTy> &MapEntry) const {
@@ -291,10 +261,8 @@ public:
       if (FindInRHS == RHS.end())
         return false;
 
-      if constexpr (!std::is_same_v<ValueTy, std::nullopt_t>) {
-        if (!(KeyValue.getValue() == FindInRHS->getValue()))
-          return false;
-      }
+      if (!(KeyValue.getValue() == FindInRHS->getValue()))
+        return false;
     }
 
     return true;
@@ -326,28 +294,7 @@ public:
   /// if and only if the insertion takes place, and the iterator component of
   /// the pair points to the element with key equivalent to the key of the pair.
   std::pair<iterator, bool> insert(std::pair<StringRef, ValueTy> KV) {
-    return try_emplace_with_hash(KV.first, hash(KV.first),
-                                 std::move(KV.second));
-  }
-
-  std::pair<iterator, bool> insert(std::pair<StringRef, ValueTy> KV,
-                                   uint32_t FullHashValue) {
-    return try_emplace_with_hash(KV.first, FullHashValue, std::move(KV.second));
-  }
-
-  /// Inserts elements from range [first, last). If multiple elements in the
-  /// range have keys that compare equivalent, it is unspecified which element
-  /// is inserted .
-  template <typename InputIt> void insert(InputIt First, InputIt Last) {
-    for (InputIt It = First; It != Last; ++It)
-      insert(*It);
-  }
-
-  ///  Inserts elements from initializer list ilist. If multiple elements in
-  /// the range have keys that compare equivalent, it is unspecified which
-  /// element is inserted
-  void insert(std::initializer_list<std::pair<StringRef, ValueTy>> List) {
-    insert(List.begin(), List.end());
+    return try_emplace(KV.first, std::move(KV.second));
   }
 
   /// Inserts an element or assigns to the current element if the key already
@@ -365,15 +312,8 @@ public:
   /// if and only if the insertion takes place, and the iterator component of
   /// the pair points to the element with key equivalent to the key of the pair.
   template <typename... ArgsTy>
-  std::pair<iterator, bool> try_emplace(StringRef Key, ArgsTy &&...Args) {
-    return try_emplace_with_hash(Key, hash(Key), std::forward<ArgsTy>(Args)...);
-  }
-
-  template <typename... ArgsTy>
-  std::pair<iterator, bool> try_emplace_with_hash(StringRef Key,
-                                                  uint32_t FullHashValue,
-                                                  ArgsTy &&...Args) {
-    unsigned BucketNo = LookupBucketFor(Key, FullHashValue);
+  std::pair<iterator, bool> try_emplace(StringRef Key, ArgsTy &&... Args) {
+    unsigned BucketNo = LookupBucketFor(Key);
     StringMapEntryBase *&Bucket = TheTable[BucketNo];
     if (Bucket && Bucket != getTombstoneVal())
       return std::make_pair(iterator(TheTable + BucketNo, false),
@@ -381,8 +321,7 @@ public:
 
     if (Bucket == getTombstoneVal())
       --NumTombstones;
-    Bucket =
-        MapEntryTy::create(Key, getAllocator(), std::forward<ArgsTy>(Args)...);
+    Bucket = MapEntryTy::Create(Key, Allocator, std::forward<ArgsTy>(Args)...);
     ++NumItems;
     assert(NumItems + NumTombstones <= NumBuckets);
 
@@ -400,7 +339,7 @@ public:
     for (unsigned I = 0, E = NumBuckets; I != E; ++I) {
       StringMapEntryBase *&Bucket = TheTable[I];
       if (Bucket && Bucket != getTombstoneVal()) {
-        static_cast<MapEntryTy *>(Bucket)->Destroy(getAllocator());
+        static_cast<MapEntryTy *>(Bucket)->Destroy(Allocator);
       }
       Bucket = nullptr;
     }
@@ -416,7 +355,7 @@ public:
   void erase(iterator I) {
     MapEntryTy &V = *I;
     remove(&V);
-    V.Destroy(getAllocator());
+    V.Destroy(Allocator);
   }
 
   bool erase(StringRef Key) {
@@ -526,7 +465,13 @@ public:
   explicit StringMapKeyIterator(StringMapConstIterator<ValueTy> Iter)
       : base(std::move(Iter)) {}
 
-  StringRef operator*() const { return this->wrapped()->getKey(); }
+  StringRef &operator*() {
+    Key = this->wrapped()->getKey();
+    return Key;
+  }
+
+private:
+  StringRef Key;
 };
 
 } // end namespace llvm

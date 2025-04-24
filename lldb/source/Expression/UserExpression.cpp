@@ -6,15 +6,20 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lldb/Host/Config.h"
+
 #include <cstdio>
+#if HAVE_SYS_TYPES_H
 #include <sys/types.h>
+#endif
 
 #include <cstdlib>
 #include <map>
 #include <string>
 
 #include "lldb/Core/Module.h"
-#include "lldb/Core/Progress.h"
+#include "lldb/Core/StreamFile.h"
+#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/Expression/DiagnosticManager.h"
 #include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Expression/IRExecutionUnit.h"
@@ -35,12 +40,9 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/ThreadPlan.h"
 #include "lldb/Target/ThreadPlanCallUserExpression.h"
-#include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/Utility/State.h"
 #include "lldb/Utility/StreamString.h"
-#include "lldb/ValueObject/ValueObjectConstResult.h"
-#include "llvm/BinaryFormat/Dwarf.h"
 
 using namespace lldb_private;
 
@@ -48,7 +50,8 @@ char UserExpression::ID;
 
 UserExpression::UserExpression(ExecutionContextScope &exe_scope,
                                llvm::StringRef expr, llvm::StringRef prefix,
-                               SourceLanguage language, ResultType desired_type,
+                               lldb::LanguageType language,
+                               ResultType desired_type,
                                const EvaluateExpressionOptions &options)
     : Expression(exe_scope), m_expr_text(std::string(expr)),
       m_expr_prefix(std::string(prefix)), m_language(language),
@@ -98,33 +101,28 @@ bool UserExpression::MatchesContext(ExecutionContext &exe_ctx) {
   return LockAndCheckContext(exe_ctx, target_sp, process_sp, frame_sp);
 }
 
-lldb::ValueObjectSP UserExpression::GetObjectPointerValueObject(
-    lldb::StackFrameSP frame_sp, llvm::StringRef object_name, Status &err) {
+lldb::addr_t UserExpression::GetObjectPointer(lldb::StackFrameSP frame_sp,
+                                              ConstString &object_name,
+                                              Status &err) {
   err.Clear();
 
   if (!frame_sp) {
-    err = Status::FromErrorStringWithFormatv(
-        "Couldn't load '{0}' because the context is incomplete", object_name);
-    return {};
+    err.SetErrorStringWithFormat(
+        "Couldn't load '%s' because the context is incomplete",
+        object_name.AsCString());
+    return LLDB_INVALID_ADDRESS;
   }
 
   lldb::VariableSP var_sp;
   lldb::ValueObjectSP valobj_sp;
 
-  return frame_sp->GetValueForVariableExpressionPath(
-      object_name, lldb::eNoDynamicValues,
+  valobj_sp = frame_sp->GetValueForVariableExpressionPath(
+      object_name.GetStringRef(), lldb::eNoDynamicValues,
       StackFrame::eExpressionPathOptionCheckPtrVsMember |
           StackFrame::eExpressionPathOptionsNoFragileObjcIvar |
           StackFrame::eExpressionPathOptionsNoSyntheticChildren |
           StackFrame::eExpressionPathOptionsNoSyntheticArrayRange,
       var_sp, err);
-}
-
-lldb::addr_t UserExpression::GetObjectPointer(lldb::StackFrameSP frame_sp,
-                                              llvm::StringRef object_name,
-                                              Status &err) {
-  auto valobj_sp =
-      GetObjectPointerValueObject(std::move(frame_sp), object_name, err);
 
   if (!err.Success() || !valobj_sp.get())
     return LLDB_INVALID_ADDRESS;
@@ -132,9 +130,9 @@ lldb::addr_t UserExpression::GetObjectPointer(lldb::StackFrameSP frame_sp,
   lldb::addr_t ret = valobj_sp->GetValueAsUnsigned(LLDB_INVALID_ADDRESS);
 
   if (ret == LLDB_INVALID_ADDRESS) {
-    err = Status::FromErrorStringWithFormatv(
-        "Couldn't load '{0}' because its value couldn't be evaluated",
-        object_name);
+    err.SetErrorStringWithFormat(
+        "Couldn't load '%s' because its value couldn't be evaluated",
+        object_name.AsCString());
     return LLDB_INVALID_ADDRESS;
   }
 
@@ -145,74 +143,48 @@ lldb::ExpressionResults
 UserExpression::Evaluate(ExecutionContext &exe_ctx,
                          const EvaluateExpressionOptions &options,
                          llvm::StringRef expr, llvm::StringRef prefix,
-                         lldb::ValueObjectSP &result_valobj_sp,
+                         lldb::ValueObjectSP &result_valobj_sp, Status &error,
                          std::string *fixed_expression, ValueObject *ctx_obj) {
-  Log *log(GetLog(LLDBLog::Expressions | LLDBLog::Step));
-  auto set_error = [&](Status error) {
-    result_valobj_sp = ValueObjectConstResult::Create(
-        exe_ctx.GetBestExecutionContextScope(), std::move(error));
-  };
+  Log *log(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_EXPRESSIONS |
+                                                  LIBLLDB_LOG_STEP));
 
   if (ctx_obj) {
-    static unsigned const ctx_type_mask = lldb::TypeFlags::eTypeIsClass |
-                                          lldb::TypeFlags::eTypeIsStructUnion |
-                                          lldb::TypeFlags::eTypeIsReference;
+    static unsigned const ctx_type_mask =
+        lldb::TypeFlags::eTypeIsClass | lldb::TypeFlags::eTypeIsStructUnion;
     if (!(ctx_obj->GetTypeInfo() & ctx_type_mask)) {
       LLDB_LOG(log, "== [UserExpression::Evaluate] Passed a context object of "
                     "an invalid type, can't run expressions.");
-      set_error(Status("a context object of an invalid type passed"));
+      error.SetErrorString("a context object of an invalid type passed");
       return lldb::eExpressionSetupError;
     }
-  }
-
-  if (ctx_obj && ctx_obj->GetTypeInfo() & lldb::TypeFlags::eTypeIsReference) {
-    Status error;
-    lldb::ValueObjectSP deref_ctx_sp = ctx_obj->Dereference(error);
-    if (!error.Success()) {
-      LLDB_LOG(log, "== [UserExpression::Evaluate] Passed a context object of "
-                    "a reference type that can't be dereferenced, can't run "
-                    "expressions.");
-      set_error(Status(
-          "passed context object of an reference type cannot be deferenced"));
-      return lldb::eExpressionSetupError;
-    }
-
-    ctx_obj = deref_ctx_sp.get();
   }
 
   lldb_private::ExecutionPolicy execution_policy = options.GetExecutionPolicy();
-  SourceLanguage language = options.GetLanguage();
+  lldb::LanguageType language = options.GetLanguage();
   const ResultType desired_type = options.DoesCoerceToId()
                                       ? UserExpression::eResultTypeId
                                       : UserExpression::eResultTypeAny;
+  lldb::ExpressionResults execution_results = lldb::eExpressionSetupError;
+
   Target *target = exe_ctx.GetTargetPtr();
   if (!target) {
     LLDB_LOG(log, "== [UserExpression::Evaluate] Passed a NULL target, can't "
                   "run expressions.");
-    set_error(Status("expression passed a null target"));
+    error.SetErrorString("expression passed a null target");
     return lldb::eExpressionSetupError;
   }
 
   Process *process = exe_ctx.GetProcessPtr();
 
-  if (!process && execution_policy == eExecutionPolicyAlways) {
-    LLDB_LOG(log, "== [UserExpression::Evaluate] No process, but the policy is "
-                  "eExecutionPolicyAlways");
+  if (process == nullptr || process->GetState() != lldb::eStateStopped) {
+    if (execution_policy == eExecutionPolicyAlways) {
+      LLDB_LOG(log, "== [UserExpression::Evaluate] Expression may not run, but "
+                    "is not constant ==");
 
-    set_error(Status("expression needed to run but couldn't: no process"));
+      error.SetErrorString("expression needed to run but couldn't");
 
-    return lldb::eExpressionSetupError;
-  }
-
-  // Since we might need to allocate memory, we need to be stopped to run
-  // an expression.
-  if (process && process->GetState() != lldb::eStateStopped) {
-    set_error(Status::FromErrorStringWithFormatv(
-        "unable to evaluate expression while the process is {0}: the process "
-        "must be stopped because the expression might require allocating "
-        "memory.",
-        StateAsCString(process->GetState())));
-    return lldb::eExpressionSetupError;
+      return execution_results;
+    }
   }
 
   // Explicitly force the IR interpreter to evaluate the expression when the
@@ -245,21 +217,20 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
   // If the language was not specified in the expression command, set it to the
   // language in the target's properties if specified, else default to the
   // langage for the frame.
-  if (!language) {
+  if (language == lldb::eLanguageTypeUnknown) {
     if (target->GetLanguage() != lldb::eLanguageTypeUnknown)
       language = target->GetLanguage();
     else if (StackFrame *frame = exe_ctx.GetFramePtr())
       language = frame->GetLanguage();
   }
 
-  Status error;
   lldb::UserExpressionSP user_expression_sp(
-      target->GetUserExpressionForLanguage(
-          expr, full_prefix, language, desired_type, options, ctx_obj, error));
-  if (error.Fail() || !user_expression_sp) {
+      target->GetUserExpressionForLanguage(expr, full_prefix, language,
+                                           desired_type, options, ctx_obj,
+                                           error));
+  if (error.Fail()) {
     LLDB_LOG(log, "== [UserExpression::Evaluate] Getting expression: {0} ==",
              error.AsCString());
-    set_error(std::move(error));
     return lldb::eExpressionSetupError;
   }
 
@@ -270,7 +241,9 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
   const bool generate_debug_info = options.GetGenerateDebugInfo();
 
   if (options.InvokeCancelCallback(lldb::eExpressionEvaluationParse)) {
-    set_error(Status("expression interrupted by callback before parse"));
+    error.SetErrorString("expression interrupted by callback before parse");
+    result_valobj_sp = ValueObjectConstResult::Create(
+        exe_ctx.GetBestExecutionContextScope(), error);
     return lldb::eExpressionInterrupted;
   }
 
@@ -285,8 +258,9 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
   if (fixed_expression == nullptr)
     fixed_expression = &tmp_fixed_expression;
 
-  *fixed_expression = user_expression_sp->GetFixedText().str();
-  lldb::ExpressionResults execution_results = lldb::eExpressionSetupError;
+  const char *fixed_text = user_expression_sp->GetFixedText();
+  if (fixed_text != nullptr)
+    fixed_expression->append(fixed_text);
 
   // If there is a fixed expression, try to parse it:
   if (!parse_success) {
@@ -295,7 +269,8 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
     user_expression_sp.reset();
 
     execution_results = lldb::eExpressionParseError;
-    if (!fixed_expression->empty() && options.GetAutoApplyFixIts()) {
+    if (fixed_expression && !fixed_expression->empty() &&
+        options.GetAutoApplyFixIts()) {
       const uint64_t max_fix_retries = options.GetRetriesWithFixIts();
       for (uint64_t i = 0; i < max_fix_retries; ++i) {
         // Try parsing the fixed expression.
@@ -303,8 +278,6 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
             target->GetUserExpressionForLanguage(
                 fixed_expression->c_str(), full_prefix, language, desired_type,
                 options, ctx_obj, error));
-        if (!fixed_expression_sp)
-          break;
         DiagnosticManager fixed_diagnostic_manager;
         parse_success = fixed_expression_sp->Parse(
             fixed_diagnostic_manager, exe_ctx, execution_policy,
@@ -313,35 +286,35 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
           diagnostic_manager.Clear();
           user_expression_sp = fixed_expression_sp;
           break;
-        }
-        // The fixed expression also didn't parse. Let's check for any new
-        // fixits we could try.
-        if (!fixed_expression_sp->GetFixedText().empty()) {
-          *fixed_expression = fixed_expression_sp->GetFixedText().str();
         } else {
-          // Fixed expression didn't compile without a fixit, don't retry and
-          // don't tell the user about it.
-          fixed_expression->clear();
-          break;
+          // The fixed expression also didn't parse. Let's check for any new
+          // Fix-Its we could try.
+          if (fixed_expression_sp->GetFixedText()) {
+            *fixed_expression = fixed_expression_sp->GetFixedText();
+          } else {
+            // Fixed expression didn't compile without a fixit, don't retry and
+            // don't tell the user about it.
+            fixed_expression->clear();
+            break;
+          }
         }
       }
     }
 
     if (!parse_success) {
-      if (target->GetEnableNotifyAboutFixIts() && fixed_expression &&
-          !fixed_expression->empty()) {
-        std::string fixit =
-            "fixed expression suggested:\n  " + *fixed_expression;
-        diagnostic_manager.AddDiagnostic(fixit, lldb::eSeverityInfo,
-                                         eDiagnosticOriginLLDB);
+      std::string msg;
+      {
+        llvm::raw_string_ostream os(msg);
+        os << "expression failed to parse:\n";
+        if (!diagnostic_manager.Diagnostics().empty())
+          os << diagnostic_manager.GetString();
+        else
+          os << "unknown error";
+        if (target->GetEnableNotifyAboutFixIts() && fixed_expression &&
+            !fixed_expression->empty())
+          os << "\nfixed expression suggested:\n  " << *fixed_expression;
       }
-      if (diagnostic_manager.Diagnostics().empty())
-        error = Status::FromError(llvm::make_error<ExpressionError>(
-            execution_results,
-            "expression failed to parse (no further compiler diagnostics)"));
-      else
-        error =
-            Status::FromError(diagnostic_manager.GetAsError(execution_results));
+      error.SetExpressionError(execution_results, msg.c_str());
     }
   }
 
@@ -353,18 +326,19 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
       LLDB_LOG(log, "== [UserExpression::Evaluate] Expression may not run, but "
                     "is not constant ==");
 
-      if (diagnostic_manager.Diagnostics().empty())
-        error = Status::FromError(llvm::make_error<ExpressionError>(
-            lldb::eExpressionSetupError,
-            "expression needed to run but couldn't"));
+      if (!diagnostic_manager.Diagnostics().size())
+        error.SetExpressionError(lldb::eExpressionSetupError,
+                                 "expression needed to run but couldn't");
     } else if (execution_policy == eExecutionPolicyTopLevel) {
-      set_error(Status(UserExpression::kNoResult, lldb::eErrorTypeGeneric));
+      error.SetError(UserExpression::kNoResult, lldb::eErrorTypeGeneric);
       return lldb::eExpressionCompleted;
     } else {
       if (options.InvokeCancelCallback(lldb::eExpressionEvaluationExecution)) {
-        set_error(Status::FromError(llvm::make_error<ExpressionError>(
+        error.SetExpressionError(
             lldb::eExpressionInterrupted,
-            "expression interrupted by callback before execution")));
+            "expression interrupted by callback before execution");
+        result_valobj_sp = ValueObjectConstResult::Create(
+            exe_ctx.GetBestExecutionContextScope(), error);
         return lldb::eExpressionInterrupted;
       }
 
@@ -380,18 +354,16 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
         LLDB_LOG(log, "== [UserExpression::Evaluate] Execution completed "
                       "abnormally ==");
 
-        if (diagnostic_manager.Diagnostics().empty())
-          error = Status::FromError(llvm::make_error<ExpressionError>(
-              execution_results,
-              "expression failed to execute, unknown error"));
+        if (!diagnostic_manager.Diagnostics().size())
+          error.SetExpressionError(
+              execution_results, "expression failed to execute, unknown error");
         else
-          error = Status::FromError(
-              diagnostic_manager.GetAsError(execution_results));
+          error.SetExpressionError(execution_results,
+                                   diagnostic_manager.GetString().c_str());
       } else {
         if (expr_result) {
           result_valobj_sp = expr_result->GetValueObject();
-          result_valobj_sp->SetPreferredDisplayLanguage(
-              language.AsLanguageType());
+          result_valobj_sp->SetPreferredDisplayLanguage(language);
 
           LLDB_LOG(log,
                    "== [UserExpression::Evaluate] Execution completed "
@@ -401,21 +373,24 @@ UserExpression::Evaluate(ExecutionContext &exe_ctx,
           LLDB_LOG(log, "== [UserExpression::Evaluate] Execution completed "
                         "normally with no result ==");
 
-          error = Status(UserExpression::kNoResult, lldb::eErrorTypeGeneric);
+          error.SetError(UserExpression::kNoResult, lldb::eErrorTypeGeneric);
         }
       }
     }
   }
 
   if (options.InvokeCancelCallback(lldb::eExpressionEvaluationComplete)) {
-    set_error(Status::FromError(llvm::make_error<ExpressionError>(
+    error.SetExpressionError(
         lldb::eExpressionInterrupted,
-        "expression interrupted by callback after complete")));
+        "expression interrupted by callback after complete");
     return lldb::eExpressionInterrupted;
   }
 
-  if (error.Fail())
-    set_error(std::move(error));
+  if (result_valobj_sp.get() == nullptr) {
+    result_valobj_sp = ValueObjectConstResult::Create(
+        exe_ctx.GetBestExecutionContextScope(), error);
+  }
+
   return execution_results;
 }
 
@@ -425,25 +400,12 @@ UserExpression::Execute(DiagnosticManager &diagnostic_manager,
                         const EvaluateExpressionOptions &options,
                         lldb::UserExpressionSP &shared_ptr_to_me,
                         lldb::ExpressionVariableSP &result_var) {
-  Debugger *debugger =
-      exe_ctx.GetTargetPtr() ? &exe_ctx.GetTargetPtr()->GetDebugger() : nullptr;
-  std::string details;
-  if (m_options.IsForUtilityExpr())
-    details = "LLDB utility";
-  else if (m_expr_text.size() > 15)
-    details = m_expr_text.substr(0, 14) + "…";
-  else
-    details = m_expr_text;
-
-  Progress progress("Running expression", details, {}, debugger);
-
   lldb::ExpressionResults expr_result = DoExecute(
       diagnostic_manager, exe_ctx, options, shared_ptr_to_me, result_var);
   Target *target = exe_ctx.GetTargetPtr();
-  if (options.GetSuppressPersistentResult() && result_var && target) {
+  if (options.GetResultIsInternal() && result_var && target) {
     if (auto *persistent_state =
-            target->GetPersistentExpressionStateForLanguage(
-                m_language.AsLanguageType()))
+            target->GetPersistentExpressionStateForLanguage(m_language))
       persistent_state->RemovePersistentVariable(result_var);
   }
   return expr_result;

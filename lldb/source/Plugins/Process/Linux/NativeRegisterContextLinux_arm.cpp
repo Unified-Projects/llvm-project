@@ -14,14 +14,13 @@
 #include "Plugins/Process/Linux/Procfs.h"
 #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
 #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm.h"
-#include "lldb/Host/HostInfo.h"
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Status.h"
 
 #include <elf.h>
-#include <sys/uio.h>
+#include <sys/socket.h>
 
 #define REG_CONTEXT_SIZE (GetGPRSize() + sizeof(m_fpr))
 
@@ -51,11 +50,6 @@ NativeRegisterContextLinux::CreateHostNativeRegisterContextLinux(
     const ArchSpec &target_arch, NativeThreadLinux &native_thread) {
   return std::make_unique<NativeRegisterContextLinux_arm>(target_arch,
                                                            native_thread);
-}
-
-llvm::Expected<ArchSpec>
-NativeRegisterContextLinux::DetermineArchitecture(lldb::tid_t tid) {
-  return HostInfo::GetArchitecture();
 }
 
 #endif // defined(__arm__)
@@ -104,7 +98,7 @@ NativeRegisterContextLinux_arm::ReadRegister(const RegisterInfo *reg_info,
   Status error;
 
   if (!reg_info) {
-    error = Status::FromErrorString("reg_info NULL");
+    error.SetErrorString("reg_info NULL");
     return error;
   }
 
@@ -136,7 +130,7 @@ NativeRegisterContextLinux_arm::ReadRegister(const RegisterInfo *reg_info,
       // then use the type specified by reg_info rather than the uint64_t
       // default
       if (reg_value.GetByteSize() > reg_info->byte_size)
-        reg_value.SetType(*reg_info);
+        reg_value.SetType(reg_info);
     }
     return error;
   }
@@ -160,8 +154,8 @@ NativeRegisterContextLinux_arm::ReadRegister(const RegisterInfo *reg_info,
     break;
   default:
     assert(false && "Unhandled data size.");
-    error = Status::FromErrorStringWithFormat("unhandled byte size: %" PRIu32,
-                                              reg_info->byte_size);
+    error.SetErrorStringWithFormat("unhandled byte size: %" PRIu32,
+                                   reg_info->byte_size);
     break;
   }
 
@@ -172,13 +166,13 @@ Status
 NativeRegisterContextLinux_arm::WriteRegister(const RegisterInfo *reg_info,
                                               const RegisterValue &reg_value) {
   if (!reg_info)
-    return Status::FromErrorString("reg_info NULL");
+    return Status("reg_info NULL");
 
   const uint32_t reg_index = reg_info->kinds[lldb::eRegisterKindLLDB];
   if (reg_index == LLDB_INVALID_REGNUM)
-    return Status::FromErrorStringWithFormat(
-        "no lldb regnum for %s",
-        reg_info && reg_info->name ? reg_info->name : "<unknown register>");
+    return Status("no lldb regnum for %s", reg_info && reg_info->name
+                                               ? reg_info->name
+                                               : "<unknown register>");
 
   if (IsGPR(reg_index))
     return WriteRegisterRaw(reg_index, reg_value);
@@ -188,18 +182,35 @@ NativeRegisterContextLinux_arm::WriteRegister(const RegisterInfo *reg_info,
     uint32_t fpr_offset = CalculateFprOffset(reg_info);
     assert(fpr_offset < sizeof m_fpr);
     uint8_t *dst = (uint8_t *)&m_fpr + fpr_offset;
-    ::memcpy(dst, reg_value.GetBytes(), reg_info->byte_size);
+    switch (reg_info->byte_size) {
+    case 2:
+      *(uint16_t *)dst = reg_value.GetAsUInt16();
+      break;
+    case 4:
+      *(uint32_t *)dst = reg_value.GetAsUInt32();
+      break;
+    case 8:
+      *(uint64_t *)dst = reg_value.GetAsUInt64();
+      break;
+    default:
+      assert(false && "Unhandled data size.");
+      return Status("unhandled register data size %" PRIu32,
+                    reg_info->byte_size);
+    }
 
-    return WriteFPR();
+    Status error = WriteFPR();
+    if (error.Fail())
+      return error;
+
+    return Status();
   }
 
-  return Status::FromErrorString(
-      "failed - register wasn't recognized to be a GPR or an FPR, "
-      "write strategy unknown");
+  return Status("failed - register wasn't recognized to be a GPR or an FPR, "
+                "write strategy unknown");
 }
 
 Status NativeRegisterContextLinux_arm::ReadAllRegisterValues(
-    lldb::WritableDataBufferSP &data_sp) {
+    lldb::DataBufferSP &data_sp) {
   Status error;
 
   data_sp.reset(new DataBufferHeap(REG_CONTEXT_SIZE, 0));
@@ -224,27 +235,26 @@ Status NativeRegisterContextLinux_arm::WriteAllRegisterValues(
   Status error;
 
   if (!data_sp) {
-    error = Status::FromErrorStringWithFormat(
-        "NativeRegisterContextLinux_arm::%s invalid data_sp provided",
+    error.SetErrorStringWithFormat(
+        "NativeRegisterContextLinux_x86_64::%s invalid data_sp provided",
         __FUNCTION__);
     return error;
   }
 
   if (data_sp->GetByteSize() != REG_CONTEXT_SIZE) {
-    error = Status::FromErrorStringWithFormat(
-        "NativeRegisterContextLinux_arm::%s data_sp contained mismatched "
+    error.SetErrorStringWithFormat(
+        "NativeRegisterContextLinux_x86_64::%s data_sp contained mismatched "
         "data size, expected %" PRIu64 ", actual %" PRIu64,
         __FUNCTION__, (uint64_t)REG_CONTEXT_SIZE, data_sp->GetByteSize());
     return error;
   }
 
-  const uint8_t *src = data_sp->GetBytes();
+  uint8_t *src = data_sp->GetBytes();
   if (src == nullptr) {
-    error = Status::FromErrorStringWithFormat(
-        "NativeRegisterContextLinux_arm::%s "
-        "DataBuffer::GetBytes() returned a null "
-        "pointer",
-        __FUNCTION__);
+    error.SetErrorStringWithFormat("NativeRegisterContextLinux_x86_64::%s "
+                                   "DataBuffer::GetBytes() returned a null "
+                                   "pointer",
+                                   __FUNCTION__);
     return error;
   }
   ::memcpy(&m_gpr_arm, src, GetRegisterInfoInterface().GetGPRSize());
@@ -278,7 +288,7 @@ bool NativeRegisterContextLinux_arm::IsFPR(unsigned reg) const {
 }
 
 uint32_t NativeRegisterContextLinux_arm::NumSupportedHardwareBreakpoints() {
-  Log *log = GetLog(POSIXLog::Breakpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_BREAKPOINTS));
 
   LLDB_LOGF(log, "NativeRegisterContextLinux_arm::%s()", __FUNCTION__);
 
@@ -297,7 +307,7 @@ uint32_t NativeRegisterContextLinux_arm::NumSupportedHardwareBreakpoints() {
 uint32_t
 NativeRegisterContextLinux_arm::SetHardwareBreakpoint(lldb::addr_t addr,
                                                       size_t size) {
-  Log *log = GetLog(POSIXLog::Breakpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_BREAKPOINTS));
   LLDB_LOG(log, "addr: {0:x}, size: {1:x}", addr, size);
 
   // Read hardware breakpoint and watchpoint information.
@@ -355,7 +365,7 @@ NativeRegisterContextLinux_arm::SetHardwareBreakpoint(lldb::addr_t addr,
 }
 
 bool NativeRegisterContextLinux_arm::ClearHardwareBreakpoint(uint32_t hw_idx) {
-  Log *log = GetLog(POSIXLog::Breakpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_BREAKPOINTS));
   LLDB_LOG(log, "hw_idx: {0}", hw_idx);
 
   // Read hardware breakpoint and watchpoint information.
@@ -389,9 +399,9 @@ bool NativeRegisterContextLinux_arm::ClearHardwareBreakpoint(uint32_t hw_idx) {
 
 Status NativeRegisterContextLinux_arm::GetHardwareBreakHitIndex(
     uint32_t &bp_index, lldb::addr_t trap_addr) {
-  Log *log = GetLog(POSIXLog::Breakpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_BREAKPOINTS));
 
-  LLDB_LOGF(log, "NativeRegisterContextLinux_arm::%s()", __FUNCTION__);
+  LLDB_LOGF(log, "NativeRegisterContextLinux_arm64::%s()", __FUNCTION__);
 
   lldb::addr_t break_addr;
 
@@ -409,7 +419,7 @@ Status NativeRegisterContextLinux_arm::GetHardwareBreakHitIndex(
 }
 
 Status NativeRegisterContextLinux_arm::ClearAllHardwareBreakpoints() {
-  Log *log = GetLog(POSIXLog::Breakpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_BREAKPOINTS));
 
   LLDB_LOGF(log, "NativeRegisterContextLinux_arm::%s()", __FUNCTION__);
 
@@ -450,7 +460,7 @@ Status NativeRegisterContextLinux_arm::ClearAllHardwareBreakpoints() {
 }
 
 uint32_t NativeRegisterContextLinux_arm::NumSupportedHardwareWatchpoints() {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
 
   // Read hardware breakpoint and watchpoint information.
   Status error = ReadHardwareDebugInfo();
@@ -464,7 +474,7 @@ uint32_t NativeRegisterContextLinux_arm::NumSupportedHardwareWatchpoints() {
 
 uint32_t NativeRegisterContextLinux_arm::SetHardwareWatchpoint(
     lldb::addr_t addr, size_t size, uint32_t watch_flags) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "addr: {0:x}, size: {1:x} watch_flags: {2:x}", addr, size,
            watch_flags);
 
@@ -508,7 +518,7 @@ uint32_t NativeRegisterContextLinux_arm::SetHardwareWatchpoint(
       return LLDB_INVALID_INDEX32;
     else if (watch_mask <= 0x02)
       size = 2;
-    else
+    else if (watch_mask <= 0x04)
       size = 4;
 
     addr = addr & (~0x03);
@@ -569,7 +579,7 @@ uint32_t NativeRegisterContextLinux_arm::SetHardwareWatchpoint(
 
 bool NativeRegisterContextLinux_arm::ClearHardwareWatchpoint(
     uint32_t wp_index) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "wp_index: {0}", wp_index);
 
   // Read hardware breakpoint and watchpoint information.
@@ -638,7 +648,7 @@ Status NativeRegisterContextLinux_arm::ClearAllHardwareWatchpoints() {
 }
 
 uint32_t NativeRegisterContextLinux_arm::GetWatchpointSize(uint32_t wp_index) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "wp_index: {0}", wp_index);
 
   switch ((m_hwp_regs[wp_index].control >> 5) & 0x0f) {
@@ -655,7 +665,7 @@ uint32_t NativeRegisterContextLinux_arm::GetWatchpointSize(uint32_t wp_index) {
   }
 }
 bool NativeRegisterContextLinux_arm::WatchpointIsEnabled(uint32_t wp_index) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "wp_index: {0}", wp_index);
 
   if ((m_hwp_regs[wp_index].control & 0x1) == 0x1)
@@ -667,7 +677,7 @@ bool NativeRegisterContextLinux_arm::WatchpointIsEnabled(uint32_t wp_index) {
 Status
 NativeRegisterContextLinux_arm::GetWatchpointHitIndex(uint32_t &wp_index,
                                                       lldb::addr_t trap_addr) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "wp_index: {0}, trap_addr: {1:x}", wp_index, trap_addr);
 
   uint32_t watch_size;
@@ -690,7 +700,7 @@ NativeRegisterContextLinux_arm::GetWatchpointHitIndex(uint32_t &wp_index,
 
 lldb::addr_t
 NativeRegisterContextLinux_arm::GetWatchpointAddress(uint32_t wp_index) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "wp_index: {0}", wp_index);
 
   if (wp_index >= m_max_hwp_supported)
@@ -704,7 +714,7 @@ NativeRegisterContextLinux_arm::GetWatchpointAddress(uint32_t wp_index) {
 
 lldb::addr_t
 NativeRegisterContextLinux_arm::GetWatchpointHitAddress(uint32_t wp_index) {
-  Log *log = GetLog(POSIXLog::Watchpoints);
+  Log *log(ProcessPOSIXLog::GetLogIfAllCategoriesSet(POSIX_LOG_WATCHPOINTS));
   LLDB_LOG(log, "wp_index: {0}", wp_index);
 
   if (wp_index >= m_max_hwp_supported)
@@ -798,8 +808,7 @@ Status NativeRegisterContextLinux_arm::DoReadRegisterValue(
   // processing time in lldb-server.
   assert(offset % 4 == 0 && "Try to write a register with unaligned offset");
   if (offset + sizeof(uint32_t) > sizeof(m_gpr_arm))
-    return Status::FromErrorString(
-        "Register isn't fit into the size of the GPR area");
+    return Status("Register isn't fit into the size of the GPR area");
 
   Status error = ReadGPR();
   if (error.Fail())
@@ -818,8 +827,7 @@ Status NativeRegisterContextLinux_arm::DoWriteRegisterValue(
   // overhead is negligible in comparison to processing time in lldb-server.
   assert(offset % 4 == 0 && "Try to write a register with unaligned offset");
   if (offset + sizeof(uint32_t) > sizeof(m_gpr_arm))
-    return Status::FromErrorString(
-        "Register isn't fit into the size of the GPR area");
+    return Status("Register isn't fit into the size of the GPR area");
 
   Status error = ReadGPR();
   if (error.Fail())

@@ -13,7 +13,6 @@
 #ifndef LLVM_CODEGEN_MACHINESSAUPDATER_H
 #define LLVM_CODEGEN_MACHINESSAUPDATER_H
 
-#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Register.h"
 
 namespace llvm {
@@ -41,15 +40,15 @@ private:
   //typedef DenseMap<MachineBasicBlock*, Register> AvailableValsTy;
   void *AV = nullptr;
 
-  /// Register class or bank and LLT of current virtual register.
-  MachineRegisterInfo::VRegAttrs RegAttrs;
+  /// VRC - Register class of the current virtual register.
+  const TargetRegisterClass *VRC;
 
   /// InsertedPHIs - If this is non-null, the MachineSSAUpdater adds all PHI
   /// nodes that it creates to the vector.
   SmallVectorImpl<MachineInstr*> *InsertedPHIs;
 
-  const TargetInstrInfo *TII = nullptr;
-  MachineRegisterInfo *MRI = nullptr;
+  const TargetInstrInfo *TII;
+  MachineRegisterInfo *MRI;
 
 public:
   /// MachineSSAUpdater constructor.  If InsertedPHIs is specified, it will be
@@ -63,6 +62,7 @@ public:
   /// Initialize - Reset this object to get ready for a new set of SSA
   /// updates.
   void Initialize(Register V);
+  void Initialize(const TargetRegisterClass *RC);
 
   /// AddAvailableValue - Indicate that a rewritten value is available at the
   /// end of the specified block with the specified value.
@@ -77,9 +77,7 @@ public:
   Register GetValueAtEndOfBlock(MachineBasicBlock *BB);
 
   /// GetValueInMiddleOfBlock - Construct SSA form, materializing a value that
-  /// is live in the middle of the specified block. If ExistingValueOnly is
-  /// true then this will only return an existing value or $noreg; otherwise new
-  /// instructions may be inserted to materialize a value.
+  /// is live in the middle of the specified block.
   ///
   /// GetValueInMiddleOfBlock is the same as GetValueAtEndOfBlock except in one
   /// important case: if there is a definition of the rewritten value after the
@@ -96,8 +94,7 @@ public:
   /// their respective blocks.  However, the use of X happens in the *middle* of
   /// a block.  Because of this, we need to insert a new PHI node in SomeBB to
   /// merge the appropriate values, and this value isn't live out of the block.
-  Register GetValueInMiddleOfBlock(MachineBasicBlock *BB,
-                                   bool ExistingValueOnly = false);
+  Register GetValueInMiddleOfBlock(MachineBasicBlock *BB);
 
   /// RewriteUse - Rewrite a use of the symbolic value.  This handles PHI nodes,
   /// which use their value in the corresponding predecessor.  Note that this
@@ -107,10 +104,7 @@ public:
   void RewriteUse(MachineOperand &U);
 
 private:
-  // If ExistingValueOnly is true, will not create any new instructions. Used
-  // for debug values, which cannot modify Codegen.
-  Register GetValueAtEndOfBlockInternal(MachineBasicBlock *BB,
-                                        bool ExistingValueOnly = false);
+  Register GetValueAtEndOfBlockInternal(MachineBasicBlock *BB);
 };
 
 } // end namespace llvm

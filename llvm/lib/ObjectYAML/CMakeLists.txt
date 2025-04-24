@@ -9,19 +9,13 @@ add_llvm_component_library(LLVMObjectYAML
   COFFYAML.cpp
   DWARFEmitter.cpp
   DWARFYAML.cpp
-  DXContainerEmitter.cpp
-  DXContainerYAML.cpp
   ELFEmitter.cpp
   ELFYAML.cpp
-  GOFFEmitter.cpp
-  GOFFYAML.cpp
   MachOEmitter.cpp
   MachOYAML.cpp
   ObjectYAML.cpp
   MinidumpEmitter.cpp
   MinidumpYAML.cpp
-  OffloadEmitter.cpp
-  OffloadYAML.cpp
   WasmEmitter.cpp
   WasmYAML.cpp
   XCOFFEmitter.cpp
@@ -36,7 +30,6 @@ add_llvm_component_library(LLVMObjectYAML
   BinaryFormat
   Object
   Support
-  TargetParser
   DebugInfoCodeView
   MC
   )

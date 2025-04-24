@@ -10,16 +10,20 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Driver/Action.h"
 #include "clang/Driver/Driver.h"
+#include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/Job.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Util.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptSpecifier.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/TargetParser/Triple.h"
 #include <cassert>
 #include <string>
 #include <system_error>
@@ -98,7 +102,7 @@ Compilation::getArgsForToolChain(const ToolChain *TC, StringRef BoundArch,
     }
 
     // Add allocated arguments to the final DAL.
-    for (auto *ArgPtr : AllocatedArgs)
+    for (auto ArgPtr : AllocatedArgs)
       Entry->AddSynthesizedArg(ArgPtr);
   }
 
@@ -158,8 +162,7 @@ bool Compilation::CleanupFileMap(const ArgStringMap &Files,
 }
 
 int Compilation::ExecuteCommand(const Command &C,
-                                const Command *&FailingCommand,
-                                bool LogOnly) const {
+                                const Command *&FailingCommand) const {
   if ((getDriver().CCPrintOptions ||
        getArgs().hasArg(options::OPT_v)) && !getDriver().CCGenDiagnostics) {
     raw_ostream *OS = &llvm::errs();
@@ -171,7 +174,7 @@ int Compilation::ExecuteCommand(const Command &C,
         !getDriver().CCPrintOptionsFilename.empty()) {
       std::error_code EC;
       OwnedStream.reset(new llvm::raw_fd_ostream(
-          getDriver().CCPrintOptionsFilename, EC,
+          getDriver().CCPrintOptionsFilename.c_str(), EC,
           llvm::sys::fs::OF_Append | llvm::sys::fs::OF_TextWithCRLF));
       if (EC) {
         getDriver().Diag(diag::err_drv_cc_print_options_failure)
@@ -187,9 +190,6 @@ int Compilation::ExecuteCommand(const Command &C,
 
     C.Print(*OS, "\n", /*Quote=*/getDriver().CCPrintOptions);
   }
-
-  if (LogOnly)
-    return 0;
 
   std::string Error;
   bool ExecutionFailed;
@@ -214,11 +214,10 @@ static bool ActionFailed(const Action *A,
   if (FailingCommands.empty())
     return false;
 
-  // CUDA/HIP/SYCL can have the same input source code compiled multiple times
-  // so do not compile again if there are already failures. It is OK to abort
-  // the CUDA/HIP/SYCL pipeline on errors.
-  if (A->isOffloading(Action::OFK_Cuda) || A->isOffloading(Action::OFK_HIP) ||
-      A->isOffloading(Action::OFK_SYCL))
+  // CUDA/HIP can have the same input source code compiled multiple times so do
+  // not compiled again if there are already failures. It is OK to abort the
+  // CUDA pipeline on errors.
+  if (A->isOffloading(Action::OFK_Cuda) || A->isOffloading(Action::OFK_HIP))
     return true;
 
   for (const auto &CI : FailingCommands)
@@ -238,8 +237,7 @@ static bool InputsOk(const Command &C,
 }
 
 void Compilation::ExecuteJobs(const JobList &Jobs,
-                              FailingCommandList &FailingCommands,
-                              bool LogOnly) const {
+                              FailingCommandList &FailingCommands) const {
   // According to UNIX standard, driver need to continue compiling all the
   // inputs on the command line even one of them failed.
   // In all but CLMode, execute all the jobs unless the necessary inputs for the
@@ -248,7 +246,7 @@ void Compilation::ExecuteJobs(const JobList &Jobs,
     if (!InputsOk(Job, FailingCommands))
       continue;
     const Command *FailingCommand = nullptr;
-    if (int Res = ExecuteCommand(Job, FailingCommand, LogOnly)) {
+    if (int Res = ExecuteCommand(Job, FailingCommand)) {
       FailingCommands.push_back(std::make_pair(Res, FailingCommand));
       // Bail as soon as one command fails in cl driver mode.
       if (TheDriver.IsCLMode())
@@ -280,9 +278,9 @@ void Compilation::initCompilationForDiagnostics() {
       options::OPT_o,  options::OPT_MD, options::OPT_MMD, options::OPT_M,
       options::OPT_MM, options::OPT_MF, options::OPT_MG,  options::OPT_MJ,
       options::OPT_MQ, options::OPT_MT, options::OPT_MV};
-  for (const auto &Opt : OutputOpts) {
-    if (TranslatedArgs->hasArg(Opt))
-      TranslatedArgs->eraseArg(Opt);
+  for (unsigned i = 0, e = llvm::array_lengthof(OutputOpts); i != e; ++i) {
+    if (TranslatedArgs->hasArg(OutputOpts[i]))
+      TranslatedArgs->eraseArg(OutputOpts[i]);
   }
   TranslatedArgs->ClaimAllArgs();
 
@@ -294,7 +292,7 @@ void Compilation::initCompilationForDiagnostics() {
   TCArgs.clear();
 
   // Redirect stdout/stderr to /dev/null.
-  Redirects = {std::nullopt, {""}, {""}};
+  Redirects = {None, {""}, {""}};
 
   // Temporary files added by diagnostics should be kept.
   ForceKeepTempFiles = true;
@@ -304,6 +302,6 @@ StringRef Compilation::getSysRoot() const {
   return getDriver().SysRoot;
 }
 
-void Compilation::Redirect(ArrayRef<std::optional<StringRef>> Redirects) {
+void Compilation::Redirect(ArrayRef<Optional<StringRef>> Redirects) {
   this->Redirects = Redirects;
 }

@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
@@ -28,8 +29,11 @@ namespace {
 class SystemZLDCleanup : public MachineFunctionPass {
 public:
   static char ID;
-  SystemZLDCleanup() : MachineFunctionPass(ID), TII(nullptr), MF(nullptr) {
-    initializeSystemZLDCleanupPass(*PassRegistry::getPassRegistry());
+  SystemZLDCleanup(const SystemZTargetMachine &tm)
+    : MachineFunctionPass(ID), TII(nullptr), MF(nullptr) {}
+
+  StringRef getPassName() const override {
+    return "SystemZ Local Dynamic TLS Access Clean-up";
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
@@ -48,16 +52,13 @@ char SystemZLDCleanup::ID = 0;
 
 } // end anonymous namespace
 
-INITIALIZE_PASS(SystemZLDCleanup, "systemz-ld-cleanup",
-                "SystemZ Local Dynamic TLS Access Clean-up", false, false)
-
 FunctionPass *llvm::createSystemZLDCleanupPass(SystemZTargetMachine &TM) {
-  return new SystemZLDCleanup();
+  return new SystemZLDCleanup(TM);
 }
 
 void SystemZLDCleanup::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
-  AU.addRequired<MachineDominatorTreeWrapperPass>();
+  AU.addRequired<MachineDominatorTree>();
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
@@ -65,7 +66,7 @@ bool SystemZLDCleanup::runOnMachineFunction(MachineFunction &F) {
   if (skipFunction(F.getFunction()))
     return false;
 
-  TII = F.getSubtarget<SystemZSubtarget>().getInstrInfo();
+  TII = static_cast<const SystemZInstrInfo *>(F.getSubtarget().getInstrInfo());
   MF = &F;
 
   SystemZMachineFunctionInfo* MFI = F.getInfo<SystemZMachineFunctionInfo>();
@@ -74,8 +75,7 @@ bool SystemZLDCleanup::runOnMachineFunction(MachineFunction &F) {
     return false;
   }
 
-  MachineDominatorTree *DT =
-      &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
+  MachineDominatorTree *DT = &getAnalysis<MachineDominatorTree>();
   return VisitNode(DT->getRootNode(), 0);
 }
 
@@ -105,8 +105,8 @@ bool SystemZLDCleanup::VisitNode(MachineDomTreeNode *Node,
   }
 
   // Visit the children of this block in the dominator tree.
-  for (auto &N : *Node)
-    Changed |= VisitNode(N, TLSBaseAddrReg);
+  for (auto I = Node->begin(), E = Node->end(); I != E; ++I)
+    Changed |= VisitNode(*I, TLSBaseAddrReg);
 
   return Changed;
 }

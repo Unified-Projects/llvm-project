@@ -1,5 +1,4 @@
 set (FILES
-  AlarmTest.cpp
   ConnectionFileDescriptorTest.cpp
   FileActionTest.cpp
   FileSystemTest.cpp
@@ -12,8 +11,7 @@ set (FILES
   ProcessLaunchInfoTest.cpp
   SocketAddressTest.cpp
   SocketTest.cpp
-  ThreadLauncherTest.cpp
-  XMLTest.cpp
+  SocketTestUtilities.cpp
 )
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
@@ -23,21 +21,10 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
   )
 endif()
 
-if (LLDB_ENABLE_TERMIOS)
-  list(APPEND FILES
-    posix/TerminalTest.cpp
-  )
-endif()
-
 add_lldb_unittest(HostTests
   ${FILES}
   LINK_LIBS
     lldbHost
-    lldbCore
     lldbUtilityHelpers
-    lldbHostHelpers
     LLVMTestingSupport
-    LLVMTargetParser
   )
-
-add_subdirectory(common)

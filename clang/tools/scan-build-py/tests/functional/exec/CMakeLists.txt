@@ -1,8 +1,12 @@
 project(exec C)
 
-cmake_minimum_required(VERSION 3.20.0)
+cmake_minimum_required(VERSION 3.13.4)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
+include(CheckCCompilerFlag)
+check_c_compiler_flag("-std=c99" C99_SUPPORTED)
+if (C99_SUPPORTED)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
+endif()
 
 include(CheckFunctionExists)
 include(CheckSymbolExists)

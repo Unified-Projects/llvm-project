@@ -13,8 +13,8 @@
 #ifndef LLVM_LIB_TARGET_NVPTX_NVPTXREGISTERINFO_H
 #define LLVM_LIB_TARGET_NVPTX_NVPTXREGISTERINFO_H
 
+#include "ManagedStringPool.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/Support/StringSaver.h"
 #include <sstream>
 
 #define GET_REGINFO_HEADER
@@ -24,12 +24,7 @@ namespace llvm {
 class NVPTXRegisterInfo : public NVPTXGenRegisterInfo {
 private:
   // Hold Strings that can be free'd all together with NVPTXRegisterInfo
-  BumpPtrAllocator StrAlloc;
-  UniqueStringSaver StrPool;
-  // State for debug register mapping that can be mutated even through a const
-  // pointer so that we can get the proper dwarf register encoding during ASM
-  // emission.
-  mutable DenseMap<uint64_t, uint64_t> debugRegisterMap;
+  ManagedStringPool ManagedStrPool;
 
 public:
   NVPTXRegisterInfo();
@@ -43,35 +38,22 @@ public:
 
   BitVector getReservedRegs(const MachineFunction &MF) const override;
 
-  bool eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
+  void eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 
   Register getFrameRegister(const MachineFunction &MF) const override;
-  Register getFrameLocalRegister(const MachineFunction &MF) const;
 
-  UniqueStringSaver &getStrPool() const {
-    return const_cast<UniqueStringSaver &>(StrPool);
+  ManagedStringPool *getStrPool() const {
+    return const_cast<ManagedStringPool *>(&ManagedStrPool);
   }
 
   const char *getName(unsigned RegNo) const {
     std::stringstream O;
     O << "reg" << RegNo;
-    return getStrPool().save(O.str()).data();
+    return getStrPool()->getManagedString(O.str().c_str())->c_str();
   }
 
-  // Manage the debugRegisterMap.  PTX virtual registers for DebugInfo are
-  // encoded using the names used in the emitted text of the PTX assembly. This
-  // mapping must be managed during assembly emission.
-  //
-  // These are marked const because the interfaces used to access this
-  // RegisterInfo object are all const, but we need to communicate some state
-  // here, because the proper encoding for debug registers is available only
-  // temporarily during ASM emission.
-  void addToDebugRegisterMap(uint64_t preEncodedVirtualRegister,
-                             std::string registerName) const;
-  void clearDebugRegisterMap() const;
-  int64_t getDwarfRegNum(MCRegister RegNum, bool isEH) const override;
 };
 
 std::string getNVPTXRegClassName(const TargetRegisterClass *RC);

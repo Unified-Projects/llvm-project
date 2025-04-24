@@ -3,7 +3,6 @@
 #include "llvm/ExecutionEngine/Orc/Core.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/IRCompileLayer.h"
-#include "llvm/ExecutionEngine/Orc/IRPartitionLayer.h"
 #include "llvm/ExecutionEngine/Orc/IndirectionUtils.h"
 #include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
 #include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
@@ -30,7 +29,7 @@ static cl::list<std::string> InputFiles(cl::Positional, cl::OneOrMore,
 
 static cl::list<std::string> InputArgv("args", cl::Positional,
                                        cl::desc("<program arguments>..."),
-                                       cl::PositionalEatsArgs);
+                                       cl::ZeroOrMore, cl::PositionalEatsArgs);
 
 static cl::opt<unsigned> NumThreads("num-threads", cl::Optional,
                                     cl::desc("Number of compile threads"),
@@ -50,9 +49,7 @@ public:
     if (!DL)
       return DL.takeError();
 
-    auto EPC = SelfExecutorProcessControl::Create(
-        nullptr,
-        std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt));
+    auto EPC = SelfExecutorProcessControl::Create();
     if (!EPC)
       return EPC.takeError();
 
@@ -60,7 +57,7 @@ public:
 
     auto LCTMgr = createLocalLazyCallThroughManager(
         JTMB->getTargetTriple(), *ES,
-        ExecutorAddr::fromPtr(explodeOnLazyCompileFailure));
+        pointerToJITTargetAddress(explodeOnLazyCompileFailure));
     if (!LCTMgr)
       return LCTMgr.takeError();
 
@@ -88,7 +85,7 @@ public:
     return CODLayer.add(MainJD, std::move(TSM));
   }
 
-  Expected<ExecutorSymbolDef> lookup(StringRef UnmangledName) {
+  Expected<JITEvaluatedSymbol> lookup(StringRef UnmangledName) {
     return ES->lookup({&MainJD}, Mangle(UnmangledName));
   }
 
@@ -110,16 +107,23 @@ private:
       IndirectStubsManagerBuilderFunction ISMBuilder,
       std::unique_ptr<DynamicLibrarySearchGenerator> ProcessSymbolsGenerator)
       : ES(std::move(ES)), DL(std::move(DL)),
-        MainJD(this->ES->createBareJITDylib("<main>")),
-        LCTMgr(std::move(LCTMgr)),
+        MainJD(this->ES->createBareJITDylib("<main>")), LCTMgr(std::move(LCTMgr)),
         CompileLayer(*this->ES, ObjLayer,
                      std::make_unique<ConcurrentIRCompiler>(std::move(JTMB))),
         S(Imps, *this->ES),
         SpeculateLayer(*this->ES, CompileLayer, S, Mangle, BlockFreqQuery()),
-        IPLayer(*this->ES, SpeculateLayer),
-        CODLayer(*this->ES, IPLayer, *this->LCTMgr, std::move(ISMBuilder)) {
+        CODLayer(*this->ES, SpeculateLayer, *this->LCTMgr,
+                 std::move(ISMBuilder)) {
     MainJD.addGenerator(std::move(ProcessSymbolsGenerator));
     this->CODLayer.setImplMap(&Imps);
+    this->ES->setDispatchTask(
+        [this](std::unique_ptr<Task> T) {
+          CompileThreads.async(
+              [UnownedT = T.release()]() {
+                std::unique_ptr<Task> T(UnownedT);
+                T->run();
+              });
+        });
     ExitOnErr(S.addSpeculationRuntime(MainJD, Mangle));
     LocalCXXRuntimeOverrides CXXRuntimeoverrides;
     ExitOnErr(CXXRuntimeoverrides.enable(MainJD, Mangle));
@@ -132,7 +136,7 @@ private:
   std::unique_ptr<ExecutionSession> ES;
   DataLayout DL;
   MangleAndInterner Mangle{*ES, DL};
-  DefaultThreadPool CompileThreads{llvm::hardware_concurrency(NumThreads)};
+  ThreadPool CompileThreads{llvm::hardware_concurrency(NumThreads)};
 
   JITDylib &MainJD;
 
@@ -143,7 +147,6 @@ private:
   Speculator S;
   RTDyldObjectLinkingLayer ObjLayer{*ES, createMemMgr};
   IRSpeculationLayer SpeculateLayer;
-  IRPartitionLayer IPLayer;
   CompileOnDemandLayer CODLayer;
 };
 
@@ -180,7 +183,8 @@ int main(int argc, char *argv[]) {
   }
 
   auto MainSym = ExitOnErr(SJ->lookup("main"));
-  auto Main = MainSym.getAddress().toPtr<int (*)(int, char *[])>();
+  auto Main =
+      jitTargetAddressToFunction<int (*)(int, char *[])>(MainSym.getAddress());
 
   return runAsMain(Main, InputArgv, StringRef(InputFiles.front()));
 

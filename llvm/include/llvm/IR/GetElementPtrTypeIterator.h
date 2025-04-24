@@ -16,11 +16,11 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/PointerUnion.h"
-#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/User.h"
 #include "llvm/Support/Casting.h"
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -31,39 +31,9 @@ template <typename ItTy = User::const_op_iterator>
 class generic_gep_type_iterator {
 
   ItTy OpIt;
-  // We use two different mechanisms to store the type a GEP index applies to.
-  // In some cases, we need to know the outer aggregate type the index is
-  // applied within, e.g. a struct. In such cases, we store the aggregate type
-  // in the iterator, and derive the element type on the fly.
-  //
-  // However, this is not always possible, because for the outermost index there
-  // is no containing type. In such cases, or if the containing type is not
-  // relevant, e.g. for arrays, the element type is stored as Type* in CurTy.
-  //
-  // If CurTy contains a Type* value, this does not imply anything about the
-  // type itself, because it is the element type and not the outer type.
-  // In particular, Type* can be a struct type.
-  //
-  // Consider this example:
-  //
-  //    %my.struct = type { i32, [ 4 x float ] }
-  //    [...]
-  //    %gep = getelementptr %my.struct, ptr %ptr, i32 10, i32 1, 32 3
-  //
-  // Iterating over the indices of this GEP, CurTy will contain the following
-  // values:
-  //    * i32 10: The outer index always operates on the GEP value type.
-  //              CurTy contains a Type*       pointing at `%my.struct`.
-  //    * i32 1:  This index is within a struct.
-  //              CurTy contains a StructType* pointing at `%my.struct`.
-  //    * i32 3:  This index is within an array. We reuse the "flat" indexing
-  //              for arrays which is also used in the top level GEP index.
-  //              CurTy contains a Type*       pointing at `float`.
-  //
-  // Vectors are handled separately because the layout of vectors is different
-  // for overaligned elements: Vectors are always bit-packed, whereas arrays
-  // respect ABI alignment of the elements.
-  PointerUnion<StructType *, VectorType *, Type *> CurTy;
+  PointerUnion<StructType *, Type *> CurTy;
+  enum : uint64_t { Unbounded = -1ull };
+  uint64_t NumElements = Unbounded;
 
   generic_gep_type_iterator() = default;
 
@@ -100,22 +70,25 @@ public:
   // temporarily not giving this iterator an operator*() to avoid a subtle
   // semantics break.
   Type *getIndexedType() const {
-    if (auto *T = dyn_cast_if_present<Type *>(CurTy))
+    if (auto *T = CurTy.dyn_cast<Type *>())
       return T;
-    if (auto *VT = dyn_cast_if_present<VectorType *>(CurTy))
-      return VT->getElementType();
-    return cast<StructType *>(CurTy)->getTypeAtIndex(getOperand());
+    return CurTy.get<StructType *>()->getTypeAtIndex(getOperand());
   }
 
   Value *getOperand() const { return const_cast<Value *>(&**OpIt); }
 
   generic_gep_type_iterator &operator++() { // Preincrement
     Type *Ty = getIndexedType();
-    if (auto *ATy = dyn_cast<ArrayType>(Ty))
+    if (auto *ATy = dyn_cast<ArrayType>(Ty)) {
       CurTy = ATy->getElementType();
-    else if (auto *VTy = dyn_cast<VectorType>(Ty))
-      CurTy = VTy;
-    else
+      NumElements = ATy->getNumElements();
+    } else if (auto *VTy = dyn_cast<VectorType>(Ty)) {
+      CurTy = VTy->getElementType();
+      if (isa<ScalableVectorType>(VTy))
+        NumElements = Unbounded;
+      else
+        NumElements = cast<FixedVectorType>(VTy)->getNumElements();
+    } else
       CurTy = dyn_cast<StructType>(Ty);
     ++OpIt;
     return *this;
@@ -142,29 +115,22 @@ public:
   // we should provide a more minimal API here that exposes not much more than
   // that.
 
-  bool isStruct() const { return isa<StructType *>(CurTy); }
-  bool isVector() const { return isa<VectorType *>(CurTy); }
-  bool isSequential() const { return !isStruct(); }
+  bool isStruct() const { return CurTy.is<StructType *>(); }
+  bool isSequential() const { return CurTy.is<Type *>(); }
 
-  // For sequential GEP indices (all except those into structs), the index value
-  // can be translated into a byte offset by multiplying with an element stride.
-  // This function returns this stride, which both depends on the element type,
-  // and the containing aggregate type, as vectors always tightly bit-pack their
-  // elements.
-  TypeSize getSequentialElementStride(const DataLayout &DL) const {
-    assert(isSequential());
-    Type *ElemTy = getIndexedType();
-    if (isVector()) {
-      assert(DL.typeSizeEqualsStoreSize(ElemTy) && "Not byte-addressable");
-      return DL.getTypeStoreSize(ElemTy);
-    }
-    return DL.getTypeAllocSize(ElemTy);
-  }
-
-  StructType *getStructType() const { return cast<StructType *>(CurTy); }
+  StructType *getStructType() const { return CurTy.get<StructType *>(); }
 
   StructType *getStructTypeOrNull() const {
-    return dyn_cast_if_present<StructType *>(CurTy);
+    return CurTy.dyn_cast<StructType *>();
+  }
+
+  bool isBoundedSequential() const {
+    return isSequential() && NumElements != Unbounded;
+  }
+
+  uint64_t getSequentialNumElements() const {
+    assert(isBoundedSequential());
+    return NumElements;
   }
 };
 

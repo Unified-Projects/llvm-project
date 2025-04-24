@@ -9,7 +9,6 @@
 using namespace llvm;
 using namespace polly;
 
-#include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-scev-validator"
 
 namespace SCEVType {
@@ -36,7 +35,7 @@ enum TYPE {
 } // namespace SCEVType
 
 /// The result the validator returns for a SCEV expression.
-class ValidatorResult final {
+class ValidatorResult {
   /// The type of the expression
   SCEVType::TYPE Type;
 
@@ -113,13 +112,25 @@ public:
   }
 };
 
-raw_ostream &operator<<(raw_ostream &OS, ValidatorResult &VR) {
+raw_ostream &operator<<(raw_ostream &OS, class ValidatorResult &VR) {
   VR.print(OS);
   return OS;
 }
 
+bool polly::isConstCall(llvm::CallInst *Call) {
+  if (Call->mayReadOrWriteMemory())
+    return false;
+
+  for (auto &Operand : Call->arg_operands())
+    if (!isa<ConstantInt>(&Operand))
+      return false;
+
+  return true;
+}
+
 /// Check if a SCEV is valid in a SCoP.
-class SCEVValidator : public SCEVVisitor<SCEVValidator, ValidatorResult> {
+struct SCEVValidator
+    : public SCEVVisitor<SCEVValidator, class ValidatorResult> {
 private:
   const Region *R;
   Loop *Scope;
@@ -131,18 +142,12 @@ public:
                 InvariantLoadsSetTy *ILS)
       : R(R), Scope(Scope), SE(SE), ILS(ILS) {}
 
-  ValidatorResult visitConstant(const SCEVConstant *Constant) {
+  class ValidatorResult visitConstant(const SCEVConstant *Constant) {
     return ValidatorResult(SCEVType::INT);
   }
 
-  ValidatorResult visitVScale(const SCEVVScale *VScale) {
-    // We do not support VScale constants.
-    POLLY_DEBUG(dbgs() << "INVALID: VScale is not supported");
-    return ValidatorResult(SCEVType::INVALID);
-  }
-
-  ValidatorResult visitZeroExtendOrTruncateExpr(const SCEV *Expr,
-                                                const SCEV *Operand) {
+  class ValidatorResult visitZeroExtendOrTruncateExpr(const SCEV *Expr,
+                                                      const SCEV *Operand) {
     ValidatorResult Op = visit(Operand);
     auto Type = Op.getType();
 
@@ -156,23 +161,23 @@ public:
     return ValidatorResult(SCEVType::PARAM, Expr);
   }
 
-  ValidatorResult visitPtrToIntExpr(const SCEVPtrToIntExpr *Expr) {
+  class ValidatorResult visitPtrToIntExpr(const SCEVPtrToIntExpr *Expr) {
     return visit(Expr->getOperand());
   }
 
-  ValidatorResult visitTruncateExpr(const SCEVTruncateExpr *Expr) {
+  class ValidatorResult visitTruncateExpr(const SCEVTruncateExpr *Expr) {
     return visitZeroExtendOrTruncateExpr(Expr, Expr->getOperand());
   }
 
-  ValidatorResult visitZeroExtendExpr(const SCEVZeroExtendExpr *Expr) {
+  class ValidatorResult visitZeroExtendExpr(const SCEVZeroExtendExpr *Expr) {
     return visitZeroExtendOrTruncateExpr(Expr, Expr->getOperand());
   }
 
-  ValidatorResult visitSignExtendExpr(const SCEVSignExtendExpr *Expr) {
+  class ValidatorResult visitSignExtendExpr(const SCEVSignExtendExpr *Expr) {
     return visit(Expr->getOperand());
   }
 
-  ValidatorResult visitAddExpr(const SCEVAddExpr *Expr) {
+  class ValidatorResult visitAddExpr(const SCEVAddExpr *Expr) {
     ValidatorResult Return(SCEVType::INT);
 
     for (int i = 0, e = Expr->getNumOperands(); i < e; ++i) {
@@ -187,7 +192,7 @@ public:
     return Return;
   }
 
-  ValidatorResult visitMulExpr(const SCEVMulExpr *Expr) {
+  class ValidatorResult visitMulExpr(const SCEVMulExpr *Expr) {
     ValidatorResult Return(SCEVType::INT);
 
     bool HasMultipleParams = false;
@@ -204,7 +209,7 @@ public:
       }
 
       if ((Op.isIV() || Op.isPARAM()) && !Return.isINT()) {
-        POLLY_DEBUG(
+        LLVM_DEBUG(
             dbgs() << "INVALID: More than one non-int operand in MulExpr\n"
                    << "\tExpr: " << *Expr << "\n"
                    << "\tPrevious expression type: " << Return << "\n"
@@ -223,9 +228,9 @@ public:
     return Return;
   }
 
-  ValidatorResult visitAddRecExpr(const SCEVAddRecExpr *Expr) {
+  class ValidatorResult visitAddRecExpr(const SCEVAddRecExpr *Expr) {
     if (!Expr->isAffine()) {
-      POLLY_DEBUG(dbgs() << "INVALID: AddRec is not affine");
+      LLVM_DEBUG(dbgs() << "INVALID: AddRec is not affine");
       return ValidatorResult(SCEVType::INVALID);
     }
 
@@ -240,7 +245,7 @@ public:
 
     auto *L = Expr->getLoop();
     if (R->contains(L) && (!Scope || !L->contains(Scope))) {
-      POLLY_DEBUG(
+      LLVM_DEBUG(
           dbgs() << "INVALID: Loop of AddRec expression boxed in an a "
                     "non-affine subregion or has a non-synthesizable exit "
                     "value.");
@@ -254,8 +259,8 @@ public:
         return Result;
       }
 
-      POLLY_DEBUG(dbgs() << "INVALID: AddRec within scop has non-int"
-                            "recurrence part");
+      LLVM_DEBUG(dbgs() << "INVALID: AddRec within scop has non-int"
+                           "recurrence part");
       return ValidatorResult(SCEVType::INVALID);
     }
 
@@ -278,7 +283,7 @@ public:
     return ZeroStartResult;
   }
 
-  ValidatorResult visitSMaxExpr(const SCEVSMaxExpr *Expr) {
+  class ValidatorResult visitSMaxExpr(const SCEVSMaxExpr *Expr) {
     ValidatorResult Return(SCEVType::INT);
 
     for (int i = 0, e = Expr->getNumOperands(); i < e; ++i) {
@@ -293,7 +298,7 @@ public:
     return Return;
   }
 
-  ValidatorResult visitSMinExpr(const SCEVSMinExpr *Expr) {
+  class ValidatorResult visitSMinExpr(const SCEVSMinExpr *Expr) {
     ValidatorResult Return(SCEVType::INT);
 
     for (int i = 0, e = Expr->getNumOperands(); i < e; ++i) {
@@ -308,14 +313,14 @@ public:
     return Return;
   }
 
-  ValidatorResult visitUMaxExpr(const SCEVUMaxExpr *Expr) {
+  class ValidatorResult visitUMaxExpr(const SCEVUMaxExpr *Expr) {
     // We do not support unsigned max operations. If 'Expr' is constant during
     // Scop execution we treat this as a parameter, otherwise we bail out.
     for (int i = 0, e = Expr->getNumOperands(); i < e; ++i) {
       ValidatorResult Op = visit(Expr->getOperand(i));
 
       if (!Op.isConstant()) {
-        POLLY_DEBUG(dbgs() << "INVALID: UMaxExpr has a non-constant operand");
+        LLVM_DEBUG(dbgs() << "INVALID: UMaxExpr has a non-constant operand");
         return ValidatorResult(SCEVType::INVALID);
       }
     }
@@ -323,31 +328,14 @@ public:
     return ValidatorResult(SCEVType::PARAM, Expr);
   }
 
-  ValidatorResult visitUMinExpr(const SCEVUMinExpr *Expr) {
+  class ValidatorResult visitUMinExpr(const SCEVUMinExpr *Expr) {
     // We do not support unsigned min operations. If 'Expr' is constant during
     // Scop execution we treat this as a parameter, otherwise we bail out.
     for (int i = 0, e = Expr->getNumOperands(); i < e; ++i) {
       ValidatorResult Op = visit(Expr->getOperand(i));
 
       if (!Op.isConstant()) {
-        POLLY_DEBUG(dbgs() << "INVALID: UMinExpr has a non-constant operand");
-        return ValidatorResult(SCEVType::INVALID);
-      }
-    }
-
-    return ValidatorResult(SCEVType::PARAM, Expr);
-  }
-
-  ValidatorResult visitSequentialUMinExpr(const SCEVSequentialUMinExpr *Expr) {
-    // We do not support unsigned min operations. If 'Expr' is constant during
-    // Scop execution we treat this as a parameter, otherwise we bail out.
-    for (int i = 0, e = Expr->getNumOperands(); i < e; ++i) {
-      ValidatorResult Op = visit(Expr->getOperand(i));
-
-      if (!Op.isConstant()) {
-        POLLY_DEBUG(
-            dbgs()
-            << "INVALID: SCEVSequentialUMinExpr has a non-constant operand");
+        LLVM_DEBUG(dbgs() << "INVALID: UMinExpr has a non-constant operand");
         return ValidatorResult(SCEVType::INVALID);
       }
     }
@@ -357,11 +345,23 @@ public:
 
   ValidatorResult visitGenericInst(Instruction *I, const SCEV *S) {
     if (R->contains(I)) {
-      POLLY_DEBUG(dbgs() << "INVALID: UnknownExpr references an instruction "
-                            "within the region\n");
+      LLVM_DEBUG(dbgs() << "INVALID: UnknownExpr references an instruction "
+                           "within the region\n");
       return ValidatorResult(SCEVType::INVALID);
     }
 
+    return ValidatorResult(SCEVType::PARAM, S);
+  }
+
+  ValidatorResult visitCallInstruction(Instruction *I, const SCEV *S) {
+    assert(I->getOpcode() == Instruction::Call && "Call instruction expected");
+
+    if (R->contains(I)) {
+      auto Call = cast<CallInst>(I);
+
+      if (!isConstCall(Call))
+        return ValidatorResult(SCEVType::INVALID, S);
+    }
     return ValidatorResult(SCEVType::PARAM, S);
   }
 
@@ -394,7 +394,7 @@ public:
     if (LHS.isConstant() && RHS.isConstant())
       return ValidatorResult(SCEVType::PARAM, DivExpr);
 
-    POLLY_DEBUG(
+    LLVM_DEBUG(
         dbgs() << "INVALID: unsigned division of non-constant expressions");
     return ValidatorResult(SCEVType::INVALID);
   }
@@ -403,8 +403,8 @@ public:
     if (!PollyAllowUnsignedOperations)
       return ValidatorResult(SCEVType::INVALID);
 
-    const SCEV *Dividend = Expr->getLHS();
-    const SCEV *Divisor = Expr->getRHS();
+    auto *Dividend = Expr->getLHS();
+    auto *Divisor = Expr->getRHS();
     return visitDivision(Dividend, Divisor, Expr);
   }
 
@@ -412,8 +412,8 @@ public:
     assert(SDiv->getOpcode() == Instruction::SDiv &&
            "Assumed SDiv instruction!");
 
-    const SCEV *Dividend = SE.getSCEV(SDiv->getOperand(0));
-    const SCEV *Divisor = SE.getSCEV(SDiv->getOperand(1));
+    auto *Dividend = SE.getSCEV(SDiv->getOperand(0));
+    auto *Divisor = SE.getSCEV(SDiv->getOperand(1));
     return visitDivision(Dividend, Divisor, Expr, SDiv);
   }
 
@@ -427,7 +427,7 @@ public:
       return visitGenericInst(SRem, S);
 
     auto *Dividend = SRem->getOperand(0);
-    const SCEV *DividendSCEV = SE.getSCEV(Dividend);
+    auto *DividendSCEV = SE.getSCEV(Dividend);
     return visit(DividendSCEV);
   }
 
@@ -435,13 +435,12 @@ public:
     Value *V = Expr->getValue();
 
     if (!Expr->getType()->isIntegerTy() && !Expr->getType()->isPointerTy()) {
-      POLLY_DEBUG(
-          dbgs() << "INVALID: UnknownExpr is not an integer or pointer");
+      LLVM_DEBUG(dbgs() << "INVALID: UnknownExpr is not an integer or pointer");
       return ValidatorResult(SCEVType::INVALID);
     }
 
     if (isa<UndefValue>(V)) {
-      POLLY_DEBUG(dbgs() << "INVALID: UnknownExpr references an undef value");
+      LLVM_DEBUG(dbgs() << "INVALID: UnknownExpr references an undef value");
       return ValidatorResult(SCEVType::INVALID);
     }
 
@@ -455,6 +454,8 @@ public:
         return visitSDivInstruction(I, Expr);
       case Instruction::SRem:
         return visitSRemInstruction(I, Expr);
+      case Instruction::Call:
+        return visitCallInstruction(I, Expr);
       default:
         return visitGenericInst(I, Expr);
       }
@@ -469,8 +470,36 @@ public:
   }
 };
 
+class SCEVHasIVParams {
+  bool HasIVParams = false;
+
+public:
+  SCEVHasIVParams() {}
+
+  bool follow(const SCEV *S) {
+    const SCEVUnknown *Unknown = dyn_cast<SCEVUnknown>(S);
+    if (!Unknown)
+      return true;
+
+    CallInst *Call = dyn_cast<CallInst>(Unknown->getValue());
+
+    if (!Call)
+      return true;
+
+    if (isConstCall(Call)) {
+      HasIVParams = true;
+      return false;
+    }
+
+    return true;
+  }
+
+  bool isDone() { return HasIVParams; }
+  bool hasIVParams() { return HasIVParams; }
+};
+
 /// Check whether a SCEV refers to an SSA name defined inside a region.
-class SCEVInRegionDependences final {
+class SCEVInRegionDependences {
   const Region *R;
   Loop *Scope;
   const InvariantLoadsSetTy &ILS;
@@ -486,6 +515,11 @@ public:
     if (auto Unknown = dyn_cast<SCEVUnknown>(S)) {
       Instruction *Inst = dyn_cast<Instruction>(Unknown->getValue());
 
+      CallInst *Call = dyn_cast<CallInst>(Unknown->getValue());
+
+      if (Call && isConstCall(Call))
+        return false;
+
       if (Inst) {
         // When we invariant load hoist a load, we first make sure that there
         // can be no dependences created by it in the Scop region. So, we should
@@ -496,7 +530,7 @@ public:
         // are strictly not necessary by tracking the invariant load as a
         // scalar.
         LoadInst *LI = dyn_cast<LoadInst>(Inst);
-        if (LI && ILS.contains(LI))
+        if (LI && ILS.count(LI) > 0)
           return false;
       }
 
@@ -525,8 +559,9 @@ public:
   bool hasDependences() { return HasInRegionDeps; }
 };
 
+namespace polly {
 /// Find all loops referenced in SCEVAddRecExprs.
-class SCEVFindLoops final {
+class SCEVFindLoops {
   SetVector<const Loop *> &Loops;
 
 public:
@@ -540,14 +575,14 @@ public:
   bool isDone() { return false; }
 };
 
-void polly::findLoops(const SCEV *Expr, SetVector<const Loop *> &Loops) {
+void findLoops(const SCEV *Expr, SetVector<const Loop *> &Loops) {
   SCEVFindLoops FindLoops(Loops);
   SCEVTraversal<SCEVFindLoops> ST(FindLoops);
   ST.visitAll(Expr);
 }
 
 /// Find all values referenced in SCEVUnknowns.
-class SCEVFindValues final {
+class SCEVFindValues {
   ScalarEvolution &SE;
   SetVector<Value *> &Values;
 
@@ -566,11 +601,11 @@ public:
                   Inst->getOpcode() != Instruction::SDiv))
       return false;
 
-    const SCEV *Dividend = SE.getSCEV(Inst->getOperand(1));
+    auto *Dividend = SE.getSCEV(Inst->getOperand(1));
     if (!isa<SCEVConstant>(Dividend))
       return false;
 
-    const SCEV *Divisor = SE.getSCEV(Inst->getOperand(0));
+    auto *Divisor = SE.getSCEV(Inst->getOperand(0));
     SCEVFindValues FindValues(SE, Values);
     SCEVTraversal<SCEVFindValues> ST(FindValues);
     ST.visitAll(Dividend);
@@ -581,29 +616,36 @@ public:
   bool isDone() { return false; }
 };
 
-void polly::findValues(const SCEV *Expr, ScalarEvolution &SE,
-                       SetVector<Value *> &Values) {
+void findValues(const SCEV *Expr, ScalarEvolution &SE,
+                SetVector<Value *> &Values) {
   SCEVFindValues FindValues(SE, Values);
   SCEVTraversal<SCEVFindValues> ST(FindValues);
   ST.visitAll(Expr);
 }
 
-bool polly::hasScalarDepsInsideRegion(const SCEV *Expr, const Region *R,
-                                      llvm::Loop *Scope, bool AllowLoops,
-                                      const InvariantLoadsSetTy &ILS) {
+bool hasIVParams(const SCEV *Expr) {
+  SCEVHasIVParams HasIVParams;
+  SCEVTraversal<SCEVHasIVParams> ST(HasIVParams);
+  ST.visitAll(Expr);
+  return HasIVParams.hasIVParams();
+}
+
+bool hasScalarDepsInsideRegion(const SCEV *Expr, const Region *R,
+                               llvm::Loop *Scope, bool AllowLoops,
+                               const InvariantLoadsSetTy &ILS) {
   SCEVInRegionDependences InRegionDeps(R, Scope, AllowLoops, ILS);
   SCEVTraversal<SCEVInRegionDependences> ST(InRegionDeps);
   ST.visitAll(Expr);
   return InRegionDeps.hasDependences();
 }
 
-bool polly::isAffineExpr(const Region *R, llvm::Loop *Scope, const SCEV *Expr,
-                         ScalarEvolution &SE, InvariantLoadsSetTy *ILS) {
+bool isAffineExpr(const Region *R, llvm::Loop *Scope, const SCEV *Expr,
+                  ScalarEvolution &SE, InvariantLoadsSetTy *ILS) {
   if (isa<SCEVCouldNotCompute>(Expr))
     return false;
 
   SCEVValidator Validator(R, Scope, SE, ILS);
-  POLLY_DEBUG({
+  LLVM_DEBUG({
     dbgs() << "\n";
     dbgs() << "Expr: " << *Expr << "\n";
     dbgs() << "Region: " << R->getNameStr() << "\n";
@@ -612,7 +654,7 @@ bool polly::isAffineExpr(const Region *R, llvm::Loop *Scope, const SCEV *Expr,
 
   ValidatorResult Result = Validator.visit(Expr);
 
-  POLLY_DEBUG({
+  LLVM_DEBUG({
     if (Result.isValid())
       dbgs() << "VALID\n";
     dbgs() << "\n";
@@ -623,7 +665,7 @@ bool polly::isAffineExpr(const Region *R, llvm::Loop *Scope, const SCEV *Expr,
 
 static bool isAffineExpr(Value *V, const Region *R, Loop *Scope,
                          ScalarEvolution &SE, ParameterSetTy &Params) {
-  const SCEV *E = SE.getSCEV(V);
+  auto *E = SE.getSCEV(V);
   if (isa<SCEVCouldNotCompute>(E))
     return false;
 
@@ -638,9 +680,9 @@ static bool isAffineExpr(Value *V, const Region *R, Loop *Scope,
   return true;
 }
 
-bool polly::isAffineConstraint(Value *V, const Region *R, Loop *Scope,
-                               ScalarEvolution &SE, ParameterSetTy &Params,
-                               bool OrExpr) {
+bool isAffineConstraint(Value *V, const Region *R, llvm::Loop *Scope,
+                        ScalarEvolution &SE, ParameterSetTy &Params,
+                        bool OrExpr) {
   if (auto *ICmp = dyn_cast<ICmpInst>(V)) {
     return isAffineConstraint(ICmp->getOperand(0), R, Scope, SE, Params,
                               true) &&
@@ -658,12 +700,11 @@ bool polly::isAffineConstraint(Value *V, const Region *R, Loop *Scope,
   if (!OrExpr)
     return false;
 
-  return ::isAffineExpr(V, R, Scope, SE, Params);
+  return isAffineExpr(V, R, Scope, SE, Params);
 }
 
-ParameterSetTy polly::getParamsInAffineExpr(const Region *R, Loop *Scope,
-                                            const SCEV *Expr,
-                                            ScalarEvolution &SE) {
+ParameterSetTy getParamsInAffineExpr(const Region *R, Loop *Scope,
+                                     const SCEV *Expr, ScalarEvolution &SE) {
   if (isa<SCEVCouldNotCompute>(Expr))
     return ParameterSetTy();
 
@@ -676,7 +717,7 @@ ParameterSetTy polly::getParamsInAffineExpr(const Region *R, Loop *Scope,
 }
 
 std::pair<const SCEVConstant *, const SCEV *>
-polly::extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
+extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
   auto *ConstPart = cast<SCEVConstant>(SE.getConstant(S->getType(), 1));
 
   if (auto *Constant = dyn_cast<SCEVConstant>(S))
@@ -684,10 +725,10 @@ polly::extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
 
   auto *AddRec = dyn_cast<SCEVAddRecExpr>(S);
   if (AddRec) {
-    const SCEV *StartExpr = AddRec->getStart();
+    auto *StartExpr = AddRec->getStart();
     if (StartExpr->isZero()) {
       auto StepPair = extractConstantFactor(AddRec->getStepRecurrence(SE), SE);
-      const SCEV *LeftOverAddRec =
+      auto *LeftOverAddRec =
           SE.getAddRecExpr(StartExpr, StepPair.second, AddRec->getLoop(),
                            AddRec->getNoWrapFlags());
       return std::make_pair(StepPair.first, LeftOverAddRec);
@@ -717,7 +758,7 @@ polly::extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
         return std::make_pair(ConstPart, S);
     }
 
-    const SCEV *NewAdd = SE.getAddExpr(LeftOvers, Add->getNoWrapFlags());
+    auto *NewAdd = SE.getAddExpr(LeftOvers, Add->getNoWrapFlags());
     return std::make_pair(Factor, NewAdd);
   }
 
@@ -726,7 +767,7 @@ polly::extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
     return std::make_pair(ConstPart, S);
 
   SmallVector<const SCEV *, 4> LeftOvers;
-  for (const SCEV *Op : Mul->operands())
+  for (auto *Op : Mul->operands())
     if (isa<SCEVConstant>(Op))
       ConstPart = cast<SCEVConstant>(SE.getMulExpr(ConstPart, Op));
     else
@@ -735,9 +776,9 @@ polly::extractConstantFactor(const SCEV *S, ScalarEvolution &SE) {
   return std::make_pair(ConstPart, SE.getMulExpr(LeftOvers));
 }
 
-const SCEV *polly::tryForwardThroughPHI(const SCEV *Expr, Region &R,
-                                        ScalarEvolution &SE,
-                                        ScopDetection *SD) {
+const SCEV *tryForwardThroughPHI(const SCEV *Expr, Region &R,
+                                 ScalarEvolution &SE, LoopInfo &LI,
+                                 const DominatorTree &DT) {
   if (auto *Unknown = dyn_cast<SCEVUnknown>(Expr)) {
     Value *V = Unknown->getValue();
     auto *PHI = dyn_cast<PHINode>(V);
@@ -748,7 +789,7 @@ const SCEV *polly::tryForwardThroughPHI(const SCEV *Expr, Region &R,
 
     for (unsigned i = 0; i < PHI->getNumIncomingValues(); i++) {
       BasicBlock *Incoming = PHI->getIncomingBlock(i);
-      if (SD->isErrorBlock(*Incoming, R) && R.contains(Incoming))
+      if (isErrorBlock(*Incoming, R, LI, DT) && R.contains(Incoming))
         continue;
       if (Final)
         return Expr;
@@ -761,12 +802,12 @@ const SCEV *polly::tryForwardThroughPHI(const SCEV *Expr, Region &R,
   return Expr;
 }
 
-Value *polly::getUniqueNonErrorValue(PHINode *PHI, Region *R,
-                                     ScopDetection *SD) {
+Value *getUniqueNonErrorValue(PHINode *PHI, Region *R, LoopInfo &LI,
+                              const DominatorTree &DT) {
   Value *V = nullptr;
   for (unsigned i = 0; i < PHI->getNumIncomingValues(); i++) {
     BasicBlock *BB = PHI->getIncomingBlock(i);
-    if (!SD->isErrorBlock(*BB, *R)) {
+    if (!isErrorBlock(*BB, *R, LI, DT)) {
       if (V)
         return nullptr;
       V = PHI->getIncomingValue(i);
@@ -775,3 +816,4 @@ Value *polly::getUniqueNonErrorValue(PHINode *PHI, Region *R,
 
   return V;
 }
+} // namespace polly

@@ -10,7 +10,6 @@
 #define LLDB_UTILITY_FILESPEC_H
 
 #include <functional>
-#include <optional>
 #include <string>
 
 #include "lldb/Utility/ConstString.h"
@@ -19,6 +18,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/YAMLTraits.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -191,18 +191,18 @@ public:
   static bool Match(const FileSpec &pattern, const FileSpec &file);
 
   /// Attempt to guess path style for a given path string. It returns a style,
-  /// if it was able to make a reasonable guess, or std::nullopt if it wasn't.
-  /// The guess will be correct if the input path was a valid absolute path on
-  /// the system which produced it. On other paths the result of this function
-  /// is unreliable (e.g. "c:\foo.txt" is a valid relative posix path).
-  static std::optional<Style> GuessPathStyle(llvm::StringRef absolute_path);
+  /// if it was able to make a reasonable guess, or None if it wasn't. The guess
+  /// will be correct if the input path was a valid absolute path on the system
+  /// which produced it. On other paths the result of this function is
+  /// unreliable (e.g. "c:\foo.txt" is a valid relative posix path).
+  static llvm::Optional<Style> GuessPathStyle(llvm::StringRef absolute_path);
 
   /// Case sensitivity of path.
   ///
   /// \return
   ///     \b true if the file path is case sensitive (POSIX), false
   ///		if case insensitive (Windows).
-  bool IsCaseSensitive() const { return is_style_posix(m_style); }
+  bool IsCaseSensitive() const { return m_style != Style::windows; }
 
   /// Dump this object to a Stream.
   ///
@@ -216,44 +216,35 @@ public:
 
   Style GetPathStyle() const;
 
+  /// Directory string get accessor.
+  ///
+  /// \return
+  ///     A reference to the directory string object.
+  ConstString &GetDirectory();
+
   /// Directory string const get accessor.
   ///
   /// \return
   ///     A const reference to the directory string object.
-  const ConstString &GetDirectory() const { return m_directory; }
+  ConstString GetDirectory() const;
 
-  /// Directory string set accessor.
+  /// Filename string get accessor.
   ///
-  /// \param[in] directory
-  ///     The value to replace the directory with.
-  void SetDirectory(ConstString directory);
-  void SetDirectory(llvm::StringRef directory);
-
-  /// Clear the directory in this object.
-  void ClearDirectory();
-
+  /// \return
+  ///     A reference to the filename string object.
+  ConstString &GetFilename();
 
   /// Filename string const get accessor.
   ///
   /// \return
   ///     A const reference to the filename string object.
-  const ConstString &GetFilename() const { return m_filename; }
-
-  /// Filename string set accessor.
-  ///
-  /// \param[in] filename
-  ///     The const string to replace the directory with.
-  void SetFilename(ConstString filename);
-  void SetFilename(llvm::StringRef filename);
-
-  /// Clear the filename in this object.
-  void ClearFilename();
+  ConstString GetFilename() const;
 
   /// Returns true if the filespec represents an implementation source file
   /// (files with a ".c", ".cpp", ".m", ".mm" (many more) extension).
   ///
   /// \return
-  ///     \b true if the FileSpec represents an implementation source
+  ///     \b true if the filespec represents an implementation source
   ///     file, \b false otherwise.
   bool IsSourceImplementationFile() const;
 
@@ -308,13 +299,7 @@ public:
   ///     concatenated.
   std::string GetPath(bool denormalize = true) const;
 
-  /// Get the full path as a ConstString.
-  ///
-  /// This method should only be used when you need a ConstString or the
-  /// const char * from a ConstString to ensure permanent lifetime of C string.
-  /// Anyone needing the path temporarily should use the GetPath() method that
-  /// returns a std:string.
-  ConstString GetPathAsConstString(bool denormalize = true) const;
+  const char *GetCString(bool denormalize = true) const;
 
   /// Extract the full path to the file.
   ///
@@ -327,10 +312,10 @@ public:
   /// Returns a ConstString that represents the extension of the filename for
   /// this FileSpec object. If this object does not represent a file, or the
   /// filename has no extension, ConstString(nullptr) is returned. The dot
-  /// ('.') character is the first character in the returned string.
+  /// ('.') character is not returned as part of the extension
   ///
-  /// \return Returns the extension of the file as a StringRef.
-  llvm::StringRef GetFileNameExtension() const;
+  /// \return Returns the extension of the file as a ConstString object.
+  ConstString GetFileNameExtension() const;
 
   /// Return the filename without the extension part
   ///
@@ -349,6 +334,8 @@ public:
   ///
   /// \return
   ///     The number of bytes that this object occupies in memory.
+  ///
+  /// \see ConstString::StaticMemorySize ()
   size_t MemorySize() const;
 
   /// Change the file specified with a new path.
@@ -377,6 +364,21 @@ public:
   ///     The triple which is used to set the Path style.
   void SetFile(llvm::StringRef path, const llvm::Triple &triple);
 
+  bool IsResolved() const { return m_is_resolved; }
+
+  /// Set if the file path has been resolved or not.
+  ///
+  /// If you know a file path is already resolved and avoided passing a \b
+  /// true parameter for any functions that take a "bool resolve_path"
+  /// parameter, you can set the value manually using this call to make sure
+  /// we don't try and resolve it later, or try and resolve a path that has
+  /// already been resolved.
+  ///
+  /// \param[in] is_resolved
+  ///     A boolean value that will replace the current value that
+  ///     indicates if the paths in this object have been resolved.
+  void SetIsResolved(bool is_resolved) { m_is_resolved = is_resolved; }
+
   FileSpec CopyByAppendingPathComponent(llvm::StringRef component) const;
   FileSpec CopyByRemovingLastPathComponent() const;
 
@@ -393,47 +395,26 @@ public:
   ///     A boolean value indicating whether the path was updated.
   bool RemoveLastPathComponent();
 
-  /// Gets the components of the FileSpec's path.
-  /// For example, given the path:
-  ///   /System/Library/PrivateFrameworks/UIFoundation.framework/UIFoundation
-  ///
-  /// This function returns:
-  ///   {"System", "Library", "PrivateFrameworks", "UIFoundation.framework",
-  ///   "UIFoundation"}
-  /// \return
-  ///   A std::vector of llvm::StringRefs for each path component.
-  ///   The lifetime of the StringRefs is tied to the lifetime of the FileSpec.
-  std::vector<llvm::StringRef> GetComponents() const;
+  ConstString GetLastPathComponent() const;
 
 protected:
+  friend struct llvm::yaml::MappingTraits<FileSpec>;
+
   // Convenience method for setting the file without changing the style.
   void SetFile(llvm::StringRef path);
 
-  /// Called anytime m_directory or m_filename is changed to clear any cached
-  /// state in this object.
-  void PathWasModified() { m_absolute = Absolute::Calculate; }
-
-  enum class Absolute : uint8_t {
-    Calculate,
-    Yes,
-    No
-  };
-
-  /// The unique'd directory path.
-  ConstString m_directory;
-
-  /// The unique'd filename path.
-  ConstString m_filename;
-
-  /// Cache whether this path is absolute.
-  mutable Absolute m_absolute = Absolute::Calculate;
-
-  /// The syntax that this path uses. (e.g. Windows / Posix)
-  Style m_style;
+  // Member variables
+  ConstString m_directory;            ///< The uniqued directory path
+  ConstString m_filename;             ///< The uniqued filename path
+  mutable bool m_is_resolved = false; ///< True if this path has been resolved.
+  Style m_style; ///< The syntax that this path uses (e.g. Windows / Posix)
 };
 
 /// Dump a FileSpec object to a stream
 Stream &operator<<(Stream &s, const FileSpec &f);
+
+/// Prevent ODR violations with traits for llvm::sys::path::Style.
+LLVM_YAML_STRONG_TYPEDEF(FileSpec::Style, FileSpecStyle)
 } // namespace lldb_private
 
 namespace llvm {
@@ -461,6 +442,15 @@ template <> struct format_provider<lldb_private::FileSpec> {
                      StringRef Style);
 };
 
+namespace yaml {
+template <> struct ScalarEnumerationTraits<lldb_private::FileSpecStyle> {
+  static void enumeration(IO &io, lldb_private::FileSpecStyle &style);
+};
+
+template <> struct MappingTraits<lldb_private::FileSpec> {
+  static void mapping(IO &io, lldb_private::FileSpec &f);
+};
+} // namespace yaml
 } // namespace llvm
 
 #endif // LLDB_UTILITY_FILESPEC_H

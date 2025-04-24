@@ -27,6 +27,7 @@
 namespace clang {
 
 class DiagnosticsEngine;
+class Rewriter;
 
 namespace replace {
 
@@ -40,8 +41,9 @@ typedef std::vector<std::string> TUReplacementFiles;
 typedef std::vector<clang::tooling::TranslationUnitDiagnostics> TUDiagnostics;
 
 /// Map mapping file name to a set of AtomicChange targeting that file.
-using FileToChangesMap =
-    llvm::DenseMap<clang::FileEntryRef, std::vector<tooling::AtomicChange>>;
+typedef llvm::DenseMap<const clang::FileEntry *,
+                       std::vector<tooling::AtomicChange>>
+    FileToChangesMap;
 
 /// Recursively descends through a directory structure rooted at \p
 /// Directory and attempts to deserialize *.yaml files as
@@ -51,27 +53,19 @@ using FileToChangesMap =
 /// Directories starting with '.' are ignored during traversal.
 ///
 /// \param[in] Directory Directory to begin search for serialized
-/// TranslationUnitReplacements or TranslationUnitDiagnostics.
+/// TranslationUnitReplacements.
 /// \param[out] TUs Collection of all found and deserialized
 /// TranslationUnitReplacements or TranslationUnitDiagnostics.
-/// \param[out] TUFiles Collection of all TranslationUnitReplacement or
-/// TranslationUnitDiagnostics files found in \c Directory.
+/// \param[out] TUFiles Collection of all TranslationUnitReplacement files
+/// found in \c Directory.
 /// \param[in] Diagnostics DiagnosticsEngine used for error output.
 ///
 /// \returns An error_code indicating success or failure in navigating the
 /// directory structure.
-template <typename TranslationUnits>
-std::error_code collectReplacementsFromDirectory(
-    const llvm::StringRef Directory, TranslationUnits &TUs,
-    TUReplacementFiles &TUFiles,
-    clang::DiagnosticsEngine &Diagnostics) = delete;
-
-template <>
 std::error_code collectReplacementsFromDirectory(
     const llvm::StringRef Directory, TUReplacements &TUs,
     TUReplacementFiles &TUFiles, clang::DiagnosticsEngine &Diagnostics);
 
-template <>
 std::error_code collectReplacementsFromDirectory(
     const llvm::StringRef Directory, TUDiagnostics &TUs,
     TUReplacementFiles &TUFiles, clang::DiagnosticsEngine &Diagnostics);
@@ -94,8 +88,7 @@ std::error_code collectReplacementsFromDirectory(
 ///          \li false If there were conflicts.
 bool mergeAndDeduplicate(const TUReplacements &TUs, const TUDiagnostics &TUDs,
                          FileToChangesMap &FileChanges,
-                         clang::SourceManager &SM,
-                         bool IgnoreInsertConflict = false);
+                         clang::SourceManager &SM);
 
 /// Apply \c AtomicChange on File and rewrite it.
 ///

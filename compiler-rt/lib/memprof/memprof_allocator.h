@@ -39,14 +39,10 @@ void InitializeAllocator();
 
 struct MemprofMapUnmapCallback {
   void OnMap(uptr p, uptr size) const;
-  void OnMapSecondary(uptr p, uptr size, uptr user_begin,
-                      uptr user_size) const {
-    OnMap(p, size);
-  }
   void OnUnmap(uptr p, uptr size) const;
 };
 
-constexpr uptr kAllocatorSpace = ~(uptr)0;
+constexpr uptr kAllocatorSpace = 0x600000000000ULL;
 constexpr uptr kAllocatorSize = 0x40000000000ULL; // 4T.
 typedef DefaultSizeClassMap SizeClassMap;
 template <typename AddressSpaceViewTy>
@@ -99,9 +95,10 @@ void *memprof_aligned_alloc(uptr alignment, uptr size,
                             BufferedStackTrace *stack);
 int memprof_posix_memalign(void **memptr, uptr alignment, uptr size,
                            BufferedStackTrace *stack);
-uptr memprof_malloc_usable_size(const void *ptr);
+uptr memprof_malloc_usable_size(const void *ptr, uptr pc, uptr bp);
 
 void PrintInternalAllocatorStats();
+void MemprofSoftRssLimitExceededCallback(bool exceeded);
 
 } // namespace __memprof
 #endif // MEMPROF_ALLOCATOR_H

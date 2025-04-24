@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -92,7 +93,9 @@ MCOperand LanaiMCInstLower::LowerSymbolOperand(const MachineOperand &MO,
 void LanaiMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   OutMI.setOpcode(MI->getOpcode());
 
-  for (const MachineOperand &MO : MI->operands()) {
+  for (unsigned I = 0, E = MI->getNumOperands(); I != E; ++I) {
+    const MachineOperand &MO = MI->getOperand(I);
+
     MCOperand MCOp;
     switch (MO.getType()) {
     case MachineOperand::MO_Register:

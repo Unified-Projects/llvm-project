@@ -53,7 +53,7 @@ void setCurrentDebugType(const char *Type);
 void setCurrentDebugTypes(const char **Types, unsigned Count);
 
 /// DEBUG_WITH_TYPE macro - This macro should be used by passes to emit debug
-/// information.  If the '-debug' option is specified on the commandline, and if
+/// information.  In the '-debug' option is specified on the commandline, and if
 /// this is a debug build, then the code specified as the option to the macro
 /// will be executed.  Otherwise it will not be.  Example:
 ///
@@ -61,20 +61,15 @@ void setCurrentDebugTypes(const char **Types, unsigned Count);
 ///
 /// This will emit the debug information if -debug is present, and -debug-only
 /// is not specified, or is specified as "bitset".
-#define DEBUG_WITH_TYPE(TYPE, ...)                                             \
-  do {                                                                         \
-    if (::llvm::DebugFlag && ::llvm::isCurrentDebugType(TYPE)) {               \
-      __VA_ARGS__;                                                             \
-    }                                                                          \
+#define DEBUG_WITH_TYPE(TYPE, X)                                        \
+  do { if (::llvm::DebugFlag && ::llvm::isCurrentDebugType(TYPE)) { X; } \
   } while (false)
 
 #else
 #define isCurrentDebugType(X) (false)
-#define setCurrentDebugType(X) do { (void)(X); } while (false)
-#define setCurrentDebugTypes(X, N) do { (void)(X); (void)(N); } while (false)
-#define DEBUG_WITH_TYPE(TYPE, ...)                                             \
-  do {                                                                         \
-  } while (false)
+#define setCurrentDebugType(X)
+#define setCurrentDebugTypes(X, N)
+#define DEBUG_WITH_TYPE(TYPE, X) do { } while (false)
 #endif
 
 /// This boolean is set to true if the '-debug' command line option
@@ -82,6 +77,27 @@ void setCurrentDebugTypes(const char **Types, unsigned Count);
 /// the DEBUG macro below.
 ///
 extern bool DebugFlag;
+
+/// \name Verification flags.
+///
+/// These flags turns on/off that are expensive and are turned off by default,
+/// unless macro EXPENSIVE_CHECKS is defined. The flags allow selectively
+/// turning the checks on without need to recompile.
+/// \{
+
+/// Enables verification of dominator trees.
+///
+extern bool VerifyDomInfo;
+
+/// Enables verification of loop info.
+///
+extern bool VerifyLoopInfo;
+
+/// Enables verification of MemorySSA.
+///
+extern bool VerifyMemorySSA;
+
+///\}
 
 /// EnableDebugBuffering - This defaults to false.  If true, the debug
 /// stream will install signal handlers to dump any buffered debug
@@ -97,13 +113,13 @@ extern bool EnableDebugBuffering;
 raw_ostream &dbgs();
 
 // DEBUG macro - This macro should be used by passes to emit debug information.
-// If the '-debug' option is specified on the commandline, and if this is a
+// In the '-debug' option is specified on the commandline, and if this is a
 // debug build, then the code specified as the option to the macro will be
 // executed.  Otherwise it will not be.  Example:
 //
 // LLVM_DEBUG(dbgs() << "Bitset contains: " << Bitset << "\n");
 //
-#define LLVM_DEBUG(...) DEBUG_WITH_TYPE(DEBUG_TYPE, __VA_ARGS__)
+#define LLVM_DEBUG(X) DEBUG_WITH_TYPE(DEBUG_TYPE, X)
 
 } // end namespace llvm
 

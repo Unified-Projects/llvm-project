@@ -29,8 +29,8 @@ bool isIterator(const CXXRecordDecl *CRD) {
     return false;
 
   const auto Name = CRD->getName();
-  if (!(Name.ends_with_insensitive("iterator") ||
-        Name.ends_with_insensitive("iter") || Name.ends_with_insensitive("it")))
+  if (!(Name.endswith_insensitive("iterator") ||
+        Name.endswith_insensitive("iter") || Name.endswith_insensitive("it")))
     return false;
 
   bool HasCopyCtor = false, HasCopyAssign = true, HasDtor = false,
@@ -181,7 +181,8 @@ const ContainerData *getContainerData(ProgramStateRef State,
   return State->get<ContainerMap>(Cont);
 }
 
-const IteratorPosition *getIteratorPosition(ProgramStateRef State, SVal Val) {
+const IteratorPosition *getIteratorPosition(ProgramStateRef State,
+                                            const SVal &Val) {
   if (auto Reg = Val.getAsRegion()) {
     Reg = Reg->getMostDerivedObjectRegion();
     return State->get<IteratorRegionMap>(Reg);
@@ -193,7 +194,7 @@ const IteratorPosition *getIteratorPosition(ProgramStateRef State, SVal Val) {
   return nullptr;
 }
 
-ProgramStateRef setIteratorPosition(ProgramStateRef State, SVal Val,
+ProgramStateRef setIteratorPosition(ProgramStateRef State, const SVal &Val,
                                     const IteratorPosition &Pos) {
   if (auto Reg = Val.getAsRegion()) {
     Reg = Reg->getMostDerivedObjectRegion();
@@ -206,8 +207,8 @@ ProgramStateRef setIteratorPosition(ProgramStateRef State, SVal Val,
   return nullptr;
 }
 
-ProgramStateRef createIteratorPosition(ProgramStateRef State, SVal Val,
-                                       const MemRegion *Cont, const Stmt *S,
+ProgramStateRef createIteratorPosition(ProgramStateRef State, const SVal &Val,
+                                       const MemRegion *Cont, const Stmt* S,
                                        const LocationContext *LCtx,
                                        unsigned blockCount) {
   auto &StateMgr = State->getStateManager();
@@ -220,8 +221,9 @@ ProgramStateRef createIteratorPosition(ProgramStateRef State, SVal Val,
                              IteratorPosition::getPosition(Cont, Sym));
 }
 
-ProgramStateRef advancePosition(ProgramStateRef State, SVal Iter,
-                                OverloadedOperatorKind Op, SVal Distance) {
+ProgramStateRef advancePosition(ProgramStateRef State, const SVal &Iter,
+                                OverloadedOperatorKind Op,
+                                const SVal &Distance) {
   const auto *Pos = getIteratorPosition(State, Iter);
   if (!Pos)
     return nullptr;
@@ -241,7 +243,7 @@ ProgramStateRef advancePosition(ProgramStateRef State, SVal Iter,
   // For concrete integers we can calculate the new position
   nonloc::ConcreteInt IntDist = *IntDistOp;
 
-  if (IntDist.getValue()->isNegative()) {
+  if (IntDist.getValue().isNegative()) {
     IntDist = nonloc::ConcreteInt(BVF.getValue(-IntDist.getValue()));
     BinOp = (BinOp == BO_Add) ? BO_Sub : BO_Add;
   }
@@ -272,9 +274,9 @@ ProgramStateRef assumeNoOverflow(ProgramStateRef State, SymbolRef Sym,
   ProgramStateRef NewState = State;
 
   llvm::APSInt Max = AT.getMaxValue() / AT.getValue(Scale);
-  SVal IsCappedFromAbove = SVB.evalBinOpNN(
-      State, BO_LE, nonloc::SymbolVal(Sym),
-      nonloc::ConcreteInt(BV.getValue(Max)), SVB.getConditionType());
+  SVal IsCappedFromAbove =
+      SVB.evalBinOpNN(State, BO_LE, nonloc::SymbolVal(Sym),
+                      nonloc::ConcreteInt(Max), SVB.getConditionType());
   if (auto DV = IsCappedFromAbove.getAs<DefinedSVal>()) {
     NewState = NewState->assume(*DV, true);
     if (!NewState)
@@ -282,9 +284,9 @@ ProgramStateRef assumeNoOverflow(ProgramStateRef State, SymbolRef Sym,
   }
 
   llvm::APSInt Min = -Max;
-  SVal IsCappedFromBelow = SVB.evalBinOpNN(
-      State, BO_GE, nonloc::SymbolVal(Sym),
-      nonloc::ConcreteInt(BV.getValue(Min)), SVB.getConditionType());
+  SVal IsCappedFromBelow =
+      SVB.evalBinOpNN(State, BO_GE, nonloc::SymbolVal(Sym),
+                      nonloc::ConcreteInt(Min), SVB.getConditionType());
   if (auto DV = IsCappedFromBelow.getAs<DefinedSVal>()) {
     NewState = NewState->assume(*DV, true);
     if (!NewState)
@@ -306,8 +308,8 @@ bool compare(ProgramStateRef State, NonLoc NL1, NonLoc NL2,
   const auto comparison =
     SVB.evalBinOp(State, Opc, NL1, NL2, SVB.getConditionType());
 
-  assert(isa<DefinedSVal>(comparison) &&
-         "Symbol comparison must be a `DefinedSVal`");
+  assert(comparison.getAs<DefinedSVal>() &&
+    "Symbol comparison must be a `DefinedSVal`");
 
   return !State->assume(comparison.castAs<DefinedSVal>(), false);
 }

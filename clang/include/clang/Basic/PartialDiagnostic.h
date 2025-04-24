@@ -28,6 +28,9 @@
 
 namespace clang {
 
+class DeclContext;
+class IdentifierInfo;
+
 class PartialDiagnostic : public StreamingDiagnostic {
 private:
   // NOTE: Sema assumes that PartialDiagnostic is location-invariant
@@ -64,8 +67,8 @@ public:
   // It is necessary to limit this to rvalue reference to avoid calling this
   // function with a bitfield lvalue argument since non-const reference to
   // bitfield is not allowed.
-  template <typename T,
-            typename = std::enable_if_t<!std::is_lvalue_reference<T>::value>>
+  template <typename T, typename = typename std::enable_if<
+                            !std::is_lvalue_reference<T>::value>::type>
   const PartialDiagnostic &operator<<(T &&V) const {
     const StreamingDiagnostic &DB = *this;
     DB << std::move(V);
@@ -166,10 +169,13 @@ public:
 
   void EmitToString(DiagnosticsEngine &Diags,
                     SmallVectorImpl<char> &Buf) const {
+    // FIXME: It should be possible to render a diagnostic to a string without
+    //        messing with the state of the diagnostics engine.
     DiagnosticBuilder DB(Diags.Report(getDiagID()));
     Emit(DB);
-    Diagnostic(&Diags, DB).FormatDiagnostic(Buf);
+    Diagnostic(&Diags).FormatDiagnostic(Buf);
     DB.Clear();
+    Diags.Clear();
   }
 
   /// Clear out this partial diagnostic, giving it a new diagnostic ID

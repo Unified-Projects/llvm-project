@@ -16,7 +16,6 @@ add_public_tablegen_target(VECommonTableGen)
 add_llvm_target(VECodeGen
   LVLGen.cpp
   VEAsmPrinter.cpp
-  VECustomDAG.cpp
   VEFrameLowering.cpp
   VEISelDAGToDAG.cpp
   VEISelLowering.cpp
@@ -26,21 +25,18 @@ add_llvm_target(VECodeGen
   VERegisterInfo.cpp
   VESubtarget.cpp
   VETargetMachine.cpp
-  VVPISelLowering.cpp
 
   LINK_COMPONENTS
   Analysis
   AsmPrinter
   CodeGen
-  CodeGenTypes
   Core
   MC
   SelectionDAG
-  Support
-  Target
-  TransformUtils
   VEDesc
   VEInfo
+  Support
+  Target
 
   ADD_TO_COMPONENT
   VE

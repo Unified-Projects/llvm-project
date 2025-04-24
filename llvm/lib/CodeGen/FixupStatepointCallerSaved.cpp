@@ -1,8 +1,9 @@
 //===-- FixupStatepointCallerSaved.cpp - Fixup caller saved registers  ----===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -24,7 +25,10 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/InitializePasses.h"
@@ -112,7 +116,7 @@ static Register performCopyPropagation(Register Reg,
                                        bool &IsKill, const TargetInstrInfo &TII,
                                        const TargetRegisterInfo &TRI) {
   // First check if statepoint itself uses Reg in non-meta operands.
-  int Idx = RI->findRegisterUseOperandIdx(Reg, &TRI, false);
+  int Idx = RI->findRegisterUseOperandIdx(Reg, false, &TRI);
   if (Idx >= 0 && (unsigned)Idx < StatepointOpers(&*RI).getNumDeoptArgsIdx()) {
     IsKill = false;
     return Reg;
@@ -153,17 +157,12 @@ static Register performCopyPropagation(Register Reg,
   RI = ++MachineBasicBlock::iterator(Def);
   IsKill = DestSrc->Source->isKill();
 
+  // There are no uses of original register between COPY and STATEPOINT.
+  // There can't be any after STATEPOINT, so we can eliminate Def.
   if (!Use) {
-    // There are no uses of original register between COPY and STATEPOINT.
-    // There can't be any after STATEPOINT, so we can eliminate Def.
     LLVM_DEBUG(dbgs() << "spillRegisters: removing dead copy " << *Def);
     Def->eraseFromParent();
-  } else if (IsKill) {
-    // COPY will remain in place, spill will be inserted *after* it, so it is
-    // not a kill of source anymore.
-    const_cast<MachineOperand *>(DestSrc->Source)->setIsKill(false);
   }
-
   return SrcReg;
 }
 
@@ -190,8 +189,7 @@ public:
   // Does basic block MBB contains reload of Reg from FI?
   bool hasReload(Register Reg, int FI, const MachineBasicBlock *MBB) {
     RegSlotPair RSP(Reg, FI);
-    auto It = Reloads.find(MBB);
-    return It != Reloads.end() && It->second.count(RSP);
+    return Reloads.count(MBB) && Reloads[MBB].count(RSP);
   }
 };
 
@@ -243,10 +241,9 @@ public:
       It.second.Index = 0;
 
     ReservedSlots.clear();
-    if (EHPad)
-      if (auto It = GlobalIndices.find(EHPad); It != GlobalIndices.end())
-        for (auto &RSP : It->second)
-          ReservedSlots.insert(RSP.second);
+    if (EHPad && GlobalIndices.count(EHPad))
+      for (auto &RSP : GlobalIndices[EHPad])
+        ReservedSlots.insert(RSP.second);
   }
 
   // Get frame index to spill the register.
@@ -383,12 +380,14 @@ public:
                   EndIdx = MI.getNumOperands();
          Idx < EndIdx; ++Idx) {
       MachineOperand &MO = MI.getOperand(Idx);
+      // Leave `undef` operands as is, StackMaps will rewrite them
+      // into a constant.
       if (!MO.isReg() || MO.isImplicit() || MO.isUndef())
         continue;
       Register Reg = MO.getReg();
       assert(Reg.isPhysical() && "Only physical regs are expected");
 
-      if (isCalleeSaved(Reg) && (AllowGCPtrInCSR || !GCRegs.contains(Reg)))
+      if (isCalleeSaved(Reg) && (AllowGCPtrInCSR || !is_contained(GCRegs, Reg)))
         continue;
 
       LLVM_DEBUG(dbgs() << "Will spill " << printReg(Reg, &TRI) << " at index "
@@ -407,6 +406,7 @@ public:
   void spillRegisters() {
     for (Register Reg : RegsToSpill) {
       int FI = CacheFI.getFrameIndex(Reg, EHPad);
+      const TargetRegisterClass *RC = TRI.getMinimalPhysRegClass(Reg);
 
       NumSpilledRegisters++;
       RegToSlotIdx[Reg] = FI;
@@ -418,11 +418,10 @@ public:
       bool IsKill = true;
       MachineBasicBlock::iterator InsertBefore(MI);
       Reg = performCopyPropagation(Reg, InsertBefore, IsKill, TII, TRI);
-      const TargetRegisterClass *RC = TRI.getMinimalPhysRegClass(Reg);
 
       LLVM_DEBUG(dbgs() << "Insert spill before " << *InsertBefore);
       TII.storeRegToStackSlot(*MI.getParent(), InsertBefore, Reg, IsKill, FI,
-                              RC, &TRI, Register());
+                              RC, &TRI);
     }
   }
 
@@ -431,7 +430,7 @@ public:
     const TargetRegisterClass *RC = TRI.getMinimalPhysRegClass(Reg);
     int FI = RegToSlotIdx[Reg];
     if (It != MBB->end()) {
-      TII.loadRegFromStackSlot(*MBB, It, Reg, FI, RC, &TRI, Register());
+      TII.loadRegFromStackSlot(*MBB, It, Reg, FI, RC, &TRI);
       return;
     }
 
@@ -439,7 +438,7 @@ public:
     // and then swap them.
     assert(!MBB->empty() && "Empty block");
     --It;
-    TII.loadRegFromStackSlot(*MBB, It, Reg, FI, RC, &TRI, Register());
+    TII.loadRegFromStackSlot(*MBB, It, Reg, FI, RC, &TRI);
     MachineInstr *Reload = It->getPrevNode();
     int Dummy = 0;
     (void)Dummy;
@@ -461,8 +460,7 @@ public:
 
       if (EHPad && !RC.hasReload(Reg, RegToSlotIdx[Reg], EHPad)) {
         RC.recordReload(Reg, RegToSlotIdx[Reg], EHPad);
-        auto EHPadInsertPoint =
-            EHPad->SkipPHIsLabelsAndDebug(EHPad->begin(), Reg);
+        auto EHPadInsertPoint = EHPad->SkipPHIsLabelsAndDebug(EHPad->begin());
         insertReloadBefore(Reg, EHPadInsertPoint, EHPad);
         LLVM_DEBUG(dbgs() << "...also reload at EHPad "
                           << printMBBReference(*EHPad) << "\n");

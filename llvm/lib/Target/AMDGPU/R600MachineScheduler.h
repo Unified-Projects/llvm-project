@@ -17,6 +17,8 @@
 #include "llvm/CodeGen/MachineScheduler.h"
 #include <vector>
 
+using namespace llvm;
+
 namespace llvm {
 
 class R600InstrInfo;
@@ -61,7 +63,7 @@ class R600SchedStrategy final : public MachineSchedStrategy {
 
   int InstKindLimit[IDLast];
 
-  int OccupiedSlotsMask;
+  int OccupedSlotsMask;
 
 public:
   R600SchedStrategy() = default;

@@ -7,18 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/math/round.h"
-#include "src/__support/FPUtil/NearestIntegerOperations.h"
 #include "src/__support/common.h"
-#include "src/__support/macros/config.h"
+#include "utils/FPUtil/NearestIntegerOperations.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
-LLVM_LIBC_FUNCTION(double, round, (double x)) {
-#ifdef __LIBC_USE_BUILTIN_ROUND
-  return __builtin_round(x);
-#else
-  return fputil::round(x);
-#endif
-}
+LLVM_LIBC_FUNCTION(double, round, (double x)) { return fputil::round(x); }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

@@ -11,8 +11,6 @@
 
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclObjC.h"
-#include "clang/Basic/Module.h"
-#include <optional>
 
 using namespace lldb_private;
 
@@ -50,8 +48,7 @@ void ClangExternalASTSourceCallbacks::FindExternalLexicalDecls(
 }
 
 bool ClangExternalASTSourceCallbacks::FindExternalVisibleDeclsByName(
-    const clang::DeclContext *DC, clang::DeclarationName Name,
-    const clang::DeclContext *OriginalDC) {
+    const clang::DeclContext *DC, clang::DeclarationName Name) {
   llvm::SmallVector<clang::NamedDecl *, 4> decls;
   // Objective-C methods are not added into the LookupPtr when they originate
   // from an external source. SetExternalVisibleDeclsForName() adds them.
@@ -72,7 +69,7 @@ ClangExternalASTSourceCallbacks::RegisterModule(clang::Module *module) {
   return OptionalClangModuleID(id);
 }
 
-std::optional<clang::ASTSourceDescriptor>
+llvm::Optional<clang::ASTSourceDescriptor>
 ClangExternalASTSourceCallbacks::getSourceDescriptor(unsigned id) {
   if (clang::Module *module = getModule(id))
     return {*module};

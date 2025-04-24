@@ -24,7 +24,7 @@ int test3g = test3(__PRETTY_FUNCTION__);
 struct test4A {
   int j : 2;
 };
-void test4() {
+int test4() {
   test4A a;
   (a.j = 2) = 3;
 }

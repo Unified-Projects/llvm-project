@@ -92,8 +92,7 @@ public:
   void beginDiagnostic(DiagOrStoredDiag D,
                        DiagnosticsEngine::Level Level) override {
 
-    const StoredDiagnostic *SD =
-        dyn_cast_if_present<const StoredDiagnostic *>(D);
+    const StoredDiagnostic *SD = D.dyn_cast<const StoredDiagnostic*>();
     if (!SD)
       return;
     

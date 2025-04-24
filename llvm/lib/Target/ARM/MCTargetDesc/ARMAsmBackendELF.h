@@ -6,28 +6,28 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_TARGET_ARM_MCTARGETDESC_ELFARMASMBACKEND_H
-#define LLVM_LIB_TARGET_ARM_MCTARGETDESC_ELFARMASMBACKEND_H
+#ifndef LLVM_LIB_TARGET_ARM_ELFARMASMBACKEND_H
+#define LLVM_LIB_TARGET_ARM_ELFARMASMBACKEND_H
 
 #include "ARMAsmBackend.h"
 #include "MCTargetDesc/ARMMCTargetDesc.h"
 #include "llvm/MC/MCObjectWriter.h"
 
-namespace llvm {
+using namespace llvm;
+
+namespace {
 class ARMAsmBackendELF : public ARMAsmBackend {
 public:
   uint8_t OSABI;
-  ARMAsmBackendELF(const Target &T, bool isThumb, uint8_t OSABI,
-                   llvm::endianness Endian)
-      : ARMAsmBackend(T, isThumb, Endian), OSABI(OSABI) {}
+  ARMAsmBackendELF(const Target &T, const MCSubtargetInfo &STI, uint8_t OSABI,
+                   support::endianness Endian)
+      : ARMAsmBackend(T, STI, Endian), OSABI(OSABI) {}
 
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override {
     return createARMELFObjectWriter(OSABI);
   }
-
-  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override;
 };
-} // namespace llvm
+}
 
-#endif // LLVM_LIB_TARGET_ARM_MCTARGETDESC_ELFARMASMBACKEND_H
+#endif

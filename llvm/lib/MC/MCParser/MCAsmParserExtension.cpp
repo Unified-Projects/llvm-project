@@ -8,8 +8,6 @@
 
 #include "llvm/MC/MCParser/MCAsmParserExtension.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCStreamer.h"
 
 using namespace llvm;
@@ -22,9 +20,9 @@ void MCAsmParserExtension::Initialize(MCAsmParser &Parser) {
   this->Parser = &Parser;
 }
 
-/// parseDirectiveCGProfile
+/// ParseDirectiveCGProfile
 ///  ::= .cg_profile identifier, identifier, <number>
-bool MCAsmParserExtension::parseDirectiveCGProfile(StringRef, SMLoc) {
+bool MCAsmParserExtension::ParseDirectiveCGProfile(StringRef, SMLoc) {
   StringRef From;
   SMLoc FromLoc = getLexer().getLoc();
   if (getParser().parseIdentifier(From))

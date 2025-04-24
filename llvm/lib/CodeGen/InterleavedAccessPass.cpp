@@ -46,9 +46,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/CodeGen/InterleavedAccess.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -59,13 +57,13 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/Type.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -83,39 +81,37 @@ static cl::opt<bool> LowerInterleavedAccesses(
 
 namespace {
 
-class InterleavedAccessImpl {
-  friend class InterleavedAccess;
-
+class InterleavedAccess : public FunctionPass {
 public:
-  InterleavedAccessImpl() = default;
-  InterleavedAccessImpl(DominatorTree *DT, const TargetLowering *TLI)
-      : DT(DT), TLI(TLI), MaxFactor(TLI->getMaxSupportedInterleaveFactor()) {}
-  bool runOnFunction(Function &F);
+  static char ID;
+
+  InterleavedAccess() : FunctionPass(ID) {
+    initializeInterleavedAccessPass(*PassRegistry::getPassRegistry());
+  }
+
+  StringRef getPassName() const override { return "Interleaved Access Pass"; }
+
+  bool runOnFunction(Function &F) override;
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addPreserved<DominatorTreeWrapperPass>();
+  }
 
 private:
   DominatorTree *DT = nullptr;
   const TargetLowering *TLI = nullptr;
 
   /// The maximum supported interleave factor.
-  unsigned MaxFactor = 0u;
+  unsigned MaxFactor;
 
   /// Transform an interleaved load into target specific intrinsics.
   bool lowerInterleavedLoad(LoadInst *LI,
-                            SmallSetVector<Instruction *, 32> &DeadInsts);
+                            SmallVector<Instruction *, 32> &DeadInsts);
 
   /// Transform an interleaved store into target specific intrinsics.
   bool lowerInterleavedStore(StoreInst *SI,
-                             SmallSetVector<Instruction *, 32> &DeadInsts);
-
-  /// Transform a load and a deinterleave intrinsic into target specific
-  /// instructions.
-  bool lowerDeinterleaveIntrinsic(IntrinsicInst *II,
-                                  SmallSetVector<Instruction *, 32> &DeadInsts);
-
-  /// Transform an interleave intrinsic and a store into target specific
-  /// instructions.
-  bool lowerInterleaveIntrinsic(IntrinsicInst *II,
-                                SmallSetVector<Instruction *, 32> &DeadInsts);
+                             SmallVector<Instruction *, 32> &DeadInsts);
 
   /// Returns true if the uses of an interleaved load by the
   /// extractelement instructions in \p Extracts can be replaced by uses of the
@@ -134,59 +130,9 @@ private:
                             LoadInst *LI);
 };
 
-class InterleavedAccess : public FunctionPass {
-  InterleavedAccessImpl Impl;
-
-public:
-  static char ID;
-
-  InterleavedAccess() : FunctionPass(ID) {
-    initializeInterleavedAccessPass(*PassRegistry::getPassRegistry());
-  }
-
-  StringRef getPassName() const override { return "Interleaved Access Pass"; }
-
-  bool runOnFunction(Function &F) override;
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<DominatorTreeWrapperPass>();
-    AU.setPreservesCFG();
-  }
-};
-
 } // end anonymous namespace.
 
-PreservedAnalyses InterleavedAccessPass::run(Function &F,
-                                             FunctionAnalysisManager &FAM) {
-  auto *DT = &FAM.getResult<DominatorTreeAnalysis>(F);
-  auto *TLI = TM->getSubtargetImpl(F)->getTargetLowering();
-  InterleavedAccessImpl Impl(DT, TLI);
-  bool Changed = Impl.runOnFunction(F);
-
-  if (!Changed)
-    return PreservedAnalyses::all();
-
-  PreservedAnalyses PA;
-  PA.preserveSet<CFGAnalyses>();
-  return PA;
-}
-
 char InterleavedAccess::ID = 0;
-
-bool InterleavedAccess::runOnFunction(Function &F) {
-  auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
-  if (!TPC || !LowerInterleavedAccesses)
-    return false;
-
-  LLVM_DEBUG(dbgs() << "*** " << getPassName() << ": " << F.getName() << "\n");
-
-  Impl.DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  auto &TM = TPC->getTM<TargetMachine>();
-  Impl.TLI = TM.getSubtargetImpl(F)->getTargetLowering();
-  Impl.MaxFactor = Impl.TLI->getMaxSupportedInterleaveFactor();
-
-  return Impl.runOnFunction(F);
-}
 
 INITIALIZE_PASS_BEGIN(InterleavedAccess, DEBUG_TYPE,
     "Lower interleaved memory accesses to target specific intrinsics", false,
@@ -198,6 +144,28 @@ INITIALIZE_PASS_END(InterleavedAccess, DEBUG_TYPE,
 
 FunctionPass *llvm::createInterleavedAccessPass() {
   return new InterleavedAccess();
+}
+
+/// Check if the mask is a DE-interleave mask of the given factor
+/// \p Factor like:
+///     <Index, Index+Factor, ..., Index+(NumElts-1)*Factor>
+static bool isDeInterleaveMaskOfFactor(ArrayRef<int> Mask, unsigned Factor,
+                                       unsigned &Index) {
+  // Check all potential start indices from 0 to (Factor - 1).
+  for (Index = 0; Index < Factor; Index++) {
+    unsigned i = 0;
+
+    // Check that elements are in ascending order by Factor. Ignore undef
+    // elements.
+    for (; i < Mask.size(); i++)
+      if (Mask[i] >= 0 && static_cast<unsigned>(Mask[i]) != Index + i * Factor)
+        break;
+
+    if (i == Mask.size())
+      return true;
+  }
+
+  return false;
 }
 
 /// Check if the mask is a DE-interleave mask for an interleaved load.
@@ -216,7 +184,7 @@ static bool isDeInterleaveMask(ArrayRef<int> Mask, unsigned &Factor,
     // Make sure we don't produce a load wider than the input load.
     if (Mask.size() * Factor > NumLoadElements)
       return false;
-    if (ShuffleVectorInst::isDeInterleaveMaskOfFactor(Mask, Factor, Index))
+    if (isDeInterleaveMaskOfFactor(Mask, Factor, Index))
       return true;
   }
 
@@ -234,23 +202,94 @@ static bool isDeInterleaveMask(ArrayRef<int> Mask, unsigned &Factor,
 /// The particular case of an RE-interleave mask is:
 /// I.e. <0, LaneLen, ... , LaneLen*(Factor - 1), 1, LaneLen + 1, ...>
 /// E.g. For a Factor of 2 (LaneLen=4): <0, 4, 1, 5, 2, 6, 3, 7>
-static bool isReInterleaveMask(ShuffleVectorInst *SVI, unsigned &Factor,
-                               unsigned MaxFactor) {
-  unsigned NumElts = SVI->getShuffleMask().size();
+static bool isReInterleaveMask(ArrayRef<int> Mask, unsigned &Factor,
+                               unsigned MaxFactor, unsigned OpNumElts) {
+  unsigned NumElts = Mask.size();
   if (NumElts < 4)
     return false;
 
   // Check potential Factors.
   for (Factor = 2; Factor <= MaxFactor; Factor++) {
-    if (SVI->isInterleave(Factor))
+    if (NumElts % Factor)
+      continue;
+
+    unsigned LaneLen = NumElts / Factor;
+    if (!isPowerOf2_32(LaneLen))
+      continue;
+
+    // Check whether each element matches the general interleaved rule.
+    // Ignore undef elements, as long as the defined elements match the rule.
+    // Outer loop processes all factors (x, y, z in the above example)
+    unsigned I = 0, J;
+    for (; I < Factor; I++) {
+      unsigned SavedLaneValue;
+      unsigned SavedNoUndefs = 0;
+
+      // Inner loop processes consecutive accesses (x, x+1... in the example)
+      for (J = 0; J < LaneLen - 1; J++) {
+        // Lane computes x's position in the Mask
+        unsigned Lane = J * Factor + I;
+        unsigned NextLane = Lane + Factor;
+        int LaneValue = Mask[Lane];
+        int NextLaneValue = Mask[NextLane];
+
+        // If both are defined, values must be sequential
+        if (LaneValue >= 0 && NextLaneValue >= 0 &&
+            LaneValue + 1 != NextLaneValue)
+          break;
+
+        // If the next value is undef, save the current one as reference
+        if (LaneValue >= 0 && NextLaneValue < 0) {
+          SavedLaneValue = LaneValue;
+          SavedNoUndefs = 1;
+        }
+
+        // Undefs are allowed, but defined elements must still be consecutive:
+        // i.e.: x,..., undef,..., x + 2,..., undef,..., undef,..., x + 5, ....
+        // Verify this by storing the last non-undef followed by an undef
+        // Check that following non-undef masks are incremented with the
+        // corresponding distance.
+        if (SavedNoUndefs > 0 && LaneValue < 0) {
+          SavedNoUndefs++;
+          if (NextLaneValue >= 0 &&
+              SavedLaneValue + SavedNoUndefs != (unsigned)NextLaneValue)
+            break;
+        }
+      }
+
+      if (J < LaneLen - 1)
+        break;
+
+      int StartMask = 0;
+      if (Mask[I] >= 0) {
+        // Check that the start of the I range (J=0) is greater than 0
+        StartMask = Mask[I];
+      } else if (Mask[(LaneLen - 1) * Factor + I] >= 0) {
+        // StartMask defined by the last value in lane
+        StartMask = Mask[(LaneLen - 1) * Factor + I] - J;
+      } else if (SavedNoUndefs > 0) {
+        // StartMask defined by some non-zero value in the j loop
+        StartMask = SavedLaneValue - (LaneLen - 1 - SavedNoUndefs);
+      }
+      // else StartMask remains set to 0, i.e. all elements are undefs
+
+      if (StartMask < 0)
+        break;
+      // We must stay within the vectors; This case can happen with undefs.
+      if (StartMask + LaneLen > OpNumElts*2)
+        break;
+    }
+
+    // Found an interleaved mask of current factor.
+    if (I == Factor)
       return true;
   }
 
   return false;
 }
 
-bool InterleavedAccessImpl::lowerInterleavedLoad(
-    LoadInst *LI, SmallSetVector<Instruction *, 32> &DeadInsts) {
+bool InterleavedAccess::lowerInterleavedLoad(
+    LoadInst *LI, SmallVector<Instruction *, 32> &DeadInsts) {
   if (!LI->isSimple() || isa<ScalableVectorType>(LI->getType()))
     return false;
 
@@ -271,13 +310,10 @@ bool InterleavedAccessImpl::lowerInterleavedLoad(
       Extracts.push_back(Extract);
       continue;
     }
-    if (auto *BI = dyn_cast<BinaryOperator>(User)) {
-      if (!BI->user_empty() && all_of(BI->users(), [](auto *U) {
-            auto *SVI = dyn_cast<ShuffleVectorInst>(U);
-            return SVI && isa<UndefValue>(SVI->getOperand(1));
-          })) {
-        for (auto *SVI : BI->users())
-          BinOpShuffles.insert(cast<ShuffleVectorInst>(SVI));
+    auto *BI = dyn_cast<BinaryOperator>(User);
+    if (BI && BI->hasOneUse()) {
+      if (auto *SVI = dyn_cast<ShuffleVectorInst>(*BI->user_begin())) {
+        BinOpShuffles.insert(SVI);
         continue;
       }
     }
@@ -311,8 +347,8 @@ bool InterleavedAccessImpl::lowerInterleavedLoad(
   for (auto *Shuffle : Shuffles) {
     if (Shuffle->getType() != VecTy)
       return false;
-    if (!ShuffleVectorInst::isDeInterleaveMaskOfFactor(
-            Shuffle->getShuffleMask(), Factor, Index))
+    if (!isDeInterleaveMaskOfFactor(Shuffle->getShuffleMask(), Factor,
+                                    Index))
       return false;
 
     assert(Shuffle->getShuffleMask().size() <= NumLoadElements);
@@ -321,8 +357,8 @@ bool InterleavedAccessImpl::lowerInterleavedLoad(
   for (auto *Shuffle : BinOpShuffles) {
     if (Shuffle->getType() != VecTy)
       return false;
-    if (!ShuffleVectorInst::isDeInterleaveMaskOfFactor(
-            Shuffle->getShuffleMask(), Factor, Index))
+    if (!isDeInterleaveMaskOfFactor(Shuffle->getShuffleMask(), Factor,
+                                    Index))
       return false;
 
     assert(Shuffle->getShuffleMask().size() <= NumLoadElements);
@@ -349,13 +385,13 @@ bool InterleavedAccessImpl::lowerInterleavedLoad(
     return !Extracts.empty() || BinOpShuffleChanged;
   }
 
-  DeadInsts.insert(Shuffles.begin(), Shuffles.end());
+  append_range(DeadInsts, Shuffles);
 
-  DeadInsts.insert(LI);
+  DeadInsts.push_back(LI);
   return true;
 }
 
-bool InterleavedAccessImpl::replaceBinOpShuffles(
+bool InterleavedAccess::replaceBinOpShuffles(
     ArrayRef<ShuffleVectorInst *> BinOpShuffles,
     SmallVectorImpl<ShuffleVectorInst *> &Shuffles, LoadInst *LI) {
   for (auto *SVI : BinOpShuffles) {
@@ -366,15 +402,14 @@ bool InterleavedAccessImpl::replaceBinOpShuffles(
       return Idx < (int)cast<FixedVectorType>(BIOp0Ty)->getNumElements();
     }));
 
-    BasicBlock::iterator insertPos = SVI->getIterator();
     auto *NewSVI1 =
         new ShuffleVectorInst(BI->getOperand(0), PoisonValue::get(BIOp0Ty),
-                              Mask, SVI->getName(), insertPos);
+                              Mask, SVI->getName(), SVI);
     auto *NewSVI2 = new ShuffleVectorInst(
         BI->getOperand(1), PoisonValue::get(BI->getOperand(1)->getType()), Mask,
-        SVI->getName(), insertPos);
+        SVI->getName(), SVI);
     BinaryOperator *NewBI = BinaryOperator::CreateWithCopiedFlags(
-        BI->getOpcode(), NewSVI1, NewSVI2, BI, BI->getName(), insertPos);
+        BI->getOpcode(), NewSVI1, NewSVI2, BI, BI->getName(), SVI);
     SVI->replaceAllUsesWith(NewBI);
     LLVM_DEBUG(dbgs() << "  Replaced: " << *BI << "\n    And   : " << *SVI
                       << "\n  With    : " << *NewSVI1 << "\n    And   : "
@@ -389,7 +424,7 @@ bool InterleavedAccessImpl::replaceBinOpShuffles(
   return !BinOpShuffles.empty();
 }
 
-bool InterleavedAccessImpl::tryReplaceExtracts(
+bool InterleavedAccess::tryReplaceExtracts(
     ArrayRef<ExtractElementInst *> Extracts,
     ArrayRef<ShuffleVectorInst *> Shuffles) {
   // If there aren't any extractelement instructions to modify, there's nothing
@@ -453,8 +488,8 @@ bool InterleavedAccessImpl::tryReplaceExtracts(
   return true;
 }
 
-bool InterleavedAccessImpl::lowerInterleavedStore(
-    StoreInst *SI, SmallSetVector<Instruction *, 32> &DeadInsts) {
+bool InterleavedAccess::lowerInterleavedStore(
+    StoreInst *SI, SmallVector<Instruction *, 32> &DeadInsts) {
   if (!SI->isSimple())
     return false;
 
@@ -464,7 +499,9 @@ bool InterleavedAccessImpl::lowerInterleavedStore(
 
   // Check if the shufflevector is RE-interleave shuffle.
   unsigned Factor;
-  if (!isReInterleaveMask(SVI, Factor, MaxFactor))
+  unsigned OpNumElts =
+      cast<FixedVectorType>(SVI->getOperand(0)->getType())->getNumElements();
+  if (!isReInterleaveMask(SVI->getShuffleMask(), Factor, MaxFactor, OpNumElts))
     return false;
 
   LLVM_DEBUG(dbgs() << "IA: Found an interleaved store: " << *SI << "\n");
@@ -474,219 +511,25 @@ bool InterleavedAccessImpl::lowerInterleavedStore(
     return false;
 
   // Already have a new target specific interleaved store. Erase the old store.
-  DeadInsts.insert(SI);
-  DeadInsts.insert(SVI);
+  DeadInsts.push_back(SI);
+  DeadInsts.push_back(SVI);
   return true;
 }
 
-// For an (de)interleave tree like this:
-//
-//   A   C B   D
-//   |___| |___|
-//     |_____|
-//        |
-//     A B C D
-//
-//  We will get ABCD at the end while the leaf operands/results
-//  are ACBD, which are also what we initially collected in
-//  getVectorInterleaveFactor / getVectorDeinterleaveFactor. But TLI
-//  hooks (e.g. lowerDeinterleaveIntrinsicToLoad) expect ABCD, so we need
-//  to reorder them by interleaving these values.
-static void interleaveLeafValues(MutableArrayRef<Value *> SubLeaves) {
-  unsigned NumLeaves = SubLeaves.size();
-  if (NumLeaves == 2)
-    return;
-
-  assert(isPowerOf2_32(NumLeaves) && NumLeaves > 1);
-
-  const unsigned HalfLeaves = NumLeaves / 2;
-  // Visit the sub-trees.
-  interleaveLeafValues(SubLeaves.take_front(HalfLeaves));
-  interleaveLeafValues(SubLeaves.drop_front(HalfLeaves));
-
-  SmallVector<Value *, 8> Buffer;
-  //    a0 a1 a2 a3 b0 b1 b2 b3
-  // -> a0 b0 a1 b1 a2 b2 a3 b3
-  for (unsigned i = 0U; i < NumLeaves; ++i)
-    Buffer.push_back(SubLeaves[i / 2 + (i % 2 ? HalfLeaves : 0)]);
-
-  llvm::copy(Buffer, SubLeaves.begin());
-}
-
-static bool
-getVectorInterleaveFactor(IntrinsicInst *II, SmallVectorImpl<Value *> &Operands,
-                          SmallVectorImpl<Instruction *> &DeadInsts) {
-  assert(II->getIntrinsicID() == Intrinsic::vector_interleave2);
-
-  // Visit with BFS
-  SmallVector<IntrinsicInst *, 8> Queue;
-  Queue.push_back(II);
-  while (!Queue.empty()) {
-    IntrinsicInst *Current = Queue.front();
-    Queue.erase(Queue.begin());
-
-    // All the intermediate intrinsics will be deleted.
-    DeadInsts.push_back(Current);
-
-    for (unsigned I = 0; I < 2; ++I) {
-      Value *Op = Current->getOperand(I);
-      if (auto *OpII = dyn_cast<IntrinsicInst>(Op))
-        if (OpII->getIntrinsicID() == Intrinsic::vector_interleave2) {
-          Queue.push_back(OpII);
-          continue;
-        }
-
-      // If this is not a perfectly balanced tree, the leaf
-      // result types would be different.
-      if (!Operands.empty() && Op->getType() != Operands.back()->getType())
-        return false;
-
-      Operands.push_back(Op);
-    }
-  }
-
-  const unsigned Factor = Operands.size();
-  // Currently we only recognize power-of-two factors.
-  // FIXME: should we assert here instead?
-  if (Factor <= 1 || !isPowerOf2_32(Factor))
+bool InterleavedAccess::runOnFunction(Function &F) {
+  auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
+  if (!TPC || !LowerInterleavedAccesses)
     return false;
 
-  interleaveLeafValues(Operands);
-  return true;
-}
+  LLVM_DEBUG(dbgs() << "*** " << getPassName() << ": " << F.getName() << "\n");
 
-static bool
-getVectorDeinterleaveFactor(IntrinsicInst *II,
-                            SmallVectorImpl<Value *> &Results,
-                            SmallVectorImpl<Instruction *> &DeadInsts) {
-  assert(II->getIntrinsicID() == Intrinsic::vector_deinterleave2);
-  using namespace PatternMatch;
-  if (!II->hasNUses(2))
-    return false;
+  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  auto &TM = TPC->getTM<TargetMachine>();
+  TLI = TM.getSubtargetImpl(F)->getTargetLowering();
+  MaxFactor = TLI->getMaxSupportedInterleaveFactor();
 
-  // Visit with BFS
-  SmallVector<IntrinsicInst *, 8> Queue;
-  Queue.push_back(II);
-  while (!Queue.empty()) {
-    IntrinsicInst *Current = Queue.front();
-    Queue.erase(Queue.begin());
-    assert(Current->hasNUses(2));
-
-    // All the intermediate intrinsics will be deleted from the bottom-up.
-    DeadInsts.insert(DeadInsts.begin(), Current);
-
-    ExtractValueInst *LHS = nullptr, *RHS = nullptr;
-    for (User *Usr : Current->users()) {
-      if (!isa<ExtractValueInst>(Usr))
-        return 0;
-
-      auto *EV = cast<ExtractValueInst>(Usr);
-      // Intermediate ExtractValue instructions will also be deleted.
-      DeadInsts.insert(DeadInsts.begin(), EV);
-      ArrayRef<unsigned> Indices = EV->getIndices();
-      if (Indices.size() != 1)
-        return false;
-
-      if (Indices[0] == 0 && !LHS)
-        LHS = EV;
-      else if (Indices[0] == 1 && !RHS)
-        RHS = EV;
-      else
-        return false;
-    }
-
-    // We have legal indices. At this point we're either going
-    // to continue the traversal or push the leaf values into Results.
-    for (ExtractValueInst *EV : {LHS, RHS}) {
-      // Continue the traversal. We're playing safe here and matching only the
-      // expression consisting of a perfectly balanced binary tree in which all
-      // intermediate values are only used once.
-      if (EV->hasOneUse() &&
-          match(EV->user_back(),
-                m_Intrinsic<Intrinsic::vector_deinterleave2>()) &&
-          EV->user_back()->hasNUses(2)) {
-        auto *EVUsr = cast<IntrinsicInst>(EV->user_back());
-        Queue.push_back(EVUsr);
-        continue;
-      }
-
-      // If this is not a perfectly balanced tree, the leaf
-      // result types would be different.
-      if (!Results.empty() && EV->getType() != Results.back()->getType())
-        return false;
-
-      // Save the leaf value.
-      Results.push_back(EV);
-    }
-  }
-
-  const unsigned Factor = Results.size();
-  // Currently we only recognize power-of-two factors.
-  // FIXME: should we assert here instead?
-  if (Factor <= 1 || !isPowerOf2_32(Factor))
-    return 0;
-
-  interleaveLeafValues(Results);
-  return true;
-}
-
-bool InterleavedAccessImpl::lowerDeinterleaveIntrinsic(
-    IntrinsicInst *DI, SmallSetVector<Instruction *, 32> &DeadInsts) {
-  LoadInst *LI = dyn_cast<LoadInst>(DI->getOperand(0));
-
-  if (!LI || !LI->hasOneUse() || !LI->isSimple())
-    return false;
-
-  SmallVector<Value *, 8> DeinterleaveValues;
-  SmallVector<Instruction *, 8> DeinterleaveDeadInsts;
-  if (!getVectorDeinterleaveFactor(DI, DeinterleaveValues,
-                                   DeinterleaveDeadInsts))
-    return false;
-
-  LLVM_DEBUG(dbgs() << "IA: Found a deinterleave intrinsic: " << *DI
-                    << " with factor = " << DeinterleaveValues.size() << "\n");
-
-  // Try and match this with target specific intrinsics.
-  if (!TLI->lowerDeinterleaveIntrinsicToLoad(LI, DeinterleaveValues))
-    return false;
-
-  DeadInsts.insert(DeinterleaveDeadInsts.begin(), DeinterleaveDeadInsts.end());
-  // We now have a target-specific load, so delete the old one.
-  DeadInsts.insert(LI);
-  return true;
-}
-
-bool InterleavedAccessImpl::lowerInterleaveIntrinsic(
-    IntrinsicInst *II, SmallSetVector<Instruction *, 32> &DeadInsts) {
-  if (!II->hasOneUse())
-    return false;
-
-  StoreInst *SI = dyn_cast<StoreInst>(*(II->users().begin()));
-
-  if (!SI || !SI->isSimple())
-    return false;
-
-  SmallVector<Value *, 8> InterleaveValues;
-  SmallVector<Instruction *, 8> InterleaveDeadInsts;
-  if (!getVectorInterleaveFactor(II, InterleaveValues, InterleaveDeadInsts))
-    return false;
-
-  LLVM_DEBUG(dbgs() << "IA: Found an interleave intrinsic: " << *II
-                    << " with factor = " << InterleaveValues.size() << "\n");
-
-  // Try and match this with target specific intrinsics.
-  if (!TLI->lowerInterleaveIntrinsicToStore(SI, InterleaveValues))
-    return false;
-
-  // We now have a target-specific store, so delete the old one.
-  DeadInsts.insert(SI);
-  DeadInsts.insert(InterleaveDeadInsts.begin(), InterleaveDeadInsts.end());
-  return true;
-}
-
-bool InterleavedAccessImpl::runOnFunction(Function &F) {
   // Holds dead instructions that will be erased later.
-  SmallSetVector<Instruction *, 32> DeadInsts;
+  SmallVector<Instruction *, 32> DeadInsts;
   bool Changed = false;
 
   for (auto &I : instructions(F)) {
@@ -695,18 +538,9 @@ bool InterleavedAccessImpl::runOnFunction(Function &F) {
 
     if (auto *SI = dyn_cast<StoreInst>(&I))
       Changed |= lowerInterleavedStore(SI, DeadInsts);
-
-    if (auto *II = dyn_cast<IntrinsicInst>(&I)) {
-      // At present, we only have intrinsics to represent (de)interleaving
-      // with a factor of 2.
-      if (II->getIntrinsicID() == Intrinsic::vector_deinterleave2)
-        Changed |= lowerDeinterleaveIntrinsic(II, DeadInsts);
-      else if (II->getIntrinsicID() == Intrinsic::vector_interleave2)
-        Changed |= lowerInterleaveIntrinsic(II, DeadInsts);
-    }
   }
 
-  for (auto *I : DeadInsts)
+  for (auto I : DeadInsts)
     I->eraseFromParent();
 
   return Changed;

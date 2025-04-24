@@ -7,18 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/math/floor.h"
-#include "src/__support/FPUtil/NearestIntegerOperations.h"
 #include "src/__support/common.h"
-#include "src/__support/macros/config.h"
+#include "utils/FPUtil/NearestIntegerOperations.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
-LLVM_LIBC_FUNCTION(double, floor, (double x)) {
-#ifdef __LIBC_USE_BUILTIN_CEIL_FLOOR_RINT_TRUNC
-  return __builtin_floor(x);
-#else
-  return fputil::floor(x);
-#endif
-}
+LLVM_LIBC_FUNCTION(double, floor, (double x)) { return fputil::floor(x); }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

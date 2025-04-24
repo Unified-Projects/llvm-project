@@ -16,14 +16,13 @@
 
 // UNSUPPORTED: c++03
 
-#include <array>
 #include <tuple>
+#include <array>
 #include <type_traits>
-#include <utility>
 
 #include "test_macros.h"
 
-template <class T, std::size_t Size = sizeof(std::tuple_size<T>)>
+template <class T, size_t Size = sizeof(std::tuple_size<T>)>
 constexpr bool is_complete(int) { static_assert(Size > 0, ""); return true; }
 template <class> constexpr bool is_complete(long) { return false; }
 template <class T> constexpr bool is_complete() { return is_complete<T>(0); }
@@ -31,8 +30,9 @@ template <class T> constexpr bool is_complete() { return is_complete<T>(0); }
 struct Dummy1 {};
 struct Dummy2 {};
 
-template <>
-struct std::tuple_size<Dummy1> : public integral_constant<std::size_t, 0> {};
+namespace std {
+template <> struct tuple_size<Dummy1> : public integral_constant<size_t, 0> {};
+}
 
 template <class T>
 void test_complete() {

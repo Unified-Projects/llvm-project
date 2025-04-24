@@ -11,7 +11,11 @@
 
 namespace Fortran::common {
 
-IntrinsicTypeDefaultKinds::IntrinsicTypeDefaultKinds() {}
+IntrinsicTypeDefaultKinds::IntrinsicTypeDefaultKinds() {
+#if __x86_64__
+  quadPrecisionKind_ = 10;
+#endif
+}
 
 IntrinsicTypeDefaultKinds &IntrinsicTypeDefaultKinds::set_defaultIntegerKind(
     int k) {
@@ -64,7 +68,6 @@ IntrinsicTypeDefaultKinds &IntrinsicTypeDefaultKinds::set_defaultLogicalKind(
 int IntrinsicTypeDefaultKinds::GetDefaultKind(TypeCategory category) const {
   switch (category) {
   case TypeCategory::Integer:
-  case TypeCategory::Unsigned:
     return defaultIntegerKind_;
   case TypeCategory::Real:
   case TypeCategory::Complex:

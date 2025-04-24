@@ -2,8 +2,8 @@
 
 @interface I0 @end
 @implementation I0
-// CHECK-NOT: Function Attrs: sanitize_address
+// CHECK-NOT: sanitize_address
 - (void) im0: (int) a0 __attribute__((no_sanitize("address"))) {
-  int (^blockName)(void) = ^int(void) { return 0; };
+  int (^blockName)() = ^int() { return 0; };
 }
 @end

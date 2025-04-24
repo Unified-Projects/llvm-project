@@ -55,7 +55,7 @@ private:
   //   add eax, [rdi + 192]
   //   mov eax, [rdi + 256]
   void instantiateMemoryOperands(
-      MCRegister ScratchSpaceReg,
+      unsigned ScratchSpaceReg,
       std::vector<InstructionTemplate> &SnippetTemplate) const;
 };
 

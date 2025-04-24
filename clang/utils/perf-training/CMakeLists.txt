@@ -1,10 +1,14 @@
-include(LLVMExternalProjectUtils)
+if (CMAKE_CFG_INTDIR STREQUAL ".")
+  set(LLVM_BUILD_MODE ".")
+else ()
+  set(LLVM_BUILD_MODE "%(build_mode)s")
+endif ()
+
+string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} CLANG_TOOLS_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
 
 set(CLANG_PGO_TRAINING_DATA "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
   "The path to a lit testsuite containing samples for PGO and order file generation"
   )
-set(CLANG_PGO_TRAINING_DATA_SOURCE_DIR OFF CACHE STRING "Path to source directory containing cmake project with source files to use for generating pgo data")
-set(CLANG_PGO_TRAINING_DEPS "" CACHE STRING "Extra dependencies needed to build the PGO training data.")
 
 if(LLVM_BUILD_INSTRUMENTED)
   configure_lit_site_cfg(
@@ -15,11 +19,11 @@ if(LLVM_BUILD_INSTRUMENTED)
   add_lit_testsuite(generate-profraw "Generating clang PGO data"
     ${CMAKE_CURRENT_BINARY_DIR}/pgo-data/
     EXCLUDE_FROM_CHECK_ALL
-    DEPENDS clear-profraw
+    DEPENDS clang clear-profraw
     )
 
   add_custom_target(clear-profraw
-    COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py clean ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}/profiles/ profraw
+    COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py clean ${CMAKE_CURRENT_BINARY_DIR} profraw
     COMMENT "Clearing old profraw data")
 
   if(NOT LLVM_PROFDATA)
@@ -29,33 +33,15 @@ if(LLVM_BUILD_INSTRUMENTED)
   if(NOT LLVM_PROFDATA)
     message(STATUS "To enable merging PGO data LLVM_PROFDATA has to point to llvm-profdata")
   else()
-    add_custom_command(
-      OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/clang.profdata
-      # generate-profraw is a custom_target which are always considered stale.
-      # If we add it here to 'DEPENDS', then it will always execute and running
-      # ninja install && ninja check-all will result in the profile data being
-      # generated twice, and cause the ninja check-all build to fail with errors like:
-      # `ld.lld: error: Function Import: link error: linking module flags 'ProfileSummary': IDs have conflicting values in`
-      # Therefor we call the generate-profraw target manually as part of this custom
-      # command, which will only run if clang or ${CLANG_PGO_TRAINING_DEPS} are updated.
-      COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target generate-profraw
-      COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py merge ${LLVM_PROFDATA} ${CMAKE_CURRENT_BINARY_DIR}/clang.profdata ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}/profiles/
+    add_custom_target(generate-profdata
+      COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py merge ${LLVM_PROFDATA} ${CMAKE_CURRENT_BINARY_DIR}/clang.profdata ${CMAKE_CURRENT_BINARY_DIR}
       COMMENT "Merging profdata"
-      DEPENDS clang ${CLANG_PGO_TRAINING_DEPS}
-    )
-    add_custom_target(generate-profdata DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/clang.profdata)
-    if (CLANG_PGO_TRAINING_DATA_SOURCE_DIR)
-      llvm_ExternalProject_Add(generate-profraw-external ${CLANG_PGO_TRAINING_DATA_SOURCE_DIR}
-              USE_TOOLCHAIN EXLUDE_FROM_ALL NO_INSTALL DEPENDS generate-profraw)
-      add_dependencies(generate-profdata generate-profraw-external)
-    endif()
+      DEPENDS generate-profraw)
   endif()
 endif()
 
 find_program(DTRACE dtrace)
-# TODO: Look into supporting this for the driver build. It will require changing
-# the perf-helper.py file to understand to call `llvm` as `llvm clang`.
-if(APPLE AND DTRACE AND NOT LLVM_TOOL_LLVM_DRIVER_BUILD)
+if(APPLE AND DTRACE)
   configure_lit_site_cfg(
     ${CMAKE_CURRENT_SOURCE_DIR}/order-files.lit.site.cfg.in
     ${CMAKE_CURRENT_BINARY_DIR}/order-files/lit.site.cfg
@@ -80,26 +66,4 @@ if(APPLE AND DTRACE AND NOT LLVM_TOOL_LLVM_DRIVER_BUILD)
     COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py gen-order-file --binary $<TARGET_FILE:clang> --output ${CLANG_ORDER_FILE} ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Generating order file"
     DEPENDS generate-dtrace-logs)
-endif()
-
-if(CLANG_BOLT AND NOT LLVM_BUILD_INSTRUMENTED)
-  configure_lit_site_cfg(
-    ${CMAKE_CURRENT_SOURCE_DIR}/bolt.lit.site.cfg.in
-    ${CMAKE_CURRENT_BINARY_DIR}/bolt-fdata/lit.site.cfg
-    )
-
-  add_lit_testsuite(generate-bolt-fdata "Generating BOLT profile for Clang"
-    ${CMAKE_CURRENT_BINARY_DIR}/bolt-fdata/
-    EXCLUDE_FROM_CHECK_ALL
-    DEPENDS clear-bolt-fdata clear-perf-data
-    )
-
-  add_custom_target(clear-bolt-fdata
-    COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py clean ${CMAKE_CURRENT_BINARY_DIR} fdata
-    COMMENT "Clearing old BOLT fdata")
-
-  add_custom_target(clear-perf-data
-    COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/perf-helper.py clean ${CMAKE_CURRENT_BINARY_DIR} perf.data
-    COMMENT "Clearing old perf data")
-
 endif()

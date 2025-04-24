@@ -10,7 +10,6 @@
 #define _AMDGPU_LIBFUNC_H_
 
 #include "llvm/ADT/StringRef.h"
-#include <memory>
 
 namespace llvm {
 
@@ -18,7 +17,6 @@ class FunctionCallee;
 class FunctionType;
 class Function;
 class Module;
-class Type;
 
 class AMDGPULibFuncBase {
 public:
@@ -291,23 +289,18 @@ public:
   };
 
   struct Param {
-    unsigned char ArgType = 0;
-    unsigned char VectorSize = 1;
-    unsigned char PtrKind = 0;
+    unsigned char ArgType;
+    unsigned char VectorSize;
+    unsigned char PtrKind;
 
-    unsigned char Reserved = 0;
+    unsigned char Reserved;
 
     void reset() {
       ArgType = 0;
       VectorSize = 1;
       PtrKind = 0;
     }
-
-    static Param getIntN(unsigned char NumElts) {
-      return Param{I32, NumElts, 0, 0};
-    }
-
-    static Param getFromTy(Type *Ty, bool Signed);
+    Param() { reset(); }
 
     template <typename Stream>
     void mangleItanium(Stream& os);
@@ -330,8 +323,8 @@ public:
 
 class AMDGPULibFuncImpl : public AMDGPULibFuncBase {
 public:
-  AMDGPULibFuncImpl() = default;
-  virtual ~AMDGPULibFuncImpl() = default;
+  AMDGPULibFuncImpl() {}
+  virtual ~AMDGPULibFuncImpl() {}
 
   /// Get unmangled name for mangled library function and name for unmangled
   /// library function.
@@ -352,12 +345,12 @@ public:
   void setName(StringRef N) { Name = std::string(N); }
   void setPrefix(ENamePrefix pfx) { FKind = pfx; }
 
-  virtual FunctionType *getFunctionType(const Module &M) const = 0;
+  virtual FunctionType *getFunctionType(Module &M) const = 0;
 
 protected:
   EFuncId FuncId;
   std::string Name;
-  ENamePrefix FKind = NOPFX;
+  ENamePrefix FKind;
 };
 
 /// Wrapper class for AMDGPULIbFuncImpl
@@ -368,8 +361,6 @@ public:
   /// Clone a mangled library func with the Id \p Id and argument info from \p
   /// CopyFrom.
   explicit AMDGPULibFunc(EFuncId Id, const AMDGPULibFunc &CopyFrom);
-  explicit AMDGPULibFunc(EFuncId Id, FunctionType *FT, bool SignedInts);
-
   /// Construct an unmangled library function on the fly.
   explicit AMDGPULibFunc(StringRef FName, FunctionType *FT);
 
@@ -391,23 +382,6 @@ public:
     return Impl->parseFuncName(MangledName);
   }
 
-  /// Return true if it's legal to splat a scalar value passed in parameter \p
-  /// ArgIdx to a vector argument.
-  bool allowsImplicitVectorSplat(int ArgIdx) const {
-    switch (getId()) {
-    case EI_LDEXP:
-      return ArgIdx == 1;
-    case EI_FMIN:
-    case EI_FMAX:
-      return true;
-    default:
-      return false;
-    }
-  }
-
-  // Validate the call type matches the expected libfunc type.
-  bool isCompatibleSignature(const Module &M, const FunctionType *FuncTy) const;
-
   /// \return The mangled function name for mangled library functions
   /// and unmangled function name for unmangled library functions.
   std::string mangle() const { return Impl->mangle(); }
@@ -415,7 +389,7 @@ public:
   void setName(StringRef N) { Impl->setName(N); }
   void setPrefix(ENamePrefix PFX) { Impl->setPrefix(PFX); }
 
-  FunctionType *getFunctionType(const Module &M) const {
+  FunctionType *getFunctionType(Module &M) const {
     return Impl->getFunctionType(M);
   }
   static Function *getFunction(llvm::Module *M, const AMDGPULibFunc &fInfo);
@@ -437,12 +411,10 @@ public:
   explicit AMDGPUMangledLibFunc();
   explicit AMDGPUMangledLibFunc(EFuncId id,
                                 const AMDGPUMangledLibFunc &copyFrom);
-  explicit AMDGPUMangledLibFunc(EFuncId id, FunctionType *FT,
-                                bool SignedInts = true);
 
   std::string getName() const override;
   unsigned getNumArgs() const override;
-  FunctionType *getFunctionType(const Module &M) const override;
+  FunctionType *getFunctionType(Module &M) const override;
   static StringRef getUnmangledName(StringRef MangledName);
 
   bool parseFuncName(StringRef &mangledName) override;
@@ -472,9 +444,7 @@ public:
   }
   std::string getName() const override { return Name; }
   unsigned getNumArgs() const override;
-  FunctionType *getFunctionType(const Module &M) const override {
-    return FuncTy;
-  }
+  FunctionType *getFunctionType(Module &M) const override { return FuncTy; }
 
   bool parseFuncName(StringRef &Name) override;
 

@@ -8,6 +8,9 @@
 
 #include "support/ThreadsafeFS.h"
 #include "Logger.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Path.h"
@@ -39,9 +42,9 @@ public:
     // Try to guess preamble files, they can be memory-mapped even on Windows as
     // clangd has exclusive access to those and nothing else should touch them.
     llvm::StringRef FileName = llvm::sys::path::filename(Path);
-    if (FileName.starts_with("preamble-") && FileName.ends_with(".pch"))
+    if (FileName.startswith("preamble-") && FileName.endswith(".pch"))
       return File;
-    return std::make_unique<VolatileFile>(std::move(*File));
+    return std::unique_ptr<VolatileFile>(new VolatileFile(std::move(*File)));
   }
 
 private:
@@ -52,7 +55,7 @@ private:
       assert(this->Wrapped);
     }
 
-    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
+    virtual llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
     getBuffer(const llvm::Twine &Name, int64_t FileSize,
               bool RequiresNullTerminator, bool /*IsVolatile*/) override {
       return Wrapped->getBuffer(Name, FileSize, RequiresNullTerminator,
@@ -73,7 +76,7 @@ private:
 
 llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem>
 ThreadsafeFS::view(PathRef CWD) const {
-  auto FS = view(std::nullopt);
+  auto FS = view(llvm::None);
   if (auto EC = FS->setCurrentWorkingDirectory(CWD))
     elog("VFS: failed to set CWD to {0}: {1}", CWD, EC.message());
   return FS;

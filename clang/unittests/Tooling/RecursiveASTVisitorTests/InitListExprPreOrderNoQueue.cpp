@@ -1,4 +1,4 @@
-//===- InitListExprPreOrderNoQueue.cpp ------------------------------------===//
+//===- unittest/Tooling/RecursiveASTVisitorTests/InitListExprPreOrderNoQueue.cpp -===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -12,13 +12,14 @@ using namespace clang;
 
 namespace {
 
-class InitListExprPreOrderNoQueueVisitor : public ExpectedLocationVisitor {
+class InitListExprPreOrderNoQueueVisitor
+    : public ExpectedLocationVisitor<InitListExprPreOrderNoQueueVisitor> {
 public:
-  bool TraverseInitListExpr(InitListExpr *ILE) override {
+  bool TraverseInitListExpr(InitListExpr *ILE) {
     return ExpectedLocationVisitor::TraverseInitListExpr(ILE);
   }
 
-  bool VisitInitListExpr(InitListExpr *ILE) override {
+  bool VisitInitListExpr(InitListExpr *ILE) {
     Match(ILE->isSemanticForm() ? "semantic" : "syntactic", ILE->getBeginLoc());
     return true;
   }

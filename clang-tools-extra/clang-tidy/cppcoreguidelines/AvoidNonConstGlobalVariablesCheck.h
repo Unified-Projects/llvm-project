@@ -11,24 +11,25 @@
 
 #include "../ClangTidyCheck.h"
 
-namespace clang::tidy::cppcoreguidelines {
+namespace clang {
+namespace tidy {
+namespace cppcoreguidelines {
 
 /// Non-const global variables hide dependencies and make the dependencies
 /// subject to unpredictable changes.
 ///
 /// For the user-facing documentation see:
-/// http://clang.llvm.org/extra/clang-tidy/checks/cppcoreguidelines/avoid-non-const-global-variables.html
+/// http://clang.llvm.org/extra/clang-tidy/checks/cppcoreguidelines-avoid-non-const-global-variables.html
 class AvoidNonConstGlobalVariablesCheck : public ClangTidyCheck {
 public:
-  AvoidNonConstGlobalVariablesCheck(StringRef Name, ClangTidyContext *Context);
+  AvoidNonConstGlobalVariablesCheck(StringRef Name, ClangTidyContext *Context)
+      : ClangTidyCheck(Name, Context) {}
   void registerMatchers(ast_matchers::MatchFinder *Finder) override;
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override;
-  void storeOptions(ClangTidyOptions::OptionMap &Opts) override;
-
-private:
-  const bool AllowInternalLinkage;
 };
 
-} // namespace clang::tidy::cppcoreguidelines
+} // namespace cppcoreguidelines
+} // namespace tidy
+} // namespace clang
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CPPCOREGUIDELINES_AVOIDNONCONSTGLOBALVARIABLESCHECK_H

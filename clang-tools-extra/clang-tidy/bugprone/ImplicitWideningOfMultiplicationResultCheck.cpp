@@ -9,20 +9,20 @@
 #include "ImplicitWideningOfMultiplicationResultCheck.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
-#include "clang/ASTMatchers/ASTMatchersMacros.h"
-#include "clang/Lex/Lexer.h"
-#include <optional>
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::bugprone {
-
+namespace clang {
 namespace {
 AST_MATCHER(ImplicitCastExpr, isPartOfExplicitCast) {
   return Node.isPartOfExplicitCast();
 }
-AST_MATCHER(Expr, containsErrors) { return Node.containsErrors(); }
 } // namespace
+} // namespace clang
+
+namespace clang {
+namespace tidy {
+namespace bugprone {
 
 static const Expr *getLHSOfMulBinOp(const Expr *E) {
   assert(E == E->IgnoreParens() && "Already skipped all parens!");
@@ -42,10 +42,9 @@ ImplicitWideningOfMultiplicationResultCheck::
       UseCXXStaticCastsInCppSources(
           Options.get("UseCXXStaticCastsInCppSources", true)),
       UseCXXHeadersInCppSources(Options.get("UseCXXHeadersInCppSources", true)),
-      IgnoreConstantIntExpr(Options.get("IgnoreConstantIntExpr", false)),
       IncludeInserter(Options.getLocalOrGlobal("IncludeStyle",
-                                               utils::IncludeSorter::IS_LLVM),
-                      areDiagsSelfContained()) {}
+                                               utils::IncludeSorter::IS_LLVM)) {
+}
 
 void ImplicitWideningOfMultiplicationResultCheck::registerPPCallbacks(
     const SourceManager &SM, Preprocessor *PP, Preprocessor *ModuleExpanderPP) {
@@ -57,11 +56,10 @@ void ImplicitWideningOfMultiplicationResultCheck::storeOptions(
   Options.store(Opts, "UseCXXStaticCastsInCppSources",
                 UseCXXStaticCastsInCppSources);
   Options.store(Opts, "UseCXXHeadersInCppSources", UseCXXHeadersInCppSources);
-  Options.store(Opts, "IgnoreConstantIntExpr", IgnoreConstantIntExpr);
   Options.store(Opts, "IncludeStyle", IncludeInserter.getStyle());
 }
 
-std::optional<FixItHint>
+llvm::Optional<FixItHint>
 ImplicitWideningOfMultiplicationResultCheck::includeStddefHeader(
     SourceLocation File) {
   return IncludeInserter.createIncludeInsertion(
@@ -86,19 +84,6 @@ void ImplicitWideningOfMultiplicationResultCheck::handleImplicitCastExpr(
   if (TgtWidth <= SrcWidth)
     return;
 
-  // Is the expression a compile-time constexpr that we know can fit in the
-  // source type?
-  if (IgnoreConstantIntExpr && ETy->isIntegerType() &&
-      !ETy->isUnsignedIntegerType()) {
-    if (const auto ConstExprResult = E->getIntegerConstantExpr(*Context)) {
-      const auto TypeSize = Context->getTypeSize(ETy);
-      llvm::APSInt WidenedResult = ConstExprResult->extOrTrunc(TypeSize);
-      if (WidenedResult <= llvm::APSInt::getMaxValue(TypeSize, false) &&
-          WidenedResult >= llvm::APSInt::getMinValue(TypeSize, false))
-        return;
-    }
-  }
-
   // Does the index expression look like it might be unintentionally computed
   // in a narrower-than-wanted type?
   const Expr *LHS = getLHSOfMulBinOp(E);
@@ -115,16 +100,15 @@ void ImplicitWideningOfMultiplicationResultCheck::handleImplicitCastExpr(
                      "make conversion explicit to silence this warning",
                      DiagnosticIDs::Note)
                 << E->getSourceRange();
-    const SourceLocation EndLoc = Lexer::getLocForEndOfToken(
-        E->getEndLoc(), 0, *Result->SourceManager, getLangOpts());
+
     if (ShouldUseCXXStaticCast)
       Diag << FixItHint::CreateInsertion(
                   E->getBeginLoc(), "static_cast<" + Ty.getAsString() + ">(")
-           << FixItHint::CreateInsertion(EndLoc, ")");
+           << FixItHint::CreateInsertion(E->getEndLoc(), ")");
     else
       Diag << FixItHint::CreateInsertion(E->getBeginLoc(),
                                          "(" + Ty.getAsString() + ")(")
-           << FixItHint::CreateInsertion(EndLoc, ")");
+           << FixItHint::CreateInsertion(E->getEndLoc(), ")");
     Diag << includeStddefHeader(E->getBeginLoc());
   }
 
@@ -154,11 +138,7 @@ void ImplicitWideningOfMultiplicationResultCheck::handleImplicitCastExpr(
       Diag << FixItHint::CreateInsertion(LHS->getBeginLoc(),
                                          "static_cast<" +
                                              WideExprTy.getAsString() + ">(")
-           << FixItHint::CreateInsertion(
-                  Lexer::getLocForEndOfToken(LHS->getEndLoc(), 0,
-                                             *Result->SourceManager,
-                                             getLangOpts()),
-                  ")");
+           << FixItHint::CreateInsertion(LHS->getEndLoc(), ")");
     else
       Diag << FixItHint::CreateInsertion(LHS->getBeginLoc(),
                                          "(" + WideExprTy.getAsString() + ")");
@@ -172,7 +152,7 @@ void ImplicitWideningOfMultiplicationResultCheck::handlePointerOffsetting(
 
   // We are looking for a pointer offset operation,
   // with one hand being a pointer, and another one being an offset.
-  const Expr *PointerExpr = nullptr, *IndexExpr = nullptr;
+  const Expr *PointerExpr, *IndexExpr;
   if (const auto *BO = dyn_cast<BinaryOperator>(E)) {
     PointerExpr = BO->getLHS();
     IndexExpr = BO->getRHS();
@@ -227,17 +207,16 @@ void ImplicitWideningOfMultiplicationResultCheck::handlePointerOffsetting(
                      "make conversion explicit to silence this warning",
                      DiagnosticIDs::Note)
                 << IndexExpr->getSourceRange();
-    const SourceLocation EndLoc = Lexer::getLocForEndOfToken(
-        IndexExpr->getEndLoc(), 0, *Result->SourceManager, getLangOpts());
+
     if (ShouldUseCXXStaticCast)
       Diag << FixItHint::CreateInsertion(
                   IndexExpr->getBeginLoc(),
                   (Twine("static_cast<") + TyAsString + ">(").str())
-           << FixItHint::CreateInsertion(EndLoc, ")");
+           << FixItHint::CreateInsertion(IndexExpr->getEndLoc(), ")");
     else
       Diag << FixItHint::CreateInsertion(IndexExpr->getBeginLoc(),
                                          (Twine("(") + TyAsString + ")(").str())
-           << FixItHint::CreateInsertion(EndLoc, ")");
+           << FixItHint::CreateInsertion(IndexExpr->getEndLoc(), ")");
     Diag << includeStddefHeader(IndexExpr->getBeginLoc());
   }
 
@@ -251,11 +230,7 @@ void ImplicitWideningOfMultiplicationResultCheck::handlePointerOffsetting(
       Diag << FixItHint::CreateInsertion(
                   LHS->getBeginLoc(),
                   (Twine("static_cast<") + TyAsString + ">(").str())
-           << FixItHint::CreateInsertion(
-                  Lexer::getLocForEndOfToken(IndexExpr->getEndLoc(), 0,
-                                             *Result->SourceManager,
-                                             getLangOpts()),
-                  ")");
+           << FixItHint::CreateInsertion(LHS->getEndLoc(), ")");
     else
       Diag << FixItHint::CreateInsertion(LHS->getBeginLoc(),
                                          (Twine("(") + TyAsString + ")").str());
@@ -265,8 +240,7 @@ void ImplicitWideningOfMultiplicationResultCheck::handlePointerOffsetting(
 
 void ImplicitWideningOfMultiplicationResultCheck::registerMatchers(
     MatchFinder *Finder) {
-  Finder->addMatcher(implicitCastExpr(unless(anyOf(containsErrors(),
-                                                   isInTemplateInstantiation(),
+  Finder->addMatcher(implicitCastExpr(unless(anyOf(isInTemplateInstantiation(),
                                                    isPartOfExplicitCast())),
                                       hasCastKind(CK_IntegralCast))
                          .bind("x"),
@@ -298,4 +272,6 @@ void ImplicitWideningOfMultiplicationResultCheck::check(
     handlePointerOffsetting(MatchedDecl);
 }
 
-} // namespace clang::tidy::bugprone
+} // namespace bugprone
+} // namespace tidy
+} // namespace clang

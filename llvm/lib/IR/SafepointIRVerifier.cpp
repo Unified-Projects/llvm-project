@@ -6,9 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Run a basic correctness check on the IR to ensure that Safepoints - if
-// they've been inserted - were inserted correctly.  In particular, look for use
-// of non-relocated values after a safepoint.  It's primary use is to check the
+// Run a sanity check on the IR to ensure that Safepoints - if they've been
+// inserted - were inserted correctly.  In particular, look for use of
+// non-relocated values after a safepoint.  It's primary use is to check the
 // correctness of safepoint insertion immediately after insertion, but it can
 // also be used to verify that later transforms have not found a way to break
 // safepoint semenatics.
@@ -38,8 +38,10 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Value.h"
 #include "llvm/InitializePasses.h"
@@ -289,7 +291,6 @@ static void PrintValueSet(raw_ostream &OS, IteratorTy Begin, IteratorTy End) {
 
 using AvailableValueSet = DenseSet<const Value *>;
 
-namespace {
 /// State we compute and track per basic block.
 struct BasicBlockState {
   // Set of values available coming in, before the phi nodes
@@ -306,7 +307,6 @@ struct BasicBlockState {
   // contribute to AvailableOut.
   bool Cleared = false;
 };
-} // namespace
 
 /// A given derived pointer can have multiple base pointers through phi/selects.
 /// This type indicates when the base pointer is exclusively constant
@@ -357,17 +357,6 @@ static enum BaseType getBaseType(const Value *Val) {
       // Push in the true and false values
       Worklist.push_back(SI->getTrueValue());
       Worklist.push_back(SI->getFalseValue());
-      continue;
-    }
-    if (const auto *GCRelocate = dyn_cast<GCRelocateInst>(V)) {
-      // GCRelocates do not change null-ness or constant-ness of the value.
-      // So we can continue with derived pointer this instruction relocates.
-      Worklist.push_back(GCRelocate->getDerivedPtr());
-      continue;
-    }
-    if (const auto *FI = dyn_cast<FreezeInst>(V)) {
-      // Freeze does not change null-ness or constant-ness of the value.
-      Worklist.push_back(FI->getOperand(0));
       continue;
     }
     if (isa<Constant>(V)) {
@@ -487,7 +476,9 @@ public:
                              InstructionVerifier &Verifier);
 
   /// Returns true for reachable and live blocks.
-  bool isMapped(const BasicBlock *BB) const { return BlockMap.contains(BB); }
+  bool isMapped(const BasicBlock *BB) const {
+    return BlockMap.find(BB) != BlockMap.end();
+  }
 
 private:
   /// Returns true if the instruction may be safely skipped during verification.

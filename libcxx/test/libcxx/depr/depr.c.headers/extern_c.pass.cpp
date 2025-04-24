@@ -6,12 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// When building with modules, including headers inside extern "C" is an anti-pattern
-// that we don't want to support and can't support with LSV enabled.
-// UNSUPPORTED: clang-modules-build
-
-// XFAIL: FROZEN-CXX03-HEADERS-FIXME
-
 // Sometimes C++'s <foo.h> headers get included within extern "C" contexts. This
 // is ill-formed (no diagnostic required), per [using.headers]p3, but we permit
 // it as an extension.
@@ -28,6 +22,9 @@ extern "C" {
 #include <inttypes.h>
 #include <iso646.h>
 #include <limits.h>
+#ifndef _LIBCPP_HAS_NO_LOCALIZATION
+#   include <locale.h>
+#endif
 #include <math.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -42,10 +39,8 @@ extern "C" {
 // tgmath.h is not supported in extern "C".
 #include <time.h>
 // FIXME: #include <uchar.h>
-#if _LIBCPP_HAS_WIDE_CHARACTERS
-#  include <wchar.h>
-#  include <wctype.h>
-#endif
+#include <wchar.h>
+#include <wctype.h>
 }
 
 int main(int, char**) {

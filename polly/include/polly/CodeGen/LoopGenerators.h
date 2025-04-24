@@ -55,7 +55,7 @@ extern int PollyChunkSize;
 /// @param Builder            The builder used to create the loop.
 /// @param P                  A pointer to the pass that uses this function.
 ///                           It is used to update analysis information.
-/// @param LI                 The loop info we need to update
+/// @param LI                 The loop info for the current function
 /// @param DT                 The dominator tree we need to update
 /// @param ExitBlock          The block the loop will exit to.
 /// @param Predicate          The predicate used to generate the upper loop
@@ -75,15 +75,8 @@ extern int PollyChunkSize;
 Value *createLoop(Value *LowerBound, Value *UpperBound, Value *Stride,
                   PollyIRBuilder &Builder, LoopInfo &LI, DominatorTree &DT,
                   BasicBlock *&ExitBlock, ICmpInst::Predicate Predicate,
-                  ScopAnnotator *Annotator = nullptr, bool Parallel = false,
+                  ScopAnnotator *Annotator = NULL, bool Parallel = false,
                   bool UseGuard = true, bool LoopVectDisabled = false);
-
-/// Create a DebugLoc representing generated instructions.
-///
-/// The IR verifier requires !dbg metadata to be set in some situations. For
-/// instance, if an (inlinable) function has debug info, all its call site must
-/// have debug info as well.
-llvm::DebugLoc createDebugLocForGeneratedCode(Function *F);
 
 /// The ParallelLoopGenerator allows to create parallelized loops
 ///
@@ -128,12 +121,12 @@ llvm::DebugLoc createDebugLocForGeneratedCode(Function *F);
 class ParallelLoopGenerator {
 public:
   /// Create a parallel loop generator for the current function.
-  ParallelLoopGenerator(PollyIRBuilder &Builder, const DataLayout &DL)
-      : Builder(Builder), LongType(Type::getIntNTy(Builder.getContext(),
-                                                   DL.getPointerSizeInBits())),
-        M(Builder.GetInsertBlock()->getParent()->getParent()),
-        DLGenerated(createDebugLocForGeneratedCode(
-            Builder.GetInsertBlock()->getParent())) {}
+  ParallelLoopGenerator(PollyIRBuilder &Builder, LoopInfo &LI,
+                        DominatorTree &DT, const DataLayout &DL)
+      : Builder(Builder), LI(LI), DT(DT),
+        LongType(
+            Type::getIntNTy(Builder.getContext(), DL.getPointerSizeInBits())),
+        M(Builder.GetInsertBlock()->getParent()->getParent()) {}
 
   virtual ~ParallelLoopGenerator() {}
 
@@ -162,11 +155,11 @@ protected:
   /// The IR builder we use to create instructions.
   PollyIRBuilder &Builder;
 
-  /// The loop info for the generated subfunction.
-  std::unique_ptr<LoopInfo> SubFnLI;
+  /// The loop info of the current function we need to update.
+  LoopInfo &LI;
 
-  /// The dominance tree for the generated subfunction.
-  std::unique_ptr<DominatorTree> SubFnDT;
+  /// The dominance tree of the current function we need to update.
+  DominatorTree &DT;
 
   /// The type of a "long" on this hardware used for backend calls.
   Type *LongType;
@@ -174,20 +167,7 @@ protected:
   /// The current module
   Module *M;
 
-  /// Debug location for generated code without direct link to any specific
-  /// line.
-  ///
-  /// We only set the DebugLoc where the IR Verifier requires us to. Otherwise,
-  /// absent debug location for optimized code should be fine.
-  llvm::DebugLoc DLGenerated;
-
 public:
-  /// Returns the DominatorTree for the generated subfunction.
-  DominatorTree *getCalleeDominatorTree() const { return SubFnDT.get(); }
-
-  /// Returns the LoopInfo for the generated subfunction.
-  LoopInfo *getCalleeLoopInfo() const { return SubFnLI.get(); }
-
   /// Create a struct for all @p Values and store them in there.
   ///
   /// @param Values The values which should be stored in the struct.

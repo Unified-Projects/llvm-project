@@ -10,7 +10,6 @@
 #define LLDB_TARGET_REMOTEAWAREPLATFORM_H
 
 #include "lldb/Target/Platform.h"
-#include <optional>
 
 namespace lldb_private {
 
@@ -20,13 +19,12 @@ class RemoteAwarePlatform : public Platform {
 public:
   using Platform::Platform;
 
-  virtual Status
-  ResolveExecutable(const ModuleSpec &module_spec,
-                    lldb::ModuleSP &exe_module_sp,
-                    const FileSpecList *module_search_paths_ptr) override;
-
   bool GetModuleSpec(const FileSpec &module_file_spec, const ArchSpec &arch,
                      ModuleSpec &module_spec) override;
+
+  Status
+  ResolveExecutable(const ModuleSpec &module_spec, lldb::ModuleSP &module_sp,
+                    const FileSpecList *module_search_paths_ptr) override;
 
   lldb::user_id_t OpenFile(const FileSpec &file_spec, File::OpenOptions flags,
                            uint32_t mode, Status &error) override;
@@ -59,15 +57,15 @@ public:
   Status SetFilePermissions(const FileSpec &file_spec,
                             uint32_t file_permissions) override;
 
-  llvm::ErrorOr<llvm::MD5::MD5Result>
-  CalculateMD5(const FileSpec &file_spec) override;
+  bool CalculateMD5(const FileSpec &file_spec, uint64_t &low,
+                    uint64_t &high) override;
 
   Status GetFileWithUUID(const FileSpec &platform_file, const UUID *uuid,
                          FileSpec &local_file) override;
 
   bool GetRemoteOSVersion() override;
-  std::optional<std::string> GetRemoteOSBuildString() override;
-  std::optional<std::string> GetRemoteOSKernelDescription() override;
+  bool GetRemoteOSBuildString(std::string &s) override;
+  bool GetRemoteOSKernelDescription(std::string &s) override;
   ArchSpec GetRemoteSystemArchitecture() override;
 
   Status RunShellCommand(llvm::StringRef command, const FileSpec &working_dir,

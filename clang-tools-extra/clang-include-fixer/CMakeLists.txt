@@ -2,7 +2,7 @@ set(LLVM_LINK_COMPONENTS
   support
   )
 
-add_clang_library(clangIncludeFixer STATIC
+add_clang_library(clangIncludeFixer
   IncludeFixer.cpp
   IncludeFixerContext.cpp
   InMemorySymbolIndex.cpp
@@ -15,7 +15,6 @@ add_clang_library(clangIncludeFixer STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangIncludeFixer

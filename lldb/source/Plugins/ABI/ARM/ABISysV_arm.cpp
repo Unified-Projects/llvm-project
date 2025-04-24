@@ -8,15 +8,15 @@
 
 #include "ABISysV_arm.h"
 
-#include <optional>
 #include <vector>
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Value.h"
+#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -26,7 +26,6 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
-#include "lldb/ValueObject/ValueObjectConstResult.h"
 
 #include "Plugins/Process/Utility/ARMDefines.h"
 #include "Utility/ARM_DWARF_Registers.h"
@@ -38,8 +37,15 @@ using namespace lldb_private;
 LLDB_PLUGIN_DEFINE(ABISysV_arm)
 
 static const RegisterInfo g_register_infos[] = {
+    //  NAME       ALT       SZ OFF ENCODING         FORMAT          EH_FRAME
+    //  DWARF               GENERIC                     PROCESS PLUGIN
+    //  LLDB NATIVE            VALUE REGS    INVALIDATE REGS
+    //  ========== =======   == === =============    ============
+    //  ======================= =================== ===========================
+    //  ======================= ====================== ==========
+    //  ===============
     {"r0",
-     nullptr,
+     "arg1",
      4,
      0,
      eEncodingUint,
@@ -49,9 +55,9 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r1",
-     nullptr,
+     "arg2",
      4,
      0,
      eEncodingUint,
@@ -61,9 +67,9 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r2",
-     nullptr,
+     "arg3",
      4,
      0,
      eEncodingUint,
@@ -73,9 +79,9 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r3",
-     nullptr,
+     "arg4",
      4,
      0,
      eEncodingUint,
@@ -85,7 +91,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r4",
      nullptr,
      4,
@@ -97,7 +103,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r5",
      nullptr,
      4,
@@ -109,7 +115,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r6",
      nullptr,
      4,
@@ -121,7 +127,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r7",
      nullptr,
      4,
@@ -133,7 +139,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r8",
      nullptr,
      4,
@@ -145,7 +151,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r9",
      nullptr,
      4,
@@ -157,7 +163,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r10",
      nullptr,
      4,
@@ -169,7 +175,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r11",
      nullptr,
      4,
@@ -181,7 +187,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r12",
      nullptr,
      4,
@@ -193,7 +199,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"sp",
      "r13",
      4,
@@ -205,7 +211,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"lr",
      "r14",
      4,
@@ -217,7 +223,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"pc",
      "r15",
      4,
@@ -229,7 +235,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"cpsr",
      "psr",
      4,
@@ -241,7 +247,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s0",
      nullptr,
      4,
@@ -253,7 +259,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s1",
      nullptr,
      4,
@@ -265,7 +271,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s2",
      nullptr,
      4,
@@ -277,7 +283,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s3",
      nullptr,
      4,
@@ -289,7 +295,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s4",
      nullptr,
      4,
@@ -301,7 +307,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s5",
      nullptr,
      4,
@@ -313,7 +319,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s6",
      nullptr,
      4,
@@ -325,7 +331,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s7",
      nullptr,
      4,
@@ -337,7 +343,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s8",
      nullptr,
      4,
@@ -349,7 +355,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s9",
      nullptr,
      4,
@@ -361,7 +367,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s10",
      nullptr,
      4,
@@ -373,7 +379,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s11",
      nullptr,
      4,
@@ -385,7 +391,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s12",
      nullptr,
      4,
@@ -397,7 +403,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s13",
      nullptr,
      4,
@@ -409,7 +415,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s14",
      nullptr,
      4,
@@ -421,7 +427,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s15",
      nullptr,
      4,
@@ -433,7 +439,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s16",
      nullptr,
      4,
@@ -445,7 +451,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s17",
      nullptr,
      4,
@@ -457,7 +463,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s18",
      nullptr,
      4,
@@ -469,7 +475,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s19",
      nullptr,
      4,
@@ -481,7 +487,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s20",
      nullptr,
      4,
@@ -493,7 +499,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s21",
      nullptr,
      4,
@@ -505,7 +511,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s22",
      nullptr,
      4,
@@ -517,7 +523,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s23",
      nullptr,
      4,
@@ -529,7 +535,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s24",
      nullptr,
      4,
@@ -541,7 +547,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s25",
      nullptr,
      4,
@@ -553,7 +559,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s26",
      nullptr,
      4,
@@ -565,7 +571,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s27",
      nullptr,
      4,
@@ -577,7 +583,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s28",
      nullptr,
      4,
@@ -589,7 +595,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s29",
      nullptr,
      4,
@@ -601,7 +607,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s30",
      nullptr,
      4,
@@ -613,7 +619,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"s31",
      nullptr,
      4,
@@ -625,7 +631,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"fpscr",
      nullptr,
      4,
@@ -637,7 +643,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d0",
      nullptr,
      8,
@@ -649,7 +655,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d1",
      nullptr,
      8,
@@ -661,7 +667,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d2",
      nullptr,
      8,
@@ -673,7 +679,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d3",
      nullptr,
      8,
@@ -685,7 +691,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d4",
      nullptr,
      8,
@@ -697,7 +703,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d5",
      nullptr,
      8,
@@ -709,7 +715,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d6",
      nullptr,
      8,
@@ -721,7 +727,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d7",
      nullptr,
      8,
@@ -733,7 +739,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d8",
      nullptr,
      8,
@@ -745,7 +751,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d9",
      nullptr,
      8,
@@ -757,7 +763,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d10",
      nullptr,
      8,
@@ -769,7 +775,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d11",
      nullptr,
      8,
@@ -781,7 +787,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d12",
      nullptr,
      8,
@@ -793,7 +799,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d13",
      nullptr,
      8,
@@ -805,7 +811,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d14",
      nullptr,
      8,
@@ -817,7 +823,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d15",
      nullptr,
      8,
@@ -829,7 +835,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d16",
      nullptr,
      8,
@@ -841,7 +847,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d17",
      nullptr,
      8,
@@ -853,7 +859,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d18",
      nullptr,
      8,
@@ -865,7 +871,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d19",
      nullptr,
      8,
@@ -877,7 +883,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d20",
      nullptr,
      8,
@@ -889,7 +895,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d21",
      nullptr,
      8,
@@ -901,7 +907,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d22",
      nullptr,
      8,
@@ -913,7 +919,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d23",
      nullptr,
      8,
@@ -925,7 +931,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d24",
      nullptr,
      8,
@@ -937,7 +943,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d25",
      nullptr,
      8,
@@ -949,7 +955,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d26",
      nullptr,
      8,
@@ -961,7 +967,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d27",
      nullptr,
      8,
@@ -973,7 +979,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d28",
      nullptr,
      8,
@@ -985,7 +991,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d29",
      nullptr,
      8,
@@ -997,7 +1003,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d30",
      nullptr,
      8,
@@ -1009,7 +1015,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"d31",
      nullptr,
      8,
@@ -1021,7 +1027,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r8_usr",
      nullptr,
      4,
@@ -1033,7 +1039,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r9_usr",
      nullptr,
      4,
@@ -1045,7 +1051,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r10_usr",
      nullptr,
      4,
@@ -1057,7 +1063,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r11_usr",
      nullptr,
      4,
@@ -1069,7 +1075,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r12_usr",
      nullptr,
      4,
@@ -1081,7 +1087,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r13_usr",
      "sp_usr",
      4,
@@ -1093,7 +1099,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r14_usr",
      "lr_usr",
      4,
@@ -1105,7 +1111,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r8_fiq",
      nullptr,
      4,
@@ -1117,7 +1123,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r9_fiq",
      nullptr,
      4,
@@ -1129,7 +1135,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r10_fiq",
      nullptr,
      4,
@@ -1141,7 +1147,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r11_fiq",
      nullptr,
      4,
@@ -1153,7 +1159,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r12_fiq",
      nullptr,
      4,
@@ -1165,7 +1171,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r13_fiq",
      "sp_fiq",
      4,
@@ -1177,7 +1183,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r14_fiq",
      "lr_fiq",
      4,
@@ -1189,7 +1195,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r13_irq",
      "sp_irq",
      4,
@@ -1201,7 +1207,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r14_irq",
      "lr_irq",
      4,
@@ -1213,7 +1219,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r13_abt",
      "sp_abt",
      4,
@@ -1225,7 +1231,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r14_abt",
      "lr_abt",
      4,
@@ -1237,7 +1243,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r13_und",
      "sp_und",
      4,
@@ -1249,7 +1255,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r14_und",
      "lr_und",
      4,
@@ -1261,8 +1267,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-
-    },
+     0},
     {"r13_svc",
      "sp_svc",
      4,
@@ -1274,7 +1279,7 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-    },
+     0},
     {"r14_svc",
      "lr_svc",
      4,
@@ -1286,9 +1291,10 @@ static const RegisterInfo g_register_infos[] = {
      nullptr,
      nullptr,
      nullptr,
-     }};
+     0}};
 
-static const uint32_t k_num_register_infos = std::size(g_register_infos);
+static const uint32_t k_num_register_infos =
+    llvm::array_lengthof(g_register_infos);
 
 const lldb_private::RegisterInfo *
 ABISysV_arm::GetRegisterInfoArray(uint32_t &count) {
@@ -1338,7 +1344,7 @@ bool ABISysV_arm::PrepareTrivialCall(Thread &thread, addr_t sp,
 
   llvm::ArrayRef<addr_t>::iterator ai = args.begin(), ae = args.end();
 
-  for (size_t i = 0; i < std::size(reg_names); ++i) {
+  for (size_t i = 0; i < llvm::array_lengthof(reg_names); ++i) {
     if (ai == ae)
       break;
 
@@ -1452,7 +1458,7 @@ bool ABISysV_arm::GetArgumentValues(Thread &thread, ValueList &values) const {
       size_t bit_width = 0;
       if (compiler_type.IsIntegerOrEnumerationType(is_signed) ||
           compiler_type.IsPointerOrReferenceType()) {
-        if (std::optional<uint64_t> size = compiler_type.GetBitSize(&thread))
+        if (llvm::Optional<uint64_t> size = compiler_type.GetBitSize(&thread))
           bit_width = *size;
       } else {
         // We only handle integer, pointer and reference types currently...
@@ -1559,8 +1565,8 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
 
   const RegisterInfo *r0_reg_info =
       reg_ctx->GetRegisterInfo(eRegisterKindGeneric, LLDB_REGNUM_GENERIC_ARG1);
-  std::optional<uint64_t> bit_width = compiler_type.GetBitSize(&thread);
-  std::optional<uint64_t> byte_size = compiler_type.GetByteSize(&thread);
+  llvm::Optional<uint64_t> bit_width = compiler_type.GetBitSize(&thread);
+  llvm::Optional<uint64_t> byte_size = compiler_type.GetByteSize(&thread);
   if (!bit_width || !byte_size)
     return return_valobj_sp;
 
@@ -1637,7 +1643,7 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
       default:
         return return_valobj_sp;
       case 64: {
-        static_assert(sizeof(double) == sizeof(uint64_t));
+        static_assert(sizeof(double) == sizeof(uint64_t), "");
 
         if (IsArmHardFloat(thread)) {
           RegisterValue reg_value;
@@ -1661,7 +1667,7 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
       }
       case 16: // Half precision returned after a conversion to single precision
       case 32: {
-        static_assert(sizeof(float) == sizeof(uint32_t));
+        static_assert(sizeof(float) == sizeof(uint32_t), "");
 
         if (IsArmHardFloat(thread)) {
           RegisterValue reg_value;
@@ -1696,7 +1702,8 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
           compiler_type.IsHomogeneousAggregate(&base_type);
 
       if (homogeneous_count > 0 && homogeneous_count <= 4) {
-        std::optional<uint64_t> base_byte_size = base_type.GetByteSize(&thread);
+        llvm::Optional<uint64_t> base_byte_size =
+            base_type.GetByteSize(&thread);
         if (base_type.IsVectorType()) {
           if (base_byte_size &&
               (*base_byte_size == 8 || *base_byte_size == 16)) {
@@ -1724,7 +1731,7 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
                                                       nullptr, nullptr);
 
             if (base_type.IsFloatingPointType(float_count, is_complex)) {
-              std::optional<uint64_t> base_byte_size =
+              llvm::Optional<uint64_t> base_byte_size =
                   base_type.GetByteSize(&thread);
               if (float_count == 2 && is_complex) {
                 if (index != 0 && base_byte_size &&
@@ -1765,7 +1772,7 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
     ProcessSP process_sp(thread.GetProcess());
     ByteOrder byte_order = process_sp->GetByteOrder();
 
-    WritableDataBufferSP data_sp(new DataBufferHeap(*byte_size, 0));
+    DataBufferSP data_sp(new DataBufferHeap(*byte_size, 0));
     uint32_t data_offset = 0;
 
     for (uint32_t reg_index = 0; reg_index < vfp_count; reg_index++) {
@@ -1791,7 +1798,7 @@ ValueObjectSP ABISysV_arm::GetReturnValueObjectImpl(
       if ((data_offset + vfp_byte_size) <= data_sp->GetByteSize()) {
         Status error;
         const size_t bytes_copied = reg_value.GetAsMemoryData(
-            *reg_info, data_sp->GetBytes() + data_offset, vfp_byte_size,
+            reg_info, data_sp->GetBytes() + data_offset, vfp_byte_size,
             byte_order, error);
         if (bytes_copied != vfp_byte_size)
           break;
@@ -1824,13 +1831,13 @@ Status ABISysV_arm::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
                                          lldb::ValueObjectSP &new_value_sp) {
   Status error;
   if (!new_value_sp) {
-    error = Status::FromErrorString("Empty value object for return value.");
+    error.SetErrorString("Empty value object for return value.");
     return error;
   }
 
   CompilerType compiler_type = new_value_sp->GetCompilerType();
   if (!compiler_type) {
-    error = Status::FromErrorString("Null clang type for return value.");
+    error.SetErrorString("Null clang type for return value.");
     return error;
   }
 
@@ -1849,7 +1856,7 @@ Status ABISysV_arm::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
     Status data_error;
     size_t num_bytes = new_value_sp->GetData(data, data_error);
     if (data_error.Fail()) {
-      error = Status::FromErrorStringWithFormat(
+      error.SetErrorStringWithFormat(
           "Couldn't convert return value to raw data: %s",
           data_error.AsCString());
       return error;
@@ -1876,21 +1883,20 @@ Status ABISysV_arm::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
         }
       }
     } else {
-      error = Status::FromErrorString(
-          "We don't support returning longer than 64 bit "
-          "integer values at present.");
+      error.SetErrorString("We don't support returning longer than 64 bit "
+                           "integer values at present.");
     }
   } else if (compiler_type.IsFloatingPointType(count, is_complex)) {
     if (is_complex)
-      error = Status::FromErrorString(
+      error.SetErrorString(
           "We don't support returning complex values at present");
     else
-      error = Status::FromErrorString(
+      error.SetErrorString(
           "We don't support returning float values at present");
   }
 
   if (!set_it_simple)
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "We only support setting simple integer return types at present.");
 
   return error;
@@ -2125,3 +2131,16 @@ void ABISysV_arm::Initialize() {
 void ABISysV_arm::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
 }
+
+lldb_private::ConstString ABISysV_arm::GetPluginNameStatic() {
+  static ConstString g_name("SysV-arm");
+  return g_name;
+}
+
+// PluginInterface protocol
+
+lldb_private::ConstString ABISysV_arm::GetPluginName() {
+  return GetPluginNameStatic();
+}
+
+uint32_t ABISysV_arm::GetPluginVersion() { return 1; }

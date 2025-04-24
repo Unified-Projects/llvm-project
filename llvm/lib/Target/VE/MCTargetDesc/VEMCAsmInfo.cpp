@@ -11,8 +11,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "VEMCAsmInfo.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/MC/MCTargetOptions.h"
 
 using namespace llvm;
 
@@ -34,4 +37,5 @@ VEELFMCAsmInfo::VEELFMCAsmInfo(const Triple &TheTriple) {
   UsesELFSectionDirectiveForBSS = true;
 
   SupportsDebugInformation = true;
+  UseIntegratedAssembler = false;
 }

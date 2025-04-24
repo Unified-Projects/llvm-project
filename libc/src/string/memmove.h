@@ -9,13 +9,12 @@
 #ifndef LLVM_LIBC_SRC_STRING_MEMMOVE_H
 #define LLVM_LIBC_SRC_STRING_MEMMOVE_H
 
-#include "src/__support/macros/config.h"
 #include <stddef.h> // size_t
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
-void *memmove(void *dst, const void *src, size_t count);
+void *memmove(void *dest, const void *src, size_t count);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_STRING_MEMMOVE_H

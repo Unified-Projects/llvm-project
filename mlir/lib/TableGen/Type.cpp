@@ -18,7 +18,12 @@
 
 using namespace mlir;
 using namespace mlir::tblgen;
-using llvm::Record;
+
+TypeConstraint::TypeConstraint(const llvm::Record *record)
+    : Constraint(Constraint::CK_Type, record) {
+  assert(def->isSubClassOf("TypeConstraint") &&
+         "must be subclass of TableGen 'TypeConstraint' class");
+}
 
 TypeConstraint::TypeConstraint(const llvm::DefInit *init)
     : TypeConstraint(init->getDef()) {}
@@ -31,41 +36,46 @@ bool TypeConstraint::isVariadic() const {
   return def->isSubClassOf("Variadic");
 }
 
-bool TypeConstraint::isVariadicOfVariadic() const {
-  return def->isSubClassOf("VariadicOfVariadic");
-}
-
-StringRef TypeConstraint::getVariadicOfVariadicSegmentSizeAttr() const {
-  assert(isVariadicOfVariadic());
-  return def->getValueAsString("segmentAttrName");
-}
-
 // Returns the builder call for this constraint if this is a buildable type,
-// returns std::nullopt otherwise.
-std::optional<StringRef> TypeConstraint::getBuilderCall() const {
-  const Record *baseType = def;
+// returns None otherwise.
+Optional<StringRef> TypeConstraint::getBuilderCall() const {
+  const llvm::Record *baseType = def;
   if (isVariableLength())
     baseType = baseType->getValueAsDef("baseType");
 
   // Check to see if this type constraint has a builder call.
   const llvm::RecordVal *builderCall = baseType->getValue("builderCall");
   if (!builderCall || !builderCall->getValue())
-    return std::nullopt;
-  return TypeSwitch<const llvm::Init *, std::optional<StringRef>>(
-             builderCall->getValue())
+    return llvm::None;
+  return TypeSwitch<llvm::Init *, Optional<StringRef>>(builderCall->getValue())
       .Case<llvm::StringInit>([&](auto *init) {
         StringRef value = init->getValue();
-        return value.empty() ? std::optional<StringRef>() : value;
+        return value.empty() ? Optional<StringRef>() : value;
       })
-      .Default([](auto *) { return std::nullopt; });
+      .Default([](auto *) { return llvm::None; });
 }
 
-// Return the C++ type for this type (which may just be ::mlir::Type).
-StringRef TypeConstraint::getCppType() const {
-  return def->getValueAsString("cppType");
+// Return the C++ class name for this type (which may just be ::mlir::Type).
+std::string TypeConstraint::getCPPClassName() const {
+  StringRef className = def->getValueAsString("cppClassName");
+
+  // If the class name is already namespace resolved, use it.
+  if (className.contains("::"))
+    return className.str();
+
+  // Otherwise, check to see if there is a namespace from a dialect to prepend.
+  if (const llvm::RecordVal *value = def->getValue("dialect")) {
+    Dialect dialect(cast<const llvm::DefInit>(value->getValue())->getDef());
+    return (dialect.getCppNamespace() + "::" + className).str();
+  }
+  return className.str();
 }
 
-Type::Type(const Record *record) : TypeConstraint(record) {}
+Type::Type(const llvm::Record *record) : TypeConstraint(record) {}
+
+StringRef Type::getDescription() const {
+  return def->getValueAsString("description");
+}
 
 Dialect Type::getDialect() const {
   return Dialect(def->getValueAsDef("dialect"));

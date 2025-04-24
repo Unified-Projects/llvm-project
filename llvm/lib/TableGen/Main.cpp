@@ -15,26 +15,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/TableGen/Main.h"
-#include "TGLexer.h"
 #include "TGParser.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SMLoc.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
-#include "llvm/TableGen/TGTimer.h"
-#include "llvm/TableGen/TableGenBackend.h"
-#include <memory>
-#include <string>
+#include <algorithm>
+#include <cstdio>
 #include <system_error>
-#include <utility>
 using namespace llvm;
 
 static cl::opt<std::string>
@@ -64,10 +55,6 @@ WriteIfChanged("write-if-changed", cl::desc("Only write output if it changed"));
 static cl::opt<bool>
 TimePhases("time-phases", cl::desc("Time phases of parser and backend"));
 
-static cl::opt<bool> NoWarnOnUnusedTemplateArgs(
-    "no-warn-on-unused-template-args",
-    cl::desc("Disable unused template argument warnings."));
-
 static int reportError(const char *ProgName, Twine Msg) {
   errs() << ProgName << ": " << Msg;
   errs().flush();
@@ -96,17 +83,15 @@ static int createDependencyFile(const TGParser &Parser, const char *argv0) {
   return 0;
 }
 
-int llvm::TableGenMain(const char *argv0,
-                       std::function<TableGenMainFn> MainFn) {
+int llvm::TableGenMain(const char *argv0, TableGenMainFn *MainFn) {
   RecordKeeper Records;
-  TGTimer &Timer = Records.getTimer();
 
   if (TimePhases)
-    Timer.startPhaseTiming();
+    Records.startPhaseTiming();
 
   // Parse the input file.
 
-  Timer.startTimer("Parse, build records");
+  Records.startTimer("Parse, build records");
   ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
       MemoryBuffer::getFileOrSTDIN(InputFilename, /*IsText=*/true);
   if (std::error_code EC = FileOrErr.getError())
@@ -122,27 +107,18 @@ int llvm::TableGenMain(const char *argv0,
   // it later.
   SrcMgr.setIncludeDirs(IncludeDirs);
 
-  TGParser Parser(SrcMgr, MacroNames, Records, NoWarnOnUnusedTemplateArgs);
+  TGParser Parser(SrcMgr, MacroNames, Records);
 
   if (Parser.ParseFile())
     return 1;
-  Timer.stopTimer();
-
-  // Return early if any other errors were generated during parsing
-  // (e.g., assert failures).
-  if (ErrorsPrinted > 0)
-    return reportError(argv0, Twine(ErrorsPrinted) + " errors.\n");
+  Records.stopTimer();
 
   // Write output to memory.
-  Timer.startBackendTimer("Backend overall");
+  Records.startBackendTimer("Backend overall");
   std::string OutString;
   raw_string_ostream Out(OutString);
-  unsigned status = 0;
-  // ApplyCallback will return true if it did not apply any callback. In that
-  // case, attempt to apply the MainFn.
-  if (TableGen::Emitter::ApplyCallback(Records, Out))
-    status = MainFn ? MainFn(Out, Records) : 1;
-  Timer.stopBackendTimer();
+  unsigned status = MainFn(Out, Records);
+  Records.stopBackendTimer();
   if (status)
     return 1;
 
@@ -155,7 +131,7 @@ int llvm::TableGenMain(const char *argv0,
       return Ret;
   }
 
-  Timer.startTimer("Write output");
+  Records.startTimer("Write output");
   bool WriteFile = true;
   if (WriteIfChanged) {
     // Only updates the real output file if there are any differences.
@@ -163,7 +139,7 @@ int llvm::TableGenMain(const char *argv0,
     // aren't any.
     if (auto ExistingOrErr =
             MemoryBuffer::getFile(OutputFilename, /*IsText=*/true))
-      if (std::move(ExistingOrErr.get())->getBuffer() == OutString)
+      if (std::move(ExistingOrErr.get())->getBuffer() == Out.str())
         WriteFile = false;
   }
   if (WriteFile) {
@@ -172,13 +148,13 @@ int llvm::TableGenMain(const char *argv0,
     if (EC)
       return reportError(argv0, "error opening " + OutputFilename + ": " +
                                     EC.message() + "\n");
-    OutFile.os() << OutString;
+    OutFile.os() << Out.str();
     if (ErrorsPrinted == 0)
       OutFile.keep();
   }
-
-  Timer.stopTimer();
-  Timer.stopPhaseTiming();
+  
+  Records.stopTimer();
+  Records.stopPhaseTiming();
 
   if (ErrorsPrinted > 0)
     return reportError(argv0, Twine(ErrorsPrinted) + " errors.\n");

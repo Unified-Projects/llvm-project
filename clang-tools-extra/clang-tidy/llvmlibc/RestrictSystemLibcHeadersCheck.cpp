@@ -16,7 +16,9 @@
 // FixItHint - Hint to check documentation script to mark this check as
 // providing a FixIt.
 
-namespace clang::tidy::llvm_libc {
+namespace clang {
+namespace tidy {
+namespace llvm_libc {
 
 namespace {
 
@@ -31,10 +33,9 @@ public:
 
   void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           StringRef FileName, bool IsAngled,
-                          CharSourceRange FilenameRange,
-                          OptionalFileEntryRef File, StringRef SearchPath,
-                          StringRef RelativePath, const Module *SuggestedModule,
-                          bool ModuleImported,
+                          CharSourceRange FilenameRange, const FileEntry *File,
+                          StringRef SearchPath, StringRef RelativePath,
+                          const Module *Imported,
                           SrcMgr::CharacteristicKind FileType) override;
 
 private:
@@ -45,15 +46,15 @@ private:
 
 void RestrictedIncludesPPCallbacks::InclusionDirective(
     SourceLocation HashLoc, const Token &IncludeTok, StringRef FileName,
-    bool IsAngled, CharSourceRange FilenameRange, OptionalFileEntryRef File,
-    StringRef SearchPath, StringRef RelativePath, const Module *SuggestedModule,
-    bool ModuleImported, SrcMgr::CharacteristicKind FileType) {
+    bool IsAngled, CharSourceRange FilenameRange, const FileEntry *File,
+    StringRef SearchPath, StringRef RelativePath, const Module *Imported,
+    SrcMgr::CharacteristicKind FileType) {
   // Compiler provided headers are allowed (e.g stddef.h).
   if (SrcMgr::isSystem(FileType) && SearchPath == CompilerIncudeDir)
     return;
   portability::RestrictedIncludesPPCallbacks::InclusionDirective(
       HashLoc, IncludeTok, FileName, IsAngled, FilenameRange, File, SearchPath,
-      RelativePath, SuggestedModule, ModuleImported, FileType);
+      RelativePath, Imported, FileType);
 }
 
 void RestrictSystemLibcHeadersCheck::registerPPCallbacks(
@@ -65,4 +66,6 @@ void RestrictSystemLibcHeadersCheck::registerPPCallbacks(
       *this, SM, CompilerIncudeDir));
 }
 
-} // namespace clang::tidy::llvm_libc
+} // namespace llvm_libc
+} // namespace tidy
+} // namespace clang

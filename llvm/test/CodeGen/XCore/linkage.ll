@@ -1,8 +1,8 @@
-; RUN: llc < %s -mtriple=xcore | FileCheck %s
+; RUN: llc < %s -march=xcore | FileCheck %s
 
 ; CHECK: .weak fd
 define weak void @fd() {
-  call void @fr(ptr @gd, ptr @gr)
+  call void @fr(i32* @gd, i32* @gr)
   ret void
 }
 
@@ -43,7 +43,7 @@ define protected void @test_protected() {
 ; CHECK-NOT: .hidden test_hidden_declaration
 
 ; CHECK: .weak fr
-declare extern_weak void @fr(ptr, ptr)
+declare extern_weak void @fr(i32*, i32*)
 
 ; CHECK: .weak gr
 @gr = extern_weak global i32

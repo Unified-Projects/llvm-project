@@ -15,7 +15,6 @@
 #define LLVM_ANALYSIS_CODEMETRICS_H
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/InstructionCost.h"
 
 namespace llvm {
 class AssumptionCache;
@@ -25,8 +24,6 @@ class Function;
 template <class T> class SmallPtrSetImpl;
 class TargetTransformInfo;
 class Value;
-
-enum struct ConvergenceKind { None, Controlled, ExtendedLoop, Uncontrolled };
 
 /// Utility to calculate the size and a few similar metrics for a set
 /// of basic blocks.
@@ -44,20 +41,20 @@ struct CodeMetrics {
   /// one or more 'noduplicate' instructions.
   bool notDuplicatable = false;
 
-  /// The kind of convergence specified in this function.
-  ConvergenceKind Convergence = ConvergenceKind::None;
+  /// True if this function contains a call to a convergent function.
+  bool convergent = false;
 
   /// True if this function calls alloca (in the C sense).
   bool usesDynamicAlloca = false;
 
-  /// Code size cost of the analyzed blocks.
-  InstructionCost NumInsts = 0;
+  /// Number of instructions in the analyzed blocks.
+  unsigned NumInsts = false;
 
   /// Number of analyzed blocks.
   unsigned NumBlocks = false;
 
   /// Keeps track of basic block code size estimates.
-  DenseMap<const BasicBlock *, InstructionCost> NumBBInsts;
+  DenseMap<const BasicBlock *, unsigned> NumBBInsts;
 
   /// Keep track of the number of calls to 'big' functions.
   unsigned NumCalls = false;
@@ -79,7 +76,7 @@ struct CodeMetrics {
   /// Add information about a block to the current state.
   void analyzeBasicBlock(const BasicBlock *BB, const TargetTransformInfo &TTI,
                          const SmallPtrSetImpl<const Value *> &EphValues,
-                         bool PrepareForLTO = false, const Loop *L = nullptr);
+                         bool PrepareForLTO = false);
 
   /// Collect a loop's ephemeral values (those used only by an assume
   /// or similar intrinsics in the loop).

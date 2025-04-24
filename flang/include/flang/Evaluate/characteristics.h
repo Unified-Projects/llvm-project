@@ -16,9 +16,7 @@
 #include "common.h"
 #include "expression.h"
 #include "shape.h"
-#include "tools.h"
 #include "type.h"
-#include "flang/Common/Fortran-features.h"
 #include "flang/Common/Fortran.h"
 #include "flang/Common/enum-set.h"
 #include "flang/Common/idioms.h"
@@ -45,35 +43,32 @@ namespace Fortran::evaluate::characteristics {
 using common::CopyableIndirection;
 
 // Are these procedures distinguishable for a generic name or FINAL?
-std::optional<bool> Distinguishable(const common::LanguageFeatureControl &,
-    const Procedure &, const Procedure &);
+bool Distinguishable(const Procedure &, const Procedure &);
 // Are these procedures distinguishable for a generic operator or assignment?
-std::optional<bool> DistinguishableOpOrAssign(
-    const common::LanguageFeatureControl &, const Procedure &,
-    const Procedure &);
+bool DistinguishableOpOrAssign(const Procedure &, const Procedure &);
 
 // Shapes of function results and dummy arguments have to have
 // the same rank, the same deferred dimensions, and the same
 // values for explicit dimensions when constant.
-bool ShapesAreCompatible(const std::optional<Shape> &,
-    const std::optional<Shape> &, bool *possibleWarning = nullptr);
+bool ShapesAreCompatible(const Shape &, const Shape &);
 
 class TypeAndShape {
 public:
-  ENUM_CLASS(Attr, AssumedRank, AssumedShape, AssumedSize, DeferredShape)
+  ENUM_CLASS(
+      Attr, AssumedRank, AssumedShape, AssumedSize, DeferredShape, Coarray)
   using Attrs = common::EnumSet<Attr, Attr_enumSize>;
 
-  explicit TypeAndShape(DynamicType t) : type_{t}, shape_{Shape{}} {
-    AcquireLEN();
-  }
-  TypeAndShape(DynamicType t, int rank) : type_{t}, shape_{Shape(rank)} {
+  explicit TypeAndShape(DynamicType t) : type_{t} { AcquireLEN(); }
+  TypeAndShape(DynamicType t, int rank) : type_{t}, shape_(rank) {
     AcquireLEN();
   }
   TypeAndShape(DynamicType t, Shape &&s) : type_{t}, shape_{std::move(s)} {
     AcquireLEN();
   }
   TypeAndShape(DynamicType t, std::optional<Shape> &&s) : type_{t} {
-    shape_ = std::move(s);
+    if (s) {
+      shape_ = std::move(*s);
+    }
     AcquireLEN();
   }
   DEFAULT_CONSTRUCTORS_AND_ASSIGNMENTS(TypeAndShape)
@@ -82,26 +77,25 @@ public:
   bool operator!=(const TypeAndShape &that) const { return !(*this == that); }
 
   static std::optional<TypeAndShape> Characterize(
-      const semantics::Symbol &, FoldingContext &, bool invariantOnly = true);
+      const semantics::Symbol &, FoldingContext &);
   static std::optional<TypeAndShape> Characterize(
-      const semantics::DeclTypeSpec &, FoldingContext &,
-      bool invariantOnly = true);
+      const semantics::ProcInterface &, FoldingContext &);
   static std::optional<TypeAndShape> Characterize(
-      const ActualArgument &, FoldingContext &, bool invariantOnly = true);
+      const semantics::DeclTypeSpec &, FoldingContext &);
+  static std::optional<TypeAndShape> Characterize(
+      const ActualArgument &, FoldingContext &);
 
-  // General case for Expr<T>, &c.
+  // Handle Expr<T> & Designator<T>
   template <typename A>
   static std::optional<TypeAndShape> Characterize(
-      const A &x, FoldingContext &context, bool invariantOnly = true) {
-    const auto *symbol{UnwrapWholeSymbolOrComponentDataRef(x)};
-    if (symbol && !symbol->owner().IsDerivedType()) { // Whole variable
-      if (auto result{Characterize(*symbol, context, invariantOnly)}) {
+      const A &x, FoldingContext &context) {
+    if (const auto *symbol{UnwrapWholeSymbolOrComponentDataRef(x)}) {
+      if (auto result{Characterize(*symbol, context)}) {
         return result;
       }
     }
     if (auto type{x.GetType()}) {
-      TypeAndShape result{*type, GetShape(context, x, invariantOnly)};
-      result.corank_ = GetCorank(x);
+      TypeAndShape result{*type, GetShape(context, x)};
       if (type->category() == TypeCategory::Character) {
         if (const auto *chExpr{UnwrapExpr<Expr<SomeCharacter>>(x)}) {
           if (auto length{chExpr->LEN()}) {
@@ -109,54 +103,25 @@ public:
           }
         }
       }
-      if (symbol) { // component
-        result.AcquireAttrs(*symbol);
-      }
-      return std::move(result.Rewrite(context));
-    }
-    return std::nullopt;
-  }
-
-  // Specialization for character designators
-  template <int KIND>
-  static std::optional<TypeAndShape> Characterize(
-      const Designator<Type<TypeCategory::Character, KIND>> &x,
-      FoldingContext &context, bool invariantOnly = true) {
-    const auto *symbol{UnwrapWholeSymbolOrComponentDataRef(x)};
-    if (symbol && !symbol->owner().IsDerivedType()) { // Whole variable
-      if (auto result{Characterize(*symbol, context, invariantOnly)}) {
-        return result;
-      }
-    }
-    if (auto type{x.GetType()}) {
-      TypeAndShape result{*type, GetShape(context, x, invariantOnly)};
-      if (type->category() == TypeCategory::Character) {
-        if (auto length{x.LEN()}) {
-          result.set_LEN(std::move(*length));
-        }
-      }
-      if (symbol) { // component
-        result.AcquireAttrs(*symbol);
-      }
       return std::move(result.Rewrite(context));
     }
     return std::nullopt;
   }
 
   template <typename A>
-  static std::optional<TypeAndShape> Characterize(const std::optional<A> &x,
-      FoldingContext &context, bool invariantOnly = true) {
+  static std::optional<TypeAndShape> Characterize(
+      const std::optional<A> &x, FoldingContext &context) {
     if (x) {
-      return Characterize(*x, context, invariantOnly);
+      return Characterize(*x, context);
     } else {
       return std::nullopt;
     }
   }
   template <typename A>
   static std::optional<TypeAndShape> Characterize(
-      A *ptr, FoldingContext &context, bool invariantOnly = true) {
-    if (ptr) {
-      return Characterize(std::as_const(*ptr), context, invariantOnly);
+      const A *p, FoldingContext &context) {
+    if (p) {
+      return Characterize(*p, context);
     } else {
       return std::nullopt;
     }
@@ -172,23 +137,14 @@ public:
     LEN_ = std::move(len);
     return *this;
   }
-  const std::optional<Shape> &shape() const { return shape_; }
+  const Shape &shape() const { return shape_; }
   const Attrs &attrs() const { return attrs_; }
   int corank() const { return corank_; }
-  void set_corank(int n) { corank_ = n; }
 
-  // Return -1 for assumed-rank as a safety.
-  int Rank() const { return shape_ ? GetRank(*shape_) : -1; }
-
-  // Can sequence association apply to this argument?
-  bool CanBeSequenceAssociated() const {
-    constexpr Attrs notAssumedOrExplicitShape{~Attrs{Attr::AssumedSize}};
-    return Rank() > 0 && (attrs() & notAssumedOrExplicitShape).none();
-  }
-
+  int Rank() const { return GetRank(shape_); }
   bool IsCompatibleWith(parser::ContextualMessages &, const TypeAndShape &that,
       const char *thisIs = "pointer", const char *thatIs = "target",
-      bool omitShapeConformanceCheck = false,
+      bool isElemental = false,
       enum CheckConformanceFlags::Flags = CheckConformanceFlags::None) const;
   std::optional<Expr<SubscriptInteger>> MeasureElementSizeInBytes(
       FoldingContext &, bool align) const;
@@ -203,8 +159,9 @@ public:
 
 private:
   static std::optional<TypeAndShape> Characterize(
-      const semantics::AssocEntityDetails &, FoldingContext &,
-      bool invariantOnly = true);
+      const semantics::AssocEntityDetails &, FoldingContext &);
+  static std::optional<TypeAndShape> Characterize(
+      const semantics::ProcEntityDetails &, FoldingContext &);
   void AcquireAttrs(const semantics::Symbol &);
   void AcquireLEN();
   void AcquireLEN(const semantics::Symbol &);
@@ -212,7 +169,7 @@ private:
 protected:
   DynamicType type_;
   std::optional<Expr<SubscriptInteger>> LEN_;
-  std::optional<Shape> shape_;
+  Shape shape_;
   Attrs attrs_;
   int corank_{0};
 };
@@ -220,11 +177,8 @@ protected:
 // 15.3.2.2
 struct DummyDataObject {
   ENUM_CLASS(Attr, Optional, Allocatable, Asynchronous, Contiguous, Value,
-      Volatile, Pointer, Target, DeducedFromActual)
+      Volatile, Pointer, Target)
   using Attrs = common::EnumSet<Attr, Attr_enumSize>;
-  static bool IdenticalSignificantAttrs(const Attrs &x, const Attrs &y) {
-    return (x - Attr::DeducedFromActual) == (y - Attr::DeducedFromActual);
-  }
   DEFAULT_CONSTRUCTORS_AND_ASSIGNMENTS(DummyDataObject)
   explicit DummyDataObject(const TypeAndShape &t) : type{t} {}
   explicit DummyDataObject(TypeAndShape &&t) : type{std::move(t)} {}
@@ -233,20 +187,14 @@ struct DummyDataObject {
   bool operator!=(const DummyDataObject &that) const {
     return !(*this == that);
   }
-  bool IsCompatibleWith(const DummyDataObject &, std::string *whyNot = nullptr,
-      std::optional<std::string> *warning = nullptr) const;
   static std::optional<DummyDataObject> Characterize(
       const semantics::Symbol &, FoldingContext &);
-  bool CanBePassedViaImplicitInterface(std::string *whyNot = nullptr) const;
-  bool IsPassedByDescriptor(bool isBindC) const;
+  bool CanBePassedViaImplicitInterface() const;
   llvm::raw_ostream &Dump(llvm::raw_ostream &) const;
-
   TypeAndShape type;
   std::vector<Expr<SubscriptInteger>> coshape;
   common::Intent intent{common::Intent::Default};
   Attrs attrs;
-  common::IgnoreTKRSet ignoreTKR;
-  std::optional<common::CUDADataAttr> cudaDataAttr;
 };
 
 // 15.3.2.3
@@ -257,11 +205,7 @@ struct DummyProcedure {
   explicit DummyProcedure(Procedure &&);
   bool operator==(const DummyProcedure &) const;
   bool operator!=(const DummyProcedure &that) const { return !(*this == that); }
-  bool IsCompatibleWith(
-      const DummyProcedure &, std::string *whyNot = nullptr) const;
-  bool CanBePassedViaImplicitInterface(std::string *whyNot = nullptr) const;
   llvm::raw_ostream &Dump(llvm::raw_ostream &) const;
-
   CopyableIndirection<Procedure> procedure;
   common::Intent intent{common::Intent::Default};
   Attrs attrs;
@@ -285,23 +229,17 @@ struct DummyArgument {
   ~DummyArgument();
   bool operator==(const DummyArgument &) const;
   bool operator!=(const DummyArgument &that) const { return !(*this == that); }
-  static std::optional<DummyArgument> FromActual(std::string &&,
-      const Expr<SomeType> &, FoldingContext &, bool forImplicitInterface);
-  static std::optional<DummyArgument> FromActual(std::string &&,
-      const ActualArgument &, FoldingContext &, bool forImplicitInterface);
+  static std::optional<DummyArgument> FromActual(
+      std::string &&, const Expr<SomeType> &, FoldingContext &);
   bool IsOptional() const;
   void SetOptional(bool = true);
   common::Intent GetIntent() const;
   void SetIntent(common::Intent);
-  bool CanBePassedViaImplicitInterface(std::string *whyNot = nullptr) const;
+  bool CanBePassedViaImplicitInterface() const;
   bool IsTypelessIntrinsicDummy() const;
-  bool IsCompatibleWith(const DummyArgument &, std::string *whyNot = nullptr,
-      std::optional<std::string> *warning = nullptr) const;
   llvm::raw_ostream &Dump(llvm::raw_ostream &) const;
-
-  // name and pass are not characteristics and so do not participate in
-  // compatibility checks, but they are needed to determine whether
-  // procedures are distinguishable
+  // name and pass are not characteristics and so does not participate in
+  // operator== but are needed to determine if procedures are distinguishable
   std::string name;
   bool pass{false}; // is this the PASS argument of its procedure
   std::variant<DummyDataObject, DummyProcedure, AlternateReturn> u;
@@ -336,15 +274,12 @@ struct FunctionResult {
     return std::get_if<TypeAndShape>(&u);
   }
   void SetType(DynamicType t) { std::get<TypeAndShape>(u).set_type(t); }
-  bool CanBeReturnedViaImplicitInterface(std::string *whyNot = nullptr) const;
-  bool IsCompatibleWith(
-      const FunctionResult &, std::string *whyNot = nullptr) const;
+  bool CanBeReturnedViaImplicitInterface() const;
 
   llvm::raw_ostream &Dump(llvm::raw_ostream &) const;
 
   Attrs attrs;
   std::variant<TypeAndShape, CopyableIndirection<Procedure>> u;
-  std::optional<common::CUDADataAttr> cudaDataAttr;
 };
 
 // 15.3.1
@@ -366,15 +301,9 @@ struct Procedure {
   static std::optional<Procedure> Characterize(
       const semantics::Symbol &, FoldingContext &);
   static std::optional<Procedure> Characterize(
-      const ProcedureDesignator &, FoldingContext &, bool emitError);
+      const ProcedureDesignator &, FoldingContext &);
   static std::optional<Procedure> Characterize(
       const ProcedureRef &, FoldingContext &);
-  static std::optional<Procedure> Characterize(
-      const Expr<SomeType> &, FoldingContext &);
-  // Characterizes the procedure being referenced, deducing dummy argument
-  // types from actual arguments in the case of an implicit interface.
-  static std::optional<Procedure> FromActuals(
-      const ProcedureDesignator &, const ActualArguments &, FoldingContext &);
 
   // At most one of these will return true.
   // For "EXTERNAL P" with no type for or calls to P, both will be false.
@@ -387,20 +316,14 @@ struct Procedure {
   bool HasExplicitInterface() const {
     return !attrs.test(Attr::ImplicitInterface);
   }
-  std::optional<int> FindPassIndex(std::optional<parser::CharBlock>) const;
-  bool CanBeCalledViaImplicitInterface(std::string *whyNot = nullptr) const;
+  int FindPassIndex(std::optional<parser::CharBlock>) const;
+  bool CanBeCalledViaImplicitInterface() const;
   bool CanOverride(const Procedure &, std::optional<int> passIndex) const;
-  bool IsCompatibleWith(const Procedure &, bool ignoreImplicitVsExplicit,
-      std::string *whyNot = nullptr, const SpecificIntrinsic * = nullptr,
-      std::optional<std::string> *warning = nullptr) const;
-
   llvm::raw_ostream &Dump(llvm::raw_ostream &) const;
 
   std::optional<FunctionResult> functionResult;
   DummyArguments dummyArguments;
   Attrs attrs;
-  std::optional<common::CUDASubprogramAttrs> cudaSubprogramAttrs;
 };
-
 } // namespace Fortran::evaluate::characteristics
 #endif // FORTRAN_EVALUATE_CHARACTERISTICS_H_

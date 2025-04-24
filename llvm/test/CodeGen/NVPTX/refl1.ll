@@ -1,14 +1,13 @@
-; RUN: llc < %s -mtriple=nvptx64 -mcpu=sm_20 | FileCheck %s
-; RUN: %if ptxas %{ llc < %s -mtriple=nvptx64 -mcpu=sm_20 | %ptxas-verify %}
+; RUN: llc < %s -march=nvptx -mcpu=sm_20 | FileCheck %s
 
 target triple = "nvptx-nvidia-cuda"
 
 ; Function Attrs: nounwind
 ; CHECK: .entry foo
-define ptx_kernel void @foo(ptr nocapture %a) #0 {
-  %val = load float, ptr %a
+define void @foo(float* nocapture %a) #0 {
+  %val = load float, float* %a
   %tan = tail call fastcc float @__nv_fast_tanf(float %val)
-  store float %tan, ptr %a
+  store float %tan, float* %a
   ret void
 }
 
@@ -34,3 +33,7 @@ entry:
 attributes #0 = { nounwind }
 attributes #1 = { nounwind readnone }
 attributes #2 = { alwaysinline inlinehint nounwind readnone }
+
+!nvvm.annotations = !{!0}
+
+!0 = !{void (float*)* @foo, !"kernel", i32 1}

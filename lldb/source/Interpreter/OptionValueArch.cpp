@@ -49,8 +49,8 @@ Status OptionValueArch::SetValueFromString(llvm::StringRef value,
       m_value_was_set = true;
       NotifyValueChanged();
     } else
-      error = Status::FromErrorStringWithFormat("unsupported architecture '%s'",
-                                                value_str.c_str());
+      error.SetErrorStringWithFormat("unsupported architecture '%s'",
+                                     value_str.c_str());
     break;
   }
   case eVarSetOperationInsertBefore:
@@ -66,6 +66,7 @@ Status OptionValueArch::SetValueFromString(llvm::StringRef value,
 
 void OptionValueArch::AutoComplete(CommandInterpreter &interpreter,
                                    CompletionRequest &request) {
-  lldb_private::CommandCompletions::InvokeCommonCompletionCallbacks(
-      interpreter, lldb::eArchitectureCompletion, request, nullptr);
+  CommandCompletions::InvokeCommonCompletionCallbacks(
+      interpreter, CommandCompletions::eArchitectureCompletion, request,
+      nullptr);
 }

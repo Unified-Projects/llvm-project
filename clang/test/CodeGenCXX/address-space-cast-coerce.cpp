@@ -41,14 +41,13 @@ template<typename T, unsigned int n>
 
 using char1 = my_vector_type<char, 1>;
 
-void mane() {
+int mane() {
 
     char1 f1{1};
     char1 f2{1};
 
-// CHECK: [[CALL:%.*]] = call i16
-// CHECK: [[TRUNC:%.*]] = trunc i16 [[CALL]] to i8
-// CHECK: store i8 [[TRUNC]]
+// CHECK: %[[a:[^ ]+]] = addrspacecast i16 addrspace(5)* %{{[^ ]+}} to i16*
+// CHECK: %[[a:[^ ]+]] = addrspacecast %{{[^ ]+}} addrspace(5)* %{{[^ ]+}} to %{{[^ ]+}} 
 
     char1 f3 = f1 + f2;
 }

@@ -10,11 +10,13 @@
 
 // void reserve(); // Deprecated in C++20
 
-// REQUIRES: c++20 || c++23
+// UNSUPPORTED: c++03, c++11, c++14, c++17
 
 #include <string>
 
-void f() {
-  std::string s;
-  s.reserve(); // expected-warning {{'reserve' is deprecated}}
+int main(int, char**)
+{
+    std::string s;
+    s.reserve(); // expected-warning {{'reserve' is deprecated}}
+    return 0;
 }

@@ -9,12 +9,10 @@
 #ifndef LLVM_LIBC_SRC_MATH_LRINTF_H
 #define LLVM_LIBC_SRC_MATH_LRINTF_H
 
-#include "src/__support/macros/config.h"
-
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 long lrintf(float x);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_MATH_LRINTF_H

@@ -15,8 +15,6 @@
 
 #include "mlir/Transforms/DialectConversion.h"
 
-#include "mlir/Dialect/SPIRV/IR/SPIRVEnums.h"
-
 namespace mlir {
 class LLVMTypeConverter;
 class MLIRContext;
@@ -25,10 +23,13 @@ class ModuleOp;
 template <typename SPIRVOp>
 class SPIRVToLLVMConversion : public OpConversionPattern<SPIRVOp> {
 public:
-  SPIRVToLLVMConversion(MLIRContext *context,
-                        const LLVMTypeConverter &typeConverter,
+  SPIRVToLLVMConversion(MLIRContext *context, LLVMTypeConverter &typeConverter,
                         PatternBenefit benefit = 1)
-      : OpConversionPattern<SPIRVOp>(typeConverter, context, benefit) {}
+      : OpConversionPattern<SPIRVOp>(context, benefit),
+        typeConverter(typeConverter) {}
+
+protected:
+  LLVMTypeConverter &typeConverter;
 };
 
 /// Encodes global variable's descriptor set and binding into its name if they
@@ -36,25 +37,20 @@ public:
 void encodeBindAttribute(ModuleOp module);
 
 /// Populates type conversions with additional SPIR-V types.
-void populateSPIRVToLLVMTypeConversion(
-    LLVMTypeConverter &typeConverter,
-    spirv::ClientAPI clientAPIForAddressSpaceMapping =
-        spirv::ClientAPI::Unknown);
+void populateSPIRVToLLVMTypeConversion(LLVMTypeConverter &typeConverter);
 
 /// Populates the given list with patterns that convert from SPIR-V to LLVM.
-void populateSPIRVToLLVMConversionPatterns(
-    const LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    spirv::ClientAPI clientAPIForAddressSpaceMapping =
-        spirv::ClientAPI::Unknown);
+void populateSPIRVToLLVMConversionPatterns(LLVMTypeConverter &typeConverter,
+                                           RewritePatternSet &patterns);
 
 /// Populates the given list with patterns for function conversion from SPIR-V
 /// to LLVM.
 void populateSPIRVToLLVMFunctionConversionPatterns(
-    const LLVMTypeConverter &typeConverter, RewritePatternSet &patterns);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns);
 
 /// Populates the given patterns for module conversion from SPIR-V to LLVM.
 void populateSPIRVToLLVMModuleConversionPatterns(
-    const LLVMTypeConverter &typeConverter, RewritePatternSet &patterns);
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns);
 
 } // namespace mlir
 

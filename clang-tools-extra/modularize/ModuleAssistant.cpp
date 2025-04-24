@@ -46,8 +46,6 @@ class Module {
 public:
   Module(llvm::StringRef Name, bool Problem);
   ~Module();
-  Module(const Module &other) = delete;
-  Module &operator=(const Module &other) = delete;
   bool output(llvm::raw_fd_ostream &OS, int Indent);
   Module *findSubModule(llvm::StringRef SubName);
 
@@ -177,7 +175,7 @@ static bool addModuleDescription(Module *RootModule,
   llvm::SmallString<256> NativePath, NativePrefix;
   llvm::sys::path::native(HeaderFilePath, NativePath);
   llvm::sys::path::native(HeaderPrefix, NativePrefix);
-  if (NativePath.starts_with(NativePrefix))
+  if (NativePath.startswith(NativePrefix))
     FilePath = std::string(NativePath.substr(NativePrefix.size() + 1));
   else
     FilePath = std::string(HeaderFilePath);
@@ -307,7 +305,7 @@ bool createModuleMap(llvm::StringRef ModuleMapPath,
     loadModuleDescriptions(
       RootModuleName, HeaderFileNames, ProblemFileNames, Dependencies,
       HeaderPrefix));
-  if (!RootModule)
+  if (!RootModule.get())
     return false;
 
   // Write module map file.

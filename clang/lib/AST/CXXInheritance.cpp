@@ -22,11 +22,13 @@
 #include "clang/Basic/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Support/Casting.h"
 #include <algorithm>
-#include <cassert>
 #include <utility>
+#include <cassert>
 #include <vector>
 
 using namespace clang;
@@ -79,8 +81,7 @@ bool CXXRecordDecl::isDerivedFrom(const CXXRecordDecl *Base,
   const CXXRecordDecl *BaseDecl = Base->getCanonicalDecl();
   return lookupInBases(
       [BaseDecl](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
-        return Specifier->getType()->getAsRecordDecl() &&
-               FindBaseClass(Specifier, Path, BaseDecl);
+        return FindBaseClass(Specifier, Path, BaseDecl);
       },
       Paths);
 }
@@ -134,7 +135,7 @@ bool CXXRecordDecl::forallBases(ForallBasesCallback BaseMatches) const {
         return false;
 
       CXXRecordDecl *Base =
-          cast_if_present<CXXRecordDecl>(Ty->getDecl()->getDefinition());
+            cast_or_null<CXXRecordDecl>(Ty->getDecl()->getDefinition());
       if (!Base ||
           (Base->isDependentContext() &&
            !Base->isCurrentInstantiation(Record))) {
@@ -169,21 +170,13 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
     QualType BaseType =
         Context.getCanonicalType(BaseSpec.getType()).getUnqualifiedType();
 
-    bool isCurrentInstantiation = isa<InjectedClassNameType>(BaseType);
-    if (!isCurrentInstantiation) {
-      if (auto *BaseRecord = cast_if_present<CXXRecordDecl>(
-              BaseSpec.getType()->getAsRecordDecl()))
-        isCurrentInstantiation = BaseRecord->isDependentContext() &&
-                                 BaseRecord->isCurrentInstantiation(Record);
-    }
     // C++ [temp.dep]p3:
     //   In the definition of a class template or a member of a class template,
     //   if a base class of the class template depends on a template-parameter,
     //   the base class scope is not examined during unqualified name lookup
     //   either at the point of definition of the class template or member or
     //   during an instantiation of the class tem- plate or member.
-    if (!LookupInDependent &&
-        (BaseType->isDependentType() && !isCurrentInstantiation))
+    if (!LookupInDependent && BaseType->isDependentType())
       continue;
 
     // Determine whether we need to visit this base class at all,
@@ -251,8 +244,9 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
         return FoundPath;
       }
     } else if (VisitBase) {
-      CXXRecordDecl *BaseRecord = nullptr;
+      CXXRecordDecl *BaseRecord;
       if (LookupInDependent) {
+        BaseRecord = nullptr;
         const TemplateSpecializationType *TST =
             BaseSpec.getType()->getAs<TemplateSpecializationType>();
         if (!TST) {
@@ -265,13 +259,16 @@ bool CXXBasePaths::lookupInBases(ASTContext &Context,
             BaseRecord = TD->getTemplatedDecl();
         }
         if (BaseRecord) {
-          if (!BaseRecord->hasDefinition())
+          if (!BaseRecord->hasDefinition() ||
+              VisitedDependentRecords.count(BaseRecord)) {
             BaseRecord = nullptr;
-          else if (!VisitedDependentRecords.insert(BaseRecord).second)
-            BaseRecord = nullptr;
+          } else {
+            VisitedDependentRecords.insert(BaseRecord);
+          }
         }
       } else {
-        BaseRecord = cast<CXXRecordDecl>(BaseSpec.getType()->getAsRecordDecl());
+        BaseRecord = cast<CXXRecordDecl>(
+            BaseSpec.getType()->castAs<RecordType>()->getDecl());
       }
       if (BaseRecord &&
           lookupInBases(Context, BaseRecord, BaseMatches, LookupInDependent)) {
@@ -368,8 +365,8 @@ bool CXXRecordDecl::FindBaseClass(const CXXBaseSpecifier *Specifier,
                                   const CXXRecordDecl *BaseRecord) {
   assert(BaseRecord->getCanonicalDecl() == BaseRecord &&
          "User data for FindBaseClass is not canonical!");
-  return cast<CXXRecordDecl>(Specifier->getType()->getAsRecordDecl())
-             ->getCanonicalDecl() == BaseRecord;
+  return Specifier->getType()->castAs<RecordType>()->getDecl()
+            ->getCanonicalDecl() == BaseRecord;
 }
 
 bool CXXRecordDecl::FindVirtualBaseClass(const CXXBaseSpecifier *Specifier,
@@ -378,8 +375,8 @@ bool CXXRecordDecl::FindVirtualBaseClass(const CXXBaseSpecifier *Specifier,
   assert(BaseRecord->getCanonicalDecl() == BaseRecord &&
          "User data for FindBaseClass is not canonical!");
   return Specifier->isVirtual() &&
-         cast<CXXRecordDecl>(Specifier->getType()->getAsRecordDecl())
-                 ->getCanonicalDecl() == BaseRecord;
+         Specifier->getType()->castAs<RecordType>()->getDecl()
+            ->getCanonicalDecl() == BaseRecord;
 }
 
 static bool isOrdinaryMember(const NamedDecl *ND) {
@@ -468,7 +465,7 @@ void OverridingMethods::add(unsigned OverriddenSubobject,
                             UniqueVirtualMethod Overriding) {
   SmallVectorImpl<UniqueVirtualMethod> &SubobjectOverrides
     = Overrides[OverriddenSubobject];
-  if (!llvm::is_contained(SubobjectOverrides, Overriding))
+  if (llvm::find(SubobjectOverrides, Overriding) == SubobjectOverrides.end())
     SubobjectOverrides.push_back(Overriding);
 }
 
@@ -674,7 +671,9 @@ CXXRecordDecl::getFinalOverriders(CXXFinalOverriderMap &FinalOverriders) const {
 
       // FIXME: IsHidden reads from Overriding from the middle of a remove_if
       // over the same sequence! Is this guaranteed to work?
-      llvm::erase_if(Overriding, IsHidden);
+      Overriding.erase(
+          std::remove_if(Overriding.begin(), Overriding.end(), IsHidden),
+          Overriding.end());
     }
   }
 }
@@ -692,7 +691,7 @@ AddIndirectPrimaryBases(const CXXRecordDecl *RD, ASTContext &Context,
            "Cannot get indirect primary bases for class with dependent bases.");
 
     const CXXRecordDecl *BaseDecl =
-        cast<CXXRecordDecl>(I.getType()->getAsRecordDecl());
+      cast<CXXRecordDecl>(I.getType()->castAs<RecordType>()->getDecl());
 
     // Only bases with virtual bases participate in computing the
     // indirect primary virtual base classes.
@@ -714,7 +713,7 @@ CXXRecordDecl::getIndirectPrimaryBases(CXXIndirectPrimaryBaseSet& Bases) const {
            "Cannot get indirect primary bases for class with dependent bases.");
 
     const CXXRecordDecl *BaseDecl =
-        cast<CXXRecordDecl>(I.getType()->getAsRecordDecl());
+      cast<CXXRecordDecl>(I.getType()->castAs<RecordType>()->getDecl());
 
     // Only bases with virtual bases participate in computing the
     // indirect primary virtual base classes.

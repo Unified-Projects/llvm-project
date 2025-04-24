@@ -13,12 +13,28 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::google::build {
+namespace clang {
+namespace tidy {
+namespace google {
+namespace build {
 
 UnnamedNamespaceInHeaderCheck::UnnamedNamespaceInHeaderCheck(
     StringRef Name, ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
-      HeaderFileExtensions(Context->getHeaderFileExtensions()) {}
+      RawStringHeaderFileExtensions(Options.getLocalOrGlobal(
+          "HeaderFileExtensions", utils::defaultHeaderFileExtensions())) {
+  if (!utils::parseFileExtensions(RawStringHeaderFileExtensions,
+                                  HeaderFileExtensions,
+                                  utils::defaultFileExtensionDelimiters())) {
+    this->configurationDiag("Invalid header file extension: '%0'")
+        << RawStringHeaderFileExtensions;
+  }
+}
+
+void UnnamedNamespaceInHeaderCheck::storeOptions(
+    ClangTidyOptions::OptionMap &Opts) {
+  Options.store(Opts, "HeaderFileExtensions", RawStringHeaderFileExtensions);
+}
 
 void UnnamedNamespaceInHeaderCheck::registerMatchers(
     ast_matchers::MatchFinder *Finder) {
@@ -38,4 +54,7 @@ void UnnamedNamespaceInHeaderCheck::check(
     diag(Loc, "do not use unnamed namespaces in header files");
 }
 
-} // namespace clang::tidy::google::build
+} // namespace build
+} // namespace google
+} // namespace tidy
+} // namespace clang

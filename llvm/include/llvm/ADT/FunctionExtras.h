@@ -35,10 +35,8 @@
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/STLForwardCompat.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemAlloc.h"
 #include "llvm/Support/type_traits.h"
-#include <cstring>
 #include <memory>
 #include <type_traits>
 
@@ -60,27 +58,21 @@ namespace detail {
 
 template <typename T>
 using EnableIfTrivial =
-    std::enable_if_t<std::is_trivially_move_constructible<T>::value &&
+    std::enable_if_t<llvm::is_trivially_move_constructible<T>::value &&
                      std::is_trivially_destructible<T>::value>;
 template <typename CallableT, typename ThisT>
 using EnableUnlessSameType =
     std::enable_if_t<!std::is_same<remove_cvref_t<CallableT>, ThisT>::value>;
 template <typename CallableT, typename Ret, typename... Params>
-using EnableIfCallable = std::enable_if_t<std::disjunction<
-    std::is_void<Ret>,
-    std::is_same<decltype(std::declval<CallableT>()(std::declval<Params>()...)),
-                 Ret>,
-    std::is_same<const decltype(std::declval<CallableT>()(
-                     std::declval<Params>()...)),
-                 Ret>,
-    std::is_convertible<decltype(std::declval<CallableT>()(
-                            std::declval<Params>()...)),
-                        Ret>>::value>;
+using EnableIfCallable =
+    std::enable_if_t<std::is_void<Ret>::value ||
+                     std::is_convertible<decltype(std::declval<CallableT>()(
+                                             std::declval<Params>()...)),
+                                         Ret>::value>;
 
 template <typename ReturnT, typename... ParamTs> class UniqueFunctionBase {
 protected:
   static constexpr size_t InlineStorageSize = sizeof(void *) * 3;
-  static constexpr size_t InlineStorageAlign = alignof(void *);
 
   template <typename T, class = void>
   struct IsSizeLessThanThresholdT : std::false_type {};
@@ -101,11 +93,11 @@ protected:
   template <typename T> struct AdjustedParamTBase {
     static_assert(!std::is_reference<T>::value,
                   "references should be handled by template specialization");
-    using type =
-        std::conditional_t<std::is_trivially_copy_constructible<T>::value &&
-                               std::is_trivially_move_constructible<T>::value &&
-                               IsSizeLessThanThresholdT<T>::value,
-                           T, T &>;
+    using type = typename std::conditional<
+        llvm::is_trivially_copy_constructible<T>::value &&
+            llvm::is_trivially_move_constructible<T>::value &&
+            IsSizeLessThanThresholdT<T>::value,
+        T, T &>::type;
   };
 
   // This specialization ensures that 'AdjustedParam<V<T>&>' or
@@ -162,8 +154,9 @@ protected:
     // provide three pointers worth of storage here.
     // This is mutable as an inlined `const unique_function<void() const>` may
     // still modify its own mutable members.
-    alignas(InlineStorageAlign) mutable std::byte
-        InlineStorage[InlineStorageSize];
+    mutable
+        typename std::aligned_storage<InlineStorageSize, alignof(void *)>::type
+            InlineStorage;
   } StorageUnion;
 
   // A compressed pointer to either our dispatching callback or our table of
@@ -174,15 +167,16 @@ protected:
   bool isInlineStorage() const { return CallbackAndInlineFlag.getInt(); }
 
   bool isTrivialCallback() const {
-    return isa<TrivialCallback *>(CallbackAndInlineFlag.getPointer());
+    return CallbackAndInlineFlag.getPointer().template is<TrivialCallback *>();
   }
 
   CallPtrT getTrivialCallback() const {
-    return cast<TrivialCallback *>(CallbackAndInlineFlag.getPointer())->CallPtr;
+    return CallbackAndInlineFlag.getPointer().template get<TrivialCallback *>()->CallPtr;
   }
 
   NonTrivialCallbacks *getNonTrivialCallbacks() const {
-    return cast<NonTrivialCallbacks *>(CallbackAndInlineFlag.getPointer());
+    return CallbackAndInlineFlag.getPointer()
+        .template get<NonTrivialCallbacks *>();
   }
 
   CallPtrT getCallPtr() const {
@@ -264,7 +258,7 @@ protected:
     bool IsInlineStorage = true;
     void *CallableAddr = getInlineStorage();
     if (sizeof(CallableT) > InlineStorageSize ||
-        alignof(CallableT) > InlineStorageAlign) {
+        alignof(CallableT) > alignof(decltype(StorageUnion.InlineStorage))) {
       IsInlineStorage = false;
       // Allocate out-of-line storage. FIXME: Use an explicit alignment
       // parameter in C++17 mode.
@@ -314,16 +308,13 @@ protected:
       // Non-trivial move, so dispatch to a type-erased implementation.
       getNonTrivialCallbacks()->MovePtr(getInlineStorage(),
                                         RHS.getInlineStorage());
-      getNonTrivialCallbacks()->DestroyPtr(RHS.getInlineStorage());
     }
 
     // Clear the old callback and inline flag to get back to as-if-null.
     RHS.CallbackAndInlineFlag = {};
 
-#if !defined(NDEBUG) && !LLVM_ADDRESS_SANITIZER_BUILD
-    // In debug builds without ASan, we also scribble across the rest of the
-    // storage. Scribbling under AddressSanitizer (ASan) is disabled to prevent
-    // overwriting poisoned objects (e.g., annotated short strings).
+#ifndef NDEBUG
+    // In debug builds, we also scribble across the rest of the storage.
     memset(RHS.getInlineStorage(), 0xAD, InlineStorageSize);
 #endif
   }

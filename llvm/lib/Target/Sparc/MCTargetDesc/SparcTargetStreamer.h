@@ -22,9 +22,9 @@ class SparcTargetStreamer : public MCTargetStreamer {
 public:
   SparcTargetStreamer(MCStreamer &S);
   /// Emit ".register <reg>, #ignore".
-  virtual void emitSparcRegisterIgnore(unsigned reg){};
+  virtual void emitSparcRegisterIgnore(unsigned reg) = 0;
   /// Emit ".register <reg>, #scratch".
-  virtual void emitSparcRegisterScratch(unsigned reg){};
+  virtual void emitSparcRegisterScratch(unsigned reg) = 0;
 };
 
 // This part is for ascii assembly output
@@ -40,7 +40,7 @@ public:
 // This part is for ELF object output
 class SparcTargetELFStreamer : public SparcTargetStreamer {
 public:
-  SparcTargetELFStreamer(MCStreamer &S, const MCSubtargetInfo &STI);
+  SparcTargetELFStreamer(MCStreamer &S);
   MCELFStreamer &getStreamer();
   void emitSparcRegisterIgnore(unsigned reg) override {}
   void emitSparcRegisterScratch(unsigned reg) override {}

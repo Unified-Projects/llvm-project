@@ -25,7 +25,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/LLVMDriver.h"
+#include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
@@ -40,31 +40,32 @@ namespace {
 using namespace llvm::opt; // for HelpHidden in Opts.inc
 enum ID {
   OPT_INVALID = 0, // This is not an option ID.
-#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
+#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
+               HELPTEXT, METAVAR, VALUES)                                      \
+  OPT_##ID,
 #include "Opts.inc"
 #undef OPTION
 };
 
-#define OPTTABLE_STR_TABLE_CODE
+#define PREFIX(NAME, VALUE) const char *const NAME[] = VALUE;
 #include "Opts.inc"
-#undef OPTTABLE_STR_TABLE_CODE
+#undef PREFIX
 
-#define OPTTABLE_PREFIXES_TABLE_CODE
-#include "Opts.inc"
-#undef OPTTABLE_PREFIXES_TABLE_CODE
-
-static constexpr opt::OptTable::Info InfoTable[] = {
-#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
+const opt::OptTable::Info InfoTable[] = {
+#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
+               HELPTEXT, METAVAR, VALUES)                                      \
+  {                                                                            \
+      PREFIX,      NAME,      HELPTEXT,                                        \
+      METAVAR,     OPT_##ID,  opt::Option::KIND##Class,                        \
+      PARAM,       FLAGS,     OPT_##GROUP,                                     \
+      OPT_##ALIAS, ALIASARGS, VALUES},
 #include "Opts.inc"
 #undef OPTION
 };
 
-class SizeOptTable : public opt::GenericOptTable {
+class SizeOptTable : public opt::OptTable {
 public:
-  SizeOptTable()
-      : GenericOptTable(OptionStrTable, OptionPrefixesTable, InfoTable) {
-    setGroupedShortOptions(true);
-  }
+  SizeOptTable() : OptTable(InfoTable) { setGroupedShortOptions(true); }
 };
 
 enum OutputFormatTy { berkeley, sysv, darwin };
@@ -218,7 +219,7 @@ static void printDarwinSectionSizes(MachOObjectFile *MachO) {
     if (Load.C.cmd == MachO::LC_SEGMENT_64) {
       MachO::segment_command_64 Seg = MachO->getSegment64LoadCommand(Load);
       outs() << "Segment " << Seg.segname << ": "
-             << format(fmtbuf.c_str(), Seg.vmsize);
+             << format(fmt.str().c_str(), Seg.vmsize);
       if (DarwinLongFormat)
         outs() << " (vmaddr 0x" << format("%" PRIx64, Seg.vmaddr) << " fileoff "
                << Seg.fileoff << ")";
@@ -232,7 +233,7 @@ static void printDarwinSectionSizes(MachOObjectFile *MachO) {
                  << format("%.16s", &Sec.sectname) << "): ";
         else
           outs() << "\tSection " << format("%.16s", &Sec.sectname) << ": ";
-        outs() << format(fmtbuf.c_str(), Sec.size);
+        outs() << format(fmt.str().c_str(), Sec.size);
         if (DarwinLongFormat)
           outs() << " (addr 0x" << format("%" PRIx64, Sec.addr) << " offset "
                  << Sec.offset << ")";
@@ -240,12 +241,12 @@ static void printDarwinSectionSizes(MachOObjectFile *MachO) {
         sec_total += Sec.size;
       }
       if (Seg.nsects != 0)
-        outs() << "\ttotal " << format(fmtbuf.c_str(), sec_total) << "\n";
+        outs() << "\ttotal " << format(fmt.str().c_str(), sec_total) << "\n";
     } else if (Load.C.cmd == MachO::LC_SEGMENT) {
       MachO::segment_command Seg = MachO->getSegmentLoadCommand(Load);
       uint64_t Seg_vmsize = Seg.vmsize;
       outs() << "Segment " << Seg.segname << ": "
-             << format(fmtbuf.c_str(), Seg_vmsize);
+             << format(fmt.str().c_str(), Seg_vmsize);
       if (DarwinLongFormat)
         outs() << " (vmaddr 0x" << format("%" PRIx32, Seg.vmaddr) << " fileoff "
                << Seg.fileoff << ")";
@@ -260,7 +261,7 @@ static void printDarwinSectionSizes(MachOObjectFile *MachO) {
         else
           outs() << "\tSection " << format("%.16s", &Sec.sectname) << ": ";
         uint64_t Sec_size = Sec.size;
-        outs() << format(fmtbuf.c_str(), Sec_size);
+        outs() << format(fmt.str().c_str(), Sec_size);
         if (DarwinLongFormat)
           outs() << " (addr 0x" << format("%" PRIx32, Sec.addr) << " offset "
                  << Sec.offset << ")";
@@ -268,10 +269,10 @@ static void printDarwinSectionSizes(MachOObjectFile *MachO) {
         sec_total += Sec.size;
       }
       if (Seg.nsects != 0)
-        outs() << "\ttotal " << format(fmtbuf.c_str(), sec_total) << "\n";
+        outs() << "\ttotal " << format(fmt.str().c_str(), sec_total) << "\n";
     }
   }
-  outs() << "total " << format(fmtbuf.c_str(), total) << "\n";
+  outs() << "total " << format(fmt.str().c_str(), total) << "\n";
 }
 
 /// Print the summary sizes of the standard Mach-O segments in @p MachO.
@@ -403,7 +404,7 @@ static void printObjectSectionSizes(ObjectFile *Obj) {
         << "%" << max_addr_len << "s\n";
 
     // Print header
-    outs() << format(fmtbuf.c_str(), static_cast<const char *>("section"),
+    outs() << format(fmt.str().c_str(), static_cast<const char *>("section"),
                      static_cast<const char *>("size"),
                      static_cast<const char *>("addr"));
     fmtbuf.clear();
@@ -426,13 +427,13 @@ static void printObjectSectionSizes(ObjectFile *Obj) {
 
       uint64_t size = Section.getSize();
       uint64_t addr = Section.getAddress();
-      outs() << format(fmtbuf.c_str(), name_or_err->str().c_str(), size, addr);
+      outs() << format(fmt.str().c_str(), name_or_err->str().c_str(), size, addr);
     }
 
     if (ELFCommons) {
       if (Expected<uint64_t> CommonSizeOrErr = getCommonSize(Obj)) {
         total += *CommonSizeOrErr;
-        outs() << format(fmtbuf.c_str(), std::string("*COM*").c_str(),
+        outs() << format(fmt.str().c_str(), std::string("*COM*").c_str(),
                          *CommonSizeOrErr, static_cast<uint64_t>(0));
       } else {
         error(CommonSizeOrErr.takeError(), Obj->getFileName());
@@ -444,7 +445,8 @@ static void printObjectSectionSizes(ObjectFile *Obj) {
     fmtbuf.clear();
     fmt << "%-" << max_name_len << "s "
         << "%#" << max_size_len << radix_fmt << "\n";
-    outs() << format(fmtbuf.c_str(), static_cast<const char *>("Total"), total)
+    outs() << format(fmt.str().c_str(), static_cast<const char *>("Total"),
+                     total)
            << "\n\n";
   } else {
     // The Berkeley format does not display individual section sizes. It
@@ -501,11 +503,11 @@ static void printObjectSectionSizes(ObjectFile *Obj) {
     fmt << "%#7" << radix_fmt << "\t"
         << "%#7" << radix_fmt << "\t"
         << "%#7" << radix_fmt << "\t";
-    outs() << format(fmtbuf.c_str(), total_text, total_data, total_bss);
+    outs() << format(fmt.str().c_str(), total_text, total_data, total_bss);
     fmtbuf.clear();
     fmt << "%7" << (Radix == octal ? PRIo64 : PRIu64) << "\t"
         << "%7" PRIx64 "\t";
-    outs() << format(fmtbuf.c_str(), total, total);
+    outs() << format(fmt.str().c_str(), total, total);
   }
 }
 
@@ -568,8 +570,6 @@ static void printFileSectionSizes(StringRef file) {
         else if (MachO && OutputFormat == darwin)
           outs() << a->getFileName() << "(" << o->getFileName() << "):\n";
         printObjectSectionSizes(o);
-        if (!MachO && OutputFormat == darwin)
-          outs() << o->getFileName() << " (ex " << a->getFileName() << ")\n";
         if (OutputFormat == berkeley) {
           if (MachO)
             outs() << a->getFileName() << "(" << o->getFileName() << ")\n";
@@ -836,8 +836,6 @@ static void printFileSectionSizes(StringRef file) {
     else if (MachO && OutputFormat == darwin && MoreThanOneFile)
       outs() << o->getFileName() << ":\n";
     printObjectSectionSizes(o);
-    if (!MachO && OutputFormat == darwin)
-      outs() << o->getFileName() << "\n";
     if (OutputFormat == berkeley) {
       if (!MachO || MoreThanOneFile)
         outs() << o->getFileName();
@@ -855,25 +853,23 @@ static void printBerkeleyTotals() {
   fmt << "%#7" << radix_fmt << "\t"
       << "%#7" << radix_fmt << "\t"
       << "%#7" << radix_fmt << "\t";
-  outs() << format(fmtbuf.c_str(), TotalObjectText, TotalObjectData,
+  outs() << format(fmt.str().c_str(), TotalObjectText, TotalObjectData,
                    TotalObjectBss);
   fmtbuf.clear();
   fmt << "%7" << (Radix == octal ? PRIo64 : PRIu64) << "\t"
       << "%7" PRIx64 "\t";
-  outs() << format(fmtbuf.c_str(), TotalObjectTotal, TotalObjectTotal)
+  outs() << format(fmt.str().c_str(), TotalObjectTotal, TotalObjectTotal)
          << "(TOTALS)\n";
 }
 
-int llvm_size_main(int argc, char **argv, const llvm::ToolContext &) {
+int main(int argc, char **argv) {
+  InitLLVM X(argc, argv);
   BumpPtrAllocator A;
   StringSaver Saver(A);
   SizeOptTable Tbl;
   ToolName = argv[0];
-  opt::InputArgList Args =
-      Tbl.parseArgs(argc, argv, OPT_UNKNOWN, Saver, [&](StringRef Msg) {
-        error(Msg);
-        exit(1);
-      });
+  opt::InputArgList Args = Tbl.parseArgs(argc, argv, OPT_UNKNOWN, Saver,
+                                         [&](StringRef Msg) { error(Msg); });
   if (Args.hasArg(OPT_help)) {
     Tbl.printHelp(
         outs(),
@@ -938,5 +934,4 @@ int llvm_size_main(int argc, char **argv, const llvm::ToolContext &) {
 
   if (HadError)
     return 1;
-  return 0;
 }

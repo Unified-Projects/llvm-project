@@ -3,8 +3,6 @@ include(CompilerRTCompile)
 set(GWP_ASAN_UNITTEST_CFLAGS
   ${COMPILER_RT_UNITTEST_CFLAGS}
   ${COMPILER_RT_GTEST_CFLAGS}
-  ${SANITIZER_TEST_CXX_CFLAGS}
-  -std=c++17
   -I${COMPILER_RT_SOURCE_DIR}/lib/
   -O2
   -g
@@ -26,23 +24,16 @@ set(GWP_ASAN_UNITTESTS
   harness.cpp
   enable_disable.cpp
   late_init.cpp
-  options.cpp
-  recoverable.cpp
-  never_allocated.cpp
-  utilities.cpp
-)
+  options.cpp)
 
 set(GWP_ASAN_UNIT_TEST_HEADERS
   ${GWP_ASAN_HEADERS}
   harness.h)
 
 add_custom_target(GwpAsanUnitTests)
-set_target_properties(GwpAsanUnitTests PROPERTIES FOLDER "Compiler-RT/Tests")
+set_target_properties(GwpAsanUnitTests PROPERTIES FOLDER "Compiler-RT Tests")
 
-set(GWP_ASAN_UNITTEST_LINK_FLAGS
-  ${COMPILER_RT_UNITTEST_LINK_FLAGS} -ldl
-  ${COMPILER_RT_UNWINDER_LINK_LIBS}
-  ${SANITIZER_TEST_CXX_LIBRARIES})
+set(GWP_ASAN_UNITTEST_LINK_FLAGS ${COMPILER_RT_UNITTEST_LINK_FLAGS} -ldl)
 list(APPEND GWP_ASAN_UNITTEST_LINK_FLAGS --driver-mode=g++)
 if(NOT WIN32)
   list(APPEND GWP_ASAN_UNITTEST_LINK_FLAGS -pthread)
@@ -61,22 +52,21 @@ if(COMPILER_RT_DEFAULT_TARGET_ARCH IN_LIST GWP_ASAN_SUPPORTED_ARCH)
     $<TARGET_OBJECTS:RTGwpAsanOptionsParser.${arch}>
     $<TARGET_OBJECTS:RTSanitizerCommon.${arch}>
     $<TARGET_OBJECTS:RTSanitizerCommonLibc.${arch}>
-    $<TARGET_OBJECTS:RTSanitizerCommonSymbolizer.${arch}>
-    $<TARGET_OBJECTS:RTSanitizerCommonSymbolizerInternal.${arch}>)
+    $<TARGET_OBJECTS:RTSanitizerCommonSymbolizer.${arch}>)
 
   add_library(${GWP_ASAN_TEST_RUNTIME} STATIC
     ${GWP_ASAN_TEST_RUNTIME_OBJECTS})
 
   set_target_properties(${GWP_ASAN_TEST_RUNTIME} PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    FOLDER "Compiler-RT/Tests/Runtime")
+    FOLDER "Compiler-RT Runtime tests")
 
   set(GwpAsanTestObjects)
   generate_compiler_rt_tests(GwpAsanTestObjects
     GwpAsanUnitTests "GwpAsan-${arch}-Test" ${arch}
     SOURCES ${GWP_ASAN_UNITTESTS} ${COMPILER_RT_GTEST_SOURCE}
     RUNTIME ${GWP_ASAN_TEST_RUNTIME}
-    DEPS ${GWP_ASAN_UNIT_TEST_HEADERS}
+    DEPS gtest ${GWP_ASAN_UNIT_TEST_HEADERS}
     CFLAGS ${GWP_ASAN_UNITTEST_CFLAGS}
     LINK_FLAGS ${GWP_ASAN_UNITTEST_LINK_FLAGS})
   set_target_properties(GwpAsanUnitTests PROPERTIES

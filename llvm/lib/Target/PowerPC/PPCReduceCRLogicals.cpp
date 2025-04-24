@@ -390,10 +390,9 @@ private:
   static bool isCRLogical(MachineInstr &MI) {
     unsigned Opc = MI.getOpcode();
     return Opc == PPC::CRAND || Opc == PPC::CRNAND || Opc == PPC::CROR ||
-           Opc == PPC::CRXOR || Opc == PPC::CRNOR || Opc == PPC::CRNOT ||
-           Opc == PPC::CREQV || Opc == PPC::CRANDC || Opc == PPC::CRORC ||
-           Opc == PPC::CRSET || Opc == PPC::CRUNSET || Opc == PPC::CR6SET ||
-           Opc == PPC::CR6UNSET;
+      Opc == PPC::CRXOR || Opc == PPC::CRNOR || Opc == PPC::CREQV ||
+      Opc == PPC::CRANDC || Opc == PPC::CRORC || Opc == PPC::CRSET ||
+      Opc == PPC::CRUNSET || Opc == PPC::CR6SET || Opc == PPC::CR6UNSET;
   }
   bool simplifyCode() {
     bool Changed = false;
@@ -426,8 +425,8 @@ public:
   }
   CRLogicalOpInfo createCRLogicalOpInfo(MachineInstr &MI);
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
-    AU.addRequired<MachineDominatorTreeWrapperPass>();
+    AU.addRequired<MachineBranchProbabilityInfo>();
+    AU.addRequired<MachineDominatorTree>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 };
@@ -545,7 +544,7 @@ MachineInstr *PPCReduceCRLogicals::lookThroughCRCopy(unsigned Reg,
     return Copy;
   Register CopySrc = Copy->getOperand(1).getReg();
   Subreg = Copy->getOperand(1).getSubReg();
-  if (!CopySrc.isVirtual()) {
+  if (!Register::isVirtualRegister(CopySrc)) {
     const TargetRegisterInfo *TRI = &TII->getRegisterInfo();
     // Set the Subreg
     if (CopySrc == PPC::CR0EQ || CopySrc == PPC::CR6EQ)
@@ -570,7 +569,7 @@ void PPCReduceCRLogicals::initialize(MachineFunction &MFParam) {
   MF = &MFParam;
   MRI = &MF->getRegInfo();
   TII = MF->getSubtarget<PPCSubtarget>().getInstrInfo();
-  MBPI = &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
+  MBPI = &getAnalysis<MachineBranchProbabilityInfo>();
 
   AllCRLogicalOps.clear();
 }
@@ -730,7 +729,7 @@ void PPCReduceCRLogicals::collectCRLogicals() {
 
 INITIALIZE_PASS_BEGIN(PPCReduceCRLogicals, DEBUG_TYPE,
                       "PowerPC Reduce CR logical Operation", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
 INITIALIZE_PASS_END(PPCReduceCRLogicals, DEBUG_TYPE,
                     "PowerPC Reduce CR logical Operation", false, false)
 

@@ -70,8 +70,9 @@ define i32 @test6(i32 %x) {
 ; CHECK-LABEL: test6:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    movs r1, #5
-; CHECK-NEXT:    ands r1, r0
-; CHECK-NEXT:    lsls r0, r1, #29
+; CHECK-NEXT:    lsls r1, r1, #29
+; CHECK-NEXT:    lsls r0, r0, #29
+; CHECK-NEXT:    ands r0, r1
 ; CHECK-NEXT:    bx lr
 entry:
   %0 = shl i32 %x, 29
@@ -200,7 +201,7 @@ entry:
   ret i32 %shl
 }
 
-define ptr @test17(ptr %p, i32 %x) {
+define i32* @test17(i32* %p, i32 %x) {
 ; CHECK-LABEL: test17:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    lsls r1, r1, #28
@@ -209,11 +210,11 @@ define ptr @test17(ptr %p, i32 %x) {
 ; CHECK-NEXT:    bx lr
 entry:
   %0 = and i32 %x, 15
-  %shl = getelementptr i32, ptr %p, i32 %0
-  ret ptr %shl
+  %shl = getelementptr i32, i32* %p, i32 %0
+  ret i32* %shl
 }
 
-define ptr @test18(ptr %p, i32 %x) {
+define i32* @test18(i32* %p, i32 %x) {
 ; CHECK-LABEL: test18:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    adds r1, r1, #1
@@ -224,11 +225,11 @@ define ptr @test18(ptr %p, i32 %x) {
 entry:
   %xx = add i32 %x, 1
   %0 = and i32 %xx, 15
-  %shl = getelementptr i32, ptr %p, i32 %0
-  ret ptr %shl
+  %shl = getelementptr i32, i32* %p, i32 %0
+  ret i32* %shl
 }
 
-define ptr @test19(ptr %p, i32 %x) {
+define i32* @test19(i32* %p, i32 %x) {
 ; CHECK-LABEL: test19:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    subs r1, r1, #1
@@ -239,11 +240,11 @@ define ptr @test19(ptr %p, i32 %x) {
 entry:
   %xx = sub i32 %x, 1
   %0 = and i32 %xx, 15
-  %shl = getelementptr i32, ptr %p, i32 %0
-  ret ptr %shl
+  %shl = getelementptr i32, i32* %p, i32 %0
+  ret i32* %shl
 }
 
-define ptr @test20(ptr %p, i32 %x) {
+define i32* @test20(i32* %p, i32 %x) {
 ; CHECK-LABEL: test20:
 ; CHECK:       @ %bb.0: @ %entry
 ; CHECK-NEXT:    subs r1, r1, #1
@@ -254,6 +255,6 @@ define ptr @test20(ptr %p, i32 %x) {
 entry:
   %xx = add i32 %x, 15
   %0 = and i32 %xx, 15
-  %shl = getelementptr i32, ptr %p, i32 %0
-  ret ptr %shl
+  %shl = getelementptr i32, i32* %p, i32 %0
+  ret i32* %shl
 }

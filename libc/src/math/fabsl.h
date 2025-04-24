@@ -9,12 +9,10 @@
 #ifndef LLVM_LIBC_SRC_MATH_FABSL_H
 #define LLVM_LIBC_SRC_MATH_FABSL_H
 
-#include "src/__support/macros/config.h"
-
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 long double fabsl(long double x);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_MATH_FABSL_H

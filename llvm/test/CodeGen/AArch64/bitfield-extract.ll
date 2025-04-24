@@ -99,25 +99,17 @@ declare void @use(i16 signext, i64)
 
 ; CHECK-LABEL: test_complex_node:
 ; CHECK: ldr d0, [x0], #8
-; CHECK: lsr w[[VAL:[0-9]+]], w0, #5
+; CHECK: ubfx x[[VAL:[0-9]+]], x0, #5, #27
 ; CHECK: str w[[VAL]], [x2]
-define <2 x i32> @test_complex_node(ptr %addr, ptr %addr2, ptr %bf ) {
-  %vec = load <2 x i32>, ptr %addr
+define <2 x i32> @test_complex_node(<2 x i32>* %addr, <2 x i32>** %addr2, i32* %bf ) {
+  %vec = load <2 x i32>, <2 x i32>* %addr
 
-  %vec.next = getelementptr <2 x i32>, ptr %addr, i32 1
-  store ptr %vec.next, ptr %addr2
-  %lo = ptrtoint ptr %vec.next to i32
+  %vec.next = getelementptr <2 x i32>, <2 x i32>* %addr, i32 1
+  store <2 x i32>* %vec.next, <2 x i32>** %addr2
+  %lo = ptrtoint <2 x i32>* %vec.next to i32
 
   %val = lshr i32 %lo, 5
-  store i32 %val, ptr %bf
+  store i32 %val, i32* %bf
 
   ret <2 x i32> %vec
-}
-
-; CHECK-LABEL: @test12
-; CHECK: lsr w0, w0, #10
-define i32 @test12(i64 %a) {
-  %tmp = trunc i64 %a to i32
-  %res = lshr i32 %tmp, 10
-  ret i32 %res
 }

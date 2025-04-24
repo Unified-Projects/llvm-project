@@ -1,17 +1,18 @@
-if(LLVM_LIBC_FULL_BUILD)
-  enable_testing()
+set(LLVM_LINK_COMPONENTS Support)
 
-  set(HDRGEN_TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  set(TEST_OUTPUT_DIR ${CMAKE_BINARY_DIR}/hdrgen/output)
+add_tablegen(libc-hdrgen LIBC
+  Command.h
+  Command.cpp
+  Generator.cpp
+  Generator.h
+  IncludeFileCommand.cpp
+  IncludeFileCommand.h
+  Main.cpp
+  PublicAPICommand.cpp
+  PublicAPICommand.h
+)
 
-  add_test(
-    NAME hdrgen_integration_test
-    COMMAND python3 ${HDRGEN_TESTS_DIR}/test_integration.py --output_dir ${TEST_OUTPUT_DIR}
-  )
+target_include_directories(libc-hdrgen PRIVATE ${LIBC_SOURCE_DIR})
+target_link_libraries(libc-hdrgen PRIVATE LibcTableGenUtil)
 
-  add_custom_target(check-hdrgen
-    COMMAND ${CMAKE_CTEST_COMMAND} -R hdrgen_integration_test --output-on-failure
-  )
-
-  message(STATUS "Integration test for hdrgen added.")
-endif()
+add_subdirectory(PrototypeTestGen)

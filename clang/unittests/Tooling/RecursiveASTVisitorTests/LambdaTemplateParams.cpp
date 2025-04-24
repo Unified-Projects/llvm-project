@@ -1,8 +1,9 @@
 //===- unittest/Tooling/RecursiveASTVisitorTests/LambdaTemplateParams.cpp -===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
 
@@ -13,23 +14,24 @@ using namespace clang;
 namespace {
 
 // Matches (optional) explicit template parameters.
-class LambdaTemplateParametersVisitor : public ExpectedLocationVisitor {
+class LambdaTemplateParametersVisitor
+  : public ExpectedLocationVisitor<LambdaTemplateParametersVisitor> {
 public:
-  LambdaTemplateParametersVisitor() { ShouldVisitImplicitCode = false; }
+  bool shouldVisitImplicitCode() const { return false; }
 
-  bool VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D) override {
+  bool VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D) {
     EXPECT_FALSE(D->isImplicit());
     Match(D->getName(), D->getBeginLoc());
     return true;
   }
 
-  bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *D) override {
+  bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *D) {
     EXPECT_FALSE(D->isImplicit());
     Match(D->getName(), D->getBeginLoc());
     return true;
   }
 
-  bool VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *D) override {
+  bool VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *D) {
     EXPECT_FALSE(D->isImplicit());
     Match(D->getName(), D->getBeginLoc());
     return true;

@@ -21,13 +21,11 @@
 
 using namespace llvm;
 
-namespace llvm {
 cl::opt<unsigned> AsmMacroMaxNestingDepth(
     "asm-macro-max-nesting-depth", cl::init(20), cl::Hidden,
     cl::desc("The maximum nesting depth allowed for assembly macros."));
-}
 
-MCAsmParser::MCAsmParser() = default;
+MCAsmParser::MCAsmParser() {}
 
 MCAsmParser::~MCAsmParser() = default;
 
@@ -99,6 +97,7 @@ bool MCAsmParser::TokError(const Twine &Msg, SMRange Range) {
 }
 
 bool MCAsmParser::Error(SMLoc L, const Twine &Msg, SMRange Range) {
+
   MCPendingError PErr;
   PErr.Loc = L;
   Msg.toVector(PErr.Msg);

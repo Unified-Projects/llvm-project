@@ -16,7 +16,9 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::readability {
+namespace clang {
+namespace tidy {
+namespace readability {
 
 namespace {
 
@@ -113,7 +115,7 @@ static bool containsDeclInScope(const Stmt *Node) {
 }
 
 static void removeElseAndBrackets(DiagnosticBuilder &Diag, ASTContext &Context,
-                                  const Stmt *Else, SourceLocation ElseLoc) {
+                           const Stmt *Else, SourceLocation ElseLoc) {
   auto Remap = [&](SourceLocation Loc) {
     return Context.getSourceManager().getExpansionLoc(Loc);
   };
@@ -172,7 +174,7 @@ void ElseAfterReturnCheck::registerMatchers(MatchFinder *Finder) {
       breakStmt().bind(InterruptingStr), cxxThrowExpr().bind(InterruptingStr)));
   Finder->addMatcher(
       compoundStmt(
-          forEach(ifStmt(unless(isConstexpr()), unless(isConsteval()),
+          forEach(ifStmt(unless(isConstexpr()),
                          hasThen(stmt(
                              anyOf(InterruptsControlFlow,
                                    compoundStmt(has(InterruptsControlFlow))))),
@@ -231,7 +233,7 @@ static StringRef getControlFlowString(const Stmt &Stmt) {
     return "break";
   if (isa<CXXThrowExpr>(Stmt))
     return "throw";
-  llvm_unreachable("Unknown control flow interrupter");
+  llvm_unreachable("Unknown control flow interruptor");
 }
 
 void ElseAfterReturnCheck::check(const MatchFinder::MatchResult &Result) {
@@ -247,12 +249,12 @@ void ElseAfterReturnCheck::check(const MatchFinder::MatchResult &Result) {
     return;
 
   bool IsLastInScope = OuterScope->body_back() == If;
-  const StringRef ControlFlowInterrupter = getControlFlowString(*Interrupt);
+  StringRef ControlFlowInterruptor = getControlFlowString(*Interrupt);
 
   if (!IsLastInScope && containsDeclInScope(Else)) {
     if (WarnOnUnfixable) {
       // Warn, but don't attempt an autofix.
-      diag(ElseLoc, WarningMessage) << ControlFlowInterrupter;
+      diag(ElseLoc, WarningMessage) << ControlFlowInterruptor;
     }
     return;
   }
@@ -261,10 +263,10 @@ void ElseAfterReturnCheck::check(const MatchFinder::MatchResult &Result) {
     if (!WarnOnConditionVariables)
       return;
     if (IsLastInScope) {
-      // If the if statement is the last statement of its enclosing statements
+      // If the if statement is the last statement its enclosing statements
       // scope, we can pull the decl out of the if statement.
       DiagnosticBuilder Diag = diag(ElseLoc, WarningMessage)
-                               << ControlFlowInterrupter
+                               << ControlFlowInterruptor
                                << SourceRange(ElseLoc);
       if (checkInitDeclUsageInElse(If) != nullptr) {
         Diag << tooling::fixit::createReplacement(
@@ -288,7 +290,7 @@ void ElseAfterReturnCheck::check(const MatchFinder::MatchResult &Result) {
       removeElseAndBrackets(Diag, *Result.Context, Else, ElseLoc);
     } else if (WarnOnUnfixable) {
       // Warn, but don't attempt an autofix.
-      diag(ElseLoc, WarningMessage) << ControlFlowInterrupter;
+      diag(ElseLoc, WarningMessage) << ControlFlowInterruptor;
     }
     return;
   }
@@ -297,10 +299,10 @@ void ElseAfterReturnCheck::check(const MatchFinder::MatchResult &Result) {
     if (!WarnOnConditionVariables)
       return;
     if (IsLastInScope) {
-      // If the if statement is the last statement of its enclosing statements
+      // If the if statement is the last statement its enclosing statements
       // scope, we can pull the decl out of the if statement.
       DiagnosticBuilder Diag = diag(ElseLoc, WarningMessage)
-                               << ControlFlowInterrupter
+                               << ControlFlowInterruptor
                                << SourceRange(ElseLoc);
       Diag << tooling::fixit::createReplacement(
                   SourceRange(If->getIfLoc()),
@@ -312,14 +314,16 @@ void ElseAfterReturnCheck::check(const MatchFinder::MatchResult &Result) {
       removeElseAndBrackets(Diag, *Result.Context, Else, ElseLoc);
     } else if (WarnOnUnfixable) {
       // Warn, but don't attempt an autofix.
-      diag(ElseLoc, WarningMessage) << ControlFlowInterrupter;
+      diag(ElseLoc, WarningMessage) << ControlFlowInterruptor;
     }
     return;
   }
 
   DiagnosticBuilder Diag = diag(ElseLoc, WarningMessage)
-                           << ControlFlowInterrupter << SourceRange(ElseLoc);
+                           << ControlFlowInterruptor << SourceRange(ElseLoc);
   removeElseAndBrackets(Diag, *Result.Context, Else, ElseLoc);
 }
 
-} // namespace clang::tidy::readability
+} // namespace readability
+} // namespace tidy
+} // namespace clang

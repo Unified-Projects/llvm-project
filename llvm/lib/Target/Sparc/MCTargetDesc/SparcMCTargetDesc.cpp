@@ -18,25 +18,12 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
-
-namespace llvm {
-namespace SparcASITag {
-#define GET_ASITagsList_IMPL
-#include "SparcGenSearchableTables.inc"
-} // end namespace SparcASITag
-
-namespace SparcPrefetchTag {
-#define GET_PrefetchTagsList_IMPL
-#include "SparcGenSearchableTables.inc"
-} // end namespace SparcPrefetchTag
-} // end namespace llvm
+#include "llvm/Support/TargetRegistry.h"
 
 using namespace llvm;
 
 #define GET_INSTRINFO_MC_DESC
-#define ENABLE_INSTR_PREDICATE_VERIFIER
 #include "SparcGenInstrInfo.inc"
 
 #define GET_SUBTARGETINFO_MC_DESC
@@ -86,17 +73,14 @@ createSparcMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
 
 static MCTargetStreamer *
 createObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
-  return new SparcTargetELFStreamer(S, STI);
+  return new SparcTargetELFStreamer(S);
 }
 
 static MCTargetStreamer *createTargetAsmStreamer(MCStreamer &S,
                                                  formatted_raw_ostream &OS,
-                                                 MCInstPrinter *InstPrint) {
+                                                 MCInstPrinter *InstPrint,
+                                                 bool isVerboseAsm) {
   return new SparcTargetAsmStreamer(S, OS);
-}
-
-static MCTargetStreamer *createNullTargetStreamer(MCStreamer &S) {
-  return new SparcTargetStreamer(S);
 }
 
 static MCInstPrinter *createSparcMCInstPrinter(const Triple &T,
@@ -136,9 +120,6 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeSparcTargetMC() {
 
     // Register the asm streamer.
     TargetRegistry::RegisterAsmTargetStreamer(*T, createTargetAsmStreamer);
-
-    // Register the null streamer.
-    TargetRegistry::RegisterNullTargetStreamer(*T, createNullTargetStreamer);
 
     // Register the MCInstPrinter
     TargetRegistry::RegisterMCInstPrinter(*T, createSparcMCInstPrinter);

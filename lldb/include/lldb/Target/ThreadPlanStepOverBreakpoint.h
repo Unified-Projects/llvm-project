@@ -23,11 +23,10 @@ public:
   void GetDescription(Stream *s, lldb::DescriptionLevel level) override;
   bool ValidatePlan(Stream *error) override;
   bool ShouldStop(Event *event_ptr) override;
-  bool SupportsResumeOthers() override;
   bool StopOthers() override;
   lldb::StateType GetPlanRunState() override;
   bool WillStop() override;
-  void DidPop() override;
+  void WillPop() override;
   bool MischiefManaged() override;
   void ThreadDestroyed() override;
   void SetAutoContinue(bool do_it);

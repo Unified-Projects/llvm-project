@@ -1,3 +1,4 @@
+// -*- C++ -*-
 //===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -7,6 +8,9 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14
+
+// Throwing bad_variant_access is supported starting in macosx10.13
+// XFAIL: use_system_cxx_lib && target={{.+}}-apple-macosx10.{{9|10|11|12}} && !no-exceptions
 
 // <variant>
 
@@ -35,7 +39,11 @@ void test_const_lvalue_get() {
   {
     using V = std::variant<int, const long>;
     constexpr V v(42);
+#ifdef TEST_WORKAROUND_CONSTEXPR_IMPLIES_NOEXCEPT
+    ASSERT_NOEXCEPT(std::get<0>(v));
+#else
     ASSERT_NOT_NOEXCEPT(std::get<0>(v));
+#endif
     ASSERT_SAME_TYPE(decltype(std::get<0>(v)), const int &);
     static_assert(std::get<0>(v) == 42, "");
   }
@@ -49,7 +57,11 @@ void test_const_lvalue_get() {
   {
     using V = std::variant<int, const long>;
     constexpr V v(42l);
+#ifdef TEST_WORKAROUND_CONSTEXPR_IMPLIES_NOEXCEPT
+    ASSERT_NOEXCEPT(std::get<1>(v));
+#else
     ASSERT_NOT_NOEXCEPT(std::get<1>(v));
+#endif
     ASSERT_SAME_TYPE(decltype(std::get<1>(v)), const long &);
     static_assert(std::get<1>(v) == 42, "");
   }
@@ -60,6 +72,30 @@ void test_const_lvalue_get() {
     ASSERT_SAME_TYPE(decltype(std::get<1>(v)), const long &);
     assert(std::get<1>(v) == 42);
   }
+// FIXME: Remove these once reference support is reinstated
+#if !defined(TEST_VARIANT_HAS_NO_REFERENCES)
+  {
+    using V = std::variant<int &>;
+    int x = 42;
+    const V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), int &);
+    assert(&std::get<0>(v) == &x);
+  }
+  {
+    using V = std::variant<int &&>;
+    int x = 42;
+    const V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), int &);
+    assert(&std::get<0>(v) == &x);
+  }
+  {
+    using V = std::variant<const int &&>;
+    int x = 42;
+    const V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), const int &);
+    assert(&std::get<0>(v) == &x);
+  }
+#endif
 }
 
 void test_lvalue_get() {
@@ -76,6 +112,37 @@ void test_lvalue_get() {
     ASSERT_SAME_TYPE(decltype(std::get<1>(v)), const long &);
     assert(std::get<1>(v) == 42);
   }
+// FIXME: Remove these once reference support is reinstated
+#if !defined(TEST_VARIANT_HAS_NO_REFERENCES)
+  {
+    using V = std::variant<int &>;
+    int x = 42;
+    V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), int &);
+    assert(&std::get<0>(v) == &x);
+  }
+  {
+    using V = std::variant<const int &>;
+    int x = 42;
+    V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), const int &);
+    assert(&std::get<0>(v) == &x);
+  }
+  {
+    using V = std::variant<int &&>;
+    int x = 42;
+    V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), int &);
+    assert(&std::get<0>(v) == &x);
+  }
+  {
+    using V = std::variant<const int &&>;
+    int x = 42;
+    V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(v)), const int &);
+    assert(&std::get<0>(v) == &x);
+  }
+#endif
 }
 
 void test_rvalue_get() {
@@ -92,6 +159,39 @@ void test_rvalue_get() {
     ASSERT_SAME_TYPE(decltype(std::get<1>(std::move(v))), const long &&);
     assert(std::get<1>(std::move(v)) == 42);
   }
+// FIXME: Remove these once reference support is reinstated
+#if !defined(TEST_VARIANT_HAS_NO_REFERENCES)
+  {
+    using V = std::variant<int &>;
+    int x = 42;
+    V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), int &);
+    assert(&std::get<0>(std::move(v)) == &x);
+  }
+  {
+    using V = std::variant<const int &>;
+    int x = 42;
+    V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), const int &);
+    assert(&std::get<0>(std::move(v)) == &x);
+  }
+  {
+    using V = std::variant<int &&>;
+    int x = 42;
+    V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), int &&);
+    int &&xref = std::get<0>(std::move(v));
+    assert(&xref == &x);
+  }
+  {
+    using V = std::variant<const int &&>;
+    int x = 42;
+    V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), const int &&);
+    const int &&xref = std::get<0>(std::move(v));
+    assert(&xref == &x);
+  }
+#endif
 }
 
 void test_const_rvalue_get() {
@@ -108,9 +208,42 @@ void test_const_rvalue_get() {
     ASSERT_SAME_TYPE(decltype(std::get<1>(std::move(v))), const long &&);
     assert(std::get<1>(std::move(v)) == 42);
   }
+// FIXME: Remove these once reference support is reinstated
+#if !defined(TEST_VARIANT_HAS_NO_REFERENCES)
+  {
+    using V = std::variant<int &>;
+    int x = 42;
+    const V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), int &);
+    assert(&std::get<0>(std::move(v)) == &x);
+  }
+  {
+    using V = std::variant<const int &>;
+    int x = 42;
+    const V v(x);
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), const int &);
+    assert(&std::get<0>(std::move(v)) == &x);
+  }
+  {
+    using V = std::variant<int &&>;
+    int x = 42;
+    const V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), int &&);
+    int &&xref = std::get<0>(std::move(v));
+    assert(&xref == &x);
+  }
+  {
+    using V = std::variant<const int &&>;
+    int x = 42;
+    const V v(std::move(x));
+    ASSERT_SAME_TYPE(decltype(std::get<0>(std::move(v))), const int &&);
+    const int &&xref = std::get<0>(std::move(v));
+    assert(&xref == &x);
+  }
+#endif
 }
 
-template <std::size_t I> using Idx = std::integral_constant<std::size_t, I>;
+template <std::size_t I> using Idx = std::integral_constant<size_t, I>;
 
 void test_throws_for_all_value_categories() {
 #ifndef TEST_HAS_NO_EXCEPTIONS
@@ -121,8 +254,8 @@ void test_throws_for_all_value_categories() {
   V v1(42l);
   const V &cv1 = v1;
   assert(v1.index() == 1);
-  std::integral_constant<std::size_t, 0> zero;
-  std::integral_constant<std::size_t, 1> one;
+  std::integral_constant<size_t, 0> zero;
+  std::integral_constant<size_t, 1> one;
   auto test = [](auto idx, auto &&v) {
     using Idx = decltype(idx);
     try {

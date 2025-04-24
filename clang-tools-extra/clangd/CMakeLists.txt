@@ -18,8 +18,6 @@ if (NOT DEFINED CLANGD_BUILD_XPC)
   unset(CLANGD_BUILD_XPC_DEFAULT)
 endif ()
 
-# This involves generating and compiling large source files, which can run into toolchain limitations.
-option(CLANGD_DECISION_FOREST "Enable decision forest model for ranking code completion items" ON)
 option(CLANGD_MALLOC_TRIM "Call malloc_trim(3) periodically in Clangd. (only takes effect when using glibc)" ON)
 # -DCLANG_TIDY_CHECKS=Off avoids a dependency on clang-tidy, reducing rebuilds.
 option(CLANGD_TIDY_CHECKS "Link all clang-tidy checks into clangd" ON)
@@ -31,7 +29,6 @@ llvm_canonicalize_cmake_booleans(
   CLANGD_MALLOC_TRIM
   CLANGD_TIDY_CHECKS
   LLVM_ENABLE_ZLIB
-  CLANGD_DECISION_FOREST
 )
 
 configure_file(
@@ -44,24 +41,18 @@ set(LLVM_LINK_COMPONENTS
   AllTargetsInfos
   FrontendOpenMP
   Option
-  TargetParser
   )
 
-set(COMPLETIONMODEL_SOURCES)
-if(CLANGD_DECISION_FOREST)
-  include(${CMAKE_CURRENT_SOURCE_DIR}/quality/CompletionModel.cmake)
-  gen_decision_forest(${CMAKE_CURRENT_SOURCE_DIR}/quality/model CompletionModel clang::clangd::Example)
-  list(APPEND COMPLETIONMODEL_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/CompletionModel.cpp)
-endif()
+include(${CMAKE_CURRENT_SOURCE_DIR}/quality/CompletionModel.cmake)
+gen_decision_forest(${CMAKE_CURRENT_SOURCE_DIR}/quality/model CompletionModel clang::clangd::Example)
 
 if(MSVC AND NOT CLANG_CL)
  set_source_files_properties(CompileCommands.cpp PROPERTIES COMPILE_FLAGS -wd4130) # disables C4130: logical operation on address of string constant
 endif()
 
 include_directories(BEFORE "${CMAKE_CURRENT_BINARY_DIR}/../clang-tidy")
-include_directories(BEFORE "${CMAKE_CURRENT_SOURCE_DIR}/../include-cleaner/include")
 
-add_clang_library(clangDaemon STATIC
+add_clang_library(clangDaemon
   AST.cpp
   ASTSignals.cpp
   ClangdLSPServer.cpp
@@ -75,13 +66,12 @@ add_clang_library(clangDaemon STATIC
   ConfigCompile.cpp
   ConfigProvider.cpp
   ConfigYAML.cpp
-  DecisionForest.cpp
   Diagnostics.cpp
   DraftStore.cpp
   DumpAST.cpp
   ExpectedTypes.cpp
   FeatureModule.cpp
-  Feature.cpp
+  Features.cpp
   FindSymbols.cpp
   FindTarget.cpp
   FileDistance.cpp
@@ -91,29 +81,27 @@ add_clang_library(clangDaemon STATIC
   GlobalCompilationDatabase.cpp
   Headers.cpp
   HeaderSourceSwitch.cpp
+  HeuristicResolver.cpp
   Hover.cpp
-  IncludeCleaner.cpp
   IncludeFixer.cpp
   InlayHints.cpp
   JSONTransport.cpp
-  ModulesBuilder.cpp
   PathMapping.cpp
   Protocol.cpp
   Quality.cpp
   ParsedAST.cpp
   Preamble.cpp
   RIFF.cpp
-  ScanningProjectModules.cpp
   Selection.cpp
   SemanticHighlighting.cpp
   SemanticSelection.cpp
   SourceCode.cpp
-  SystemIncludeExtractor.cpp
+  QueryDriverDatabase.cpp
   TidyProvider.cpp
   TUScheduler.cpp
   URI.cpp
   XRefs.cpp
-  ${COMPLETIONMODEL_SOURCES}
+  ${CMAKE_CURRENT_BINARY_DIR}/CompletionModel.cpp
 
   index/Background.cpp
   index/BackgroundIndexLoader.cpp
@@ -130,7 +118,6 @@ add_clang_library(clangDaemon STATIC
   index/Ref.cpp
   index/Relation.cpp
   index/Serialization.cpp
-  index/StdLib.cpp
   index/Symbol.cpp
   index/SymbolCollector.cpp
   index/SymbolID.cpp
@@ -143,13 +130,11 @@ add_clang_library(clangDaemon STATIC
   index/dex/PostingList.cpp
   index/dex/Trigram.cpp
 
-  refactor/InsertionPoint.cpp
   refactor/Rename.cpp
   refactor/Tweak.cpp
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 # Include generated CompletionModel headers.
@@ -162,7 +147,6 @@ clang_target_link_libraries(clangDaemon
   clangAST
   clangASTMatchers
   clangBasic
-  clangDependencyScanning
   clangDriver
   clangFormat
   clangFrontend
@@ -173,7 +157,6 @@ clang_target_link_libraries(clangDaemon
   clangTooling
   clangToolingCore
   clangToolingInclusions
-  clangToolingInclusionsStdlib
   clangToolingSyntax
   )
 
@@ -181,9 +164,7 @@ target_link_libraries(clangDaemon
   PRIVATE
   ${LLVM_PTHREAD_LIB}
 
-  clangIncludeCleaner
   clangTidy
-  clangTidyUtils
 
   clangdSupport
   )
@@ -207,7 +188,7 @@ if ( CLANGD_BUILD_XPC )
 endif ()
 
 if (CLANGD_ENABLE_REMOTE)
-  include(AddGRPC)
+  include(FindGRPC)
 endif()
 
 if(CLANG_INCLUDE_TESTS)

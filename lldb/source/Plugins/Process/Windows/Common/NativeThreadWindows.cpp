@@ -13,7 +13,6 @@
 #include "lldb/Host/windows/HostThreadWindows.h"
 #include "lldb/Host/windows/windows.h"
 #include "lldb/Target/Process.h"
-#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/State.h"
 
@@ -49,29 +48,12 @@ Status NativeThreadWindows::DoResume(lldb::StateType resume_state) {
     return Status();
 
   if (resume_state == eStateStepping) {
-    Log *log = GetLog(LLDBLog::Thread);
-
     uint32_t flags_index =
         GetRegisterContext().ConvertRegisterKindToRegisterNumber(
             eRegisterKindGeneric, LLDB_REGNUM_GENERIC_FLAGS);
     uint64_t flags_value =
         GetRegisterContext().ReadRegisterAsUnsigned(flags_index, 0);
-    NativeProcessProtocol &process = GetProcess();
-    const ArchSpec &arch = process.GetArchitecture();
-    switch (arch.GetMachine()) {
-    case llvm::Triple::x86:
-    case llvm::Triple::x86_64:
-      flags_value |= 0x100; // Set the trap flag on the CPU
-      break;
-    case llvm::Triple::aarch64:
-    case llvm::Triple::arm:
-    case llvm::Triple::thumb:
-      flags_value |= 0x200000; // The SS bit in PState
-      break;
-    default:
-      LLDB_LOG(log, "single stepping unsupported on this architecture");
-      break;
-    }
+    flags_value |= 0x100; // Set the trap flag on the CPU
     GetRegisterContext().WriteRegisterFromUnsigned(flags_index, flags_value);
   }
 
@@ -119,7 +101,7 @@ void NativeThreadWindows::SetStopReason(ThreadStopInfo stop_info,
 
 bool NativeThreadWindows::GetStopReason(ThreadStopInfo &stop_info,
                                         std::string &description) {
-  Log *log = GetLog(LLDBLog::Thread);
+  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
 
   switch (m_state) {
   case eStateStopped:
@@ -151,7 +133,7 @@ bool NativeThreadWindows::GetStopReason(ThreadStopInfo &stop_info,
 Status NativeThreadWindows::SetWatchpoint(lldb::addr_t addr, size_t size,
                                           uint32_t watch_flags, bool hardware) {
   if (!hardware)
-    return Status::FromErrorString("not implemented");
+    return Status("not implemented");
   if (m_state == eStateLaunching)
     return Status();
   Status error = RemoveWatchpoint(addr);
@@ -160,7 +142,7 @@ Status NativeThreadWindows::SetWatchpoint(lldb::addr_t addr, size_t size,
   uint32_t wp_index =
       m_reg_context_up->SetHardwareWatchpoint(addr, size, watch_flags);
   if (wp_index == LLDB_INVALID_INDEX32)
-    return Status::FromErrorString("Setting hardware watchpoint failed.");
+    return Status("Setting hardware watchpoint failed.");
   m_watchpoint_index_map.insert({addr, wp_index});
   return Status();
 }
@@ -173,14 +155,14 @@ Status NativeThreadWindows::RemoveWatchpoint(lldb::addr_t addr) {
   m_watchpoint_index_map.erase(wp);
   if (m_reg_context_up->ClearHardwareWatchpoint(wp_index))
     return Status();
-  return Status::FromErrorString("Clearing hardware watchpoint failed.");
+  return Status("Clearing hardware watchpoint failed.");
 }
 
 Status NativeThreadWindows::SetHardwareBreakpoint(lldb::addr_t addr,
                                                   size_t size) {
-  return Status::FromErrorString("unimplemented.");
+  return Status("unimplemented.");
 }
 
 Status NativeThreadWindows::RemoveHardwareBreakpoint(lldb::addr_t addr) {
-  return Status::FromErrorString("unimplemented.");
+  return Status("unimplemented.");
 }

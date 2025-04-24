@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14
+// UNSUPPORTED: clang-8
+// UNSUPPORTED: gcc-9
 
 // <numeric>
 
@@ -18,12 +20,13 @@
 //                                           BinaryOperation binary_op,
 //                                           UnaryOperation unary_op);
 
+
+#include <numeric>
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cstddef>
 #include <functional>
-#include <numeric>
+#include <iterator>
 
 #include "test_macros.h"
 #include "test_iterators.h"
@@ -76,38 +79,38 @@ test()
     }
 }
 
-constexpr std::size_t triangle(size_t n) { return n*(n+1)/2; }
+constexpr size_t triangle(size_t n) { return n*(n+1)/2; }
 
 //  Basic sanity
 TEST_CONSTEXPR_CXX20 void
 basic_tests()
 {
     {
-    std::array<std::size_t, 10> v;
+    std::array<size_t, 10> v;
     std::fill(v.begin(), v.end(), 3);
     std::transform_inclusive_scan(v.begin(), v.end(), v.begin(), std::plus<>(), add_one{});
-    for (std::size_t i = 0; i < v.size(); ++i)
+    for (size_t i = 0; i < v.size(); ++i)
         assert(v[i] == (i+1) * 4);
     }
 
     {
-    std::array<std::size_t, 10> v;
+    std::array<size_t, 10> v;
     std::iota(v.begin(), v.end(), 0);
     std::transform_inclusive_scan(v.begin(), v.end(), v.begin(), std::plus<>(), add_one{});
-    for (std::size_t i = 0; i < v.size(); ++i)
+    for (size_t i = 0; i < v.size(); ++i)
         assert(v[i] == triangle(i) + i + 1);
     }
 
     {
-    std::array<std::size_t, 10> v;
+    std::array<size_t, 10> v;
     std::iota(v.begin(), v.end(), 1);
     std::transform_inclusive_scan(v.begin(), v.end(), v.begin(), std::plus<>(), add_one{});
-    for (std::size_t i = 0; i < v.size(); ++i)
+    for (size_t i = 0; i < v.size(); ++i)
         assert(v[i] == triangle(i + 1) + i + 1);
     }
 
     {
-    std::array<std::size_t, 0> v, res;
+    std::array<size_t, 0> v, res;
     std::transform_inclusive_scan(v.begin(), v.end(), res.begin(), std::plus<>(), add_one{});
     assert(res.empty());
     }

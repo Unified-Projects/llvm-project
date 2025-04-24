@@ -18,15 +18,14 @@
 
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
-#include <llvm/MC/MCRegister.h>
 
 namespace llvm {
 namespace exegesis {
 
 // A simple object storing the value for a particular register.
 struct RegisterValue {
-  static RegisterValue zero(MCRegister Reg) { return {Reg, APInt()}; }
-  MCRegister Register;
+  static RegisterValue zero(unsigned Reg) { return {Reg, APInt()}; }
+  unsigned Register;
   APInt Value;
 };
 

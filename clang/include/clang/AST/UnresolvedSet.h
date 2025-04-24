@@ -47,7 +47,6 @@ public:
   // temporaries with defaulted ctors are not zero initialized.
   UnresolvedSetIterator() : iterator_adaptor_base(nullptr) {}
 
-  uint64_t getDeclID() const { return I->getDeclID(); }
   NamedDecl *getDecl() const { return I->getDecl(); }
   void setDecl(NamedDecl *ND) const { return I->setDecl(ND); }
   AccessSpecifier getAccess() const { return I->getAccess(); }
@@ -71,8 +70,9 @@ private:
   UnresolvedSetImpl(const UnresolvedSetImpl &) = default;
   UnresolvedSetImpl &operator=(const UnresolvedSetImpl &) = default;
 
-  UnresolvedSetImpl(UnresolvedSetImpl &&) = default;
-  UnresolvedSetImpl &operator=(UnresolvedSetImpl &&) = default;
+  // FIXME: Switch these to "= default" once MSVC supports generating move ops
+  UnresolvedSetImpl(UnresolvedSetImpl &&) {}
+  UnresolvedSetImpl &operator=(UnresolvedSetImpl &&) { return *this; }
 
 public:
   // We don't currently support assignment through this iterator, so we might
@@ -114,22 +114,14 @@ public:
     I.I->set(New, AS);
   }
 
-  void erase(unsigned I) {
-    auto val = decls().pop_back_val();
-    if (I < size())
-      decls()[I] = val;
-  }
+  void erase(unsigned I) { decls()[I] = decls().pop_back_val(); }
 
-  void erase(iterator I) {
-    auto val = decls().pop_back_val();
-    if (I != end())
-      *I.I = val;
-  }
+  void erase(iterator I) { *I.I = decls().pop_back_val(); }
 
   void setAccess(iterator I, AccessSpecifier AS) { I.I->setAccess(AS); }
 
   void clear() { decls().clear(); }
-  void truncate(unsigned N) { decls().truncate(N); }
+  void set_size(unsigned N) { decls().set_size(N); }
 
   bool empty() const { return decls().empty(); }
   unsigned size() const { return decls().size(); }

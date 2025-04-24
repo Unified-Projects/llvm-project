@@ -15,13 +15,11 @@
 //   inplace_merge(Iter first, Iter middle, Iter last);
 
 #include <algorithm>
-#include <cassert>
 #include <random>
-#include <vector>
+#include <cassert>
 
-#include "count_new.h"
-#include "test_iterators.h"
 #include "test_macros.h"
+#include "test_iterators.h"
 
 #if TEST_STD_VER >= 11
 struct S {
@@ -109,16 +107,7 @@ int main(int, char**)
     test<bidirectional_iterator<S*> >();
     test<random_access_iterator<S*> >();
     test<S*>();
-#endif
-
-#if TEST_STD_VER >= 11 && !defined(TEST_HAS_NO_EXCEPTIONS)
-    {
-        std::vector<int> vec(150, 3);
-        getGlobalMemCounter()->throw_after = 0;
-        std::inplace_merge(vec.begin(), vec.begin() + 100, vec.end());
-        assert(std::all_of(vec.begin(), vec.end(), [](int i) { return i == 3; }));
-    }
-#endif // TEST_STD_VER >= 11 && !defined(TEST_HAS_NO_EXCEPTIONS)
+#endif // TEST_STD_VER >= 11
 
   return 0;
 }

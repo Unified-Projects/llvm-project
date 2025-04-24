@@ -27,7 +27,7 @@ class Scop;
 typedef std::pair<isl::pw_aff, isl::set> PWACtx;
 
 /// Translate a SCEV to an isl::pw_aff and the domain on which it is invalid.
-class SCEVAffinator final : public llvm::SCEVVisitor<SCEVAffinator, PWACtx> {
+struct SCEVAffinator : public llvm::SCEVVisitor<SCEVAffinator, PWACtx> {
 public:
   SCEVAffinator(Scop *S, llvm::LoopInfo &LI);
 
@@ -50,7 +50,7 @@ public:
   /// Check an <nsw> AddRec for the loop @p L is cached.
   bool hasNSWAddRecForLoop(llvm::Loop *L) const;
 
-  /// Return the LoopInfo used by the object.
+  /// Return the LoopInfo used by thi object.
   llvm::LoopInfo *getLI() const { return &LI; }
 
 private:
@@ -99,7 +99,6 @@ private:
 
   PWACtx visit(const llvm::SCEV *E);
   PWACtx visitConstant(const llvm::SCEVConstant *E);
-  PWACtx visitVScale(const llvm::SCEVVScale *E);
   PWACtx visitPtrToIntExpr(const llvm::SCEVPtrToIntExpr *E);
   PWACtx visitTruncateExpr(const llvm::SCEVTruncateExpr *E);
   PWACtx visitZeroExtendExpr(const llvm::SCEVZeroExtendExpr *E);
@@ -112,7 +111,6 @@ private:
   PWACtx visitSMinExpr(const llvm::SCEVSMinExpr *E);
   PWACtx visitUMaxExpr(const llvm::SCEVUMaxExpr *E);
   PWACtx visitUMinExpr(const llvm::SCEVUMinExpr *E);
-  PWACtx visitSequentialUMinExpr(const llvm::SCEVSequentialUMinExpr *E);
   PWACtx visitUnknown(const llvm::SCEVUnknown *E);
   PWACtx visitSDivInstruction(llvm::Instruction *SDiv);
   PWACtx visitSRemInstruction(llvm::Instruction *SRem);

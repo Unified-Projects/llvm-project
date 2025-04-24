@@ -16,18 +16,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCParser/MCAsmParserExtension.h"
 #include "llvm/MC/MCSectionWasm.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolWasm.h"
-#include "llvm/Support/Casting.h"
-#include <optional>
+#include "llvm/Support/MachineValueType.h"
 
 using namespace llvm;
 
@@ -55,7 +53,6 @@ public:
     this->MCAsmParserExtension::Initialize(*Parser);
 
     addDirectiveHandler<&WasmAsmParser::parseSectionDirectiveText>(".text");
-    addDirectiveHandler<&WasmAsmParser::parseSectionDirectiveData>(".data");
     addDirectiveHandler<&WasmAsmParser::parseSectionDirective>(".section");
     addDirectiveHandler<&WasmAsmParser::parseDirectiveSize>(".size");
     addDirectiveHandler<&WasmAsmParser::parseDirectiveType>(".type");
@@ -93,12 +90,6 @@ public:
     return false;
   }
 
-  bool parseSectionDirectiveData(StringRef, SMLoc) {
-    auto *S = getContext().getObjectFileInfo()->getDataSection();
-    getStreamer().switchSection(S);
-    return false;
-  }
-
   uint32_t parseSectionFlags(StringRef FlagStr, bool &Passive, bool &Group) {
     uint32_t flags = 0;
     for (char C : FlagStr) {
@@ -114,9 +105,6 @@ public:
         break;
       case 'S':
         flags |= wasm::WASM_SEG_FLAG_STRINGS;
-        break;
-      case 'R':
-        flags |= wasm::WASM_SEG_FLAG_RETAIN;
         break;
       default:
         return -1U;
@@ -157,7 +145,7 @@ public:
     if (Lexer->isNot(AsmToken::String))
       return error("expected string in directive, instead got: ", Lexer->getTok());
 
-    auto Kind = StringSwitch<std::optional<SectionKind>>(Name)
+    auto Kind = StringSwitch<Optional<SectionKind>>(Name)
                     .StartsWith(".data", SectionKind::getData())
                     .StartsWith(".tdata", SectionKind::getThreadData())
                     .StartsWith(".tbss", SectionKind::getThreadBSS())
@@ -193,7 +181,7 @@ public:
 
     // TODO: Parse UniqueID
     MCSectionWasm *WS = getContext().getWasmSection(
-        Name, *Kind, Flags, GroupName, MCContext::GenericSectionID);
+        Name, Kind.getValue(), Flags, GroupName, MCContext::GenericSectionID);
 
     if (WS->getSegmentFlags() != Flags)
       Parser->Error(loc, "changed section flags for " + Name +
@@ -206,13 +194,13 @@ public:
       WS->setPassive();
     }
 
-    getStreamer().switchSection(WS);
+    getStreamer().SwitchSection(WS);
     return false;
   }
 
   // TODO: This function is almost the same as ELFAsmParser::ParseDirectiveSize
   // so maybe could be shared somehow.
-  bool parseDirectiveSize(StringRef, SMLoc Loc) {
+  bool parseDirectiveSize(StringRef, SMLoc) {
     StringRef Name;
     if (Parser->parseIdentifier(Name))
       return TokError("expected identifier in directive");
@@ -224,14 +212,9 @@ public:
       return true;
     if (expect(AsmToken::EndOfStatement, "eol"))
       return true;
-    auto WasmSym = cast<MCSymbolWasm>(Sym);
-    if (WasmSym->isFunction()) {
-      // Ignore .size directives for function symbols.  They get their size
-      // set automatically based on their content.
-      Warning(Loc, ".size directive ignored for function symbols");
-    } else {
-      getStreamer().emitELFSize(Sym, Expr);
-    }
+    // This is done automatically by the assembler for functions currently,
+    // so this is only currently needed for data sections:
+    getStreamer().emitELFSize(Sym, Expr);
     return false;
   }
 
@@ -252,7 +235,7 @@ public:
     if (TypeName == "function") {
       WasmSym->setType(wasm::WASM_SYMBOL_TYPE_FUNCTION);
       auto *Current =
-          cast<MCSectionWasm>(getStreamer().getCurrentSectionOnly());
+          cast<MCSectionWasm>(getStreamer().getCurrentSection().first);
       if (Current->getGroup())
         WasmSym->setComdat(true);
     } else if (TypeName == "global")

@@ -1,5 +1,4 @@
 //===----------------------------------------------------------------------===//
-//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -7,7 +6,7 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03
-// UNSUPPORTED: no-localization
+// UNSUPPORTED: libcpp-has-no-localization
 
 // "support/make_string.h"
 
@@ -24,20 +23,19 @@ int main(int, char**) {
     ==   " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
 
-#ifndef TEST_HAS_NO_WIDE_CHARACTERS
   assert(MAKE_STRING(wchar_t,
          " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
     ==  L" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
-#endif
-#if _LIBCPP_HAS_CHAR8_T
+#ifndef _LIBCPP_HAS_NO_CHAR8_T
   assert(MAKE_STRING(char8_t,
          " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
     == u8" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
 #endif
+#ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
   assert(MAKE_STRING(char16_t,
          " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
@@ -49,6 +47,7 @@ int main(int, char**) {
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
     ==  U" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMN"
              "OPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
+#endif
 
   // clang-format on
   return 0;

@@ -3,7 +3,7 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-add_clang_library(clangTidyDarwinModule STATIC
+add_clang_library(clangTidyDarwinModule
   AvoidSpinlockCheck.cpp
   DarwinTidyModule.cpp
   DispatchOnceNonstaticCheck.cpp
@@ -14,7 +14,6 @@ add_clang_library(clangTidyDarwinModule STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyDarwinModule

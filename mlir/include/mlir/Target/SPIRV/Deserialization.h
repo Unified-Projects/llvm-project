@@ -15,7 +15,6 @@
 
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Support/LLVM.h"
-#include <cstdint>
 
 namespace mlir {
 class MLIRContext;
@@ -30,7 +29,7 @@ class ModuleOp;
 OwningOpRef<spirv::ModuleOp> deserialize(ArrayRef<uint32_t> binary,
                                          MLIRContext *context);
 
-} // namespace spirv
-} // namespace mlir
+} // end namespace spirv
+} // end namespace mlir
 
 #endif // MLIR_TARGET_SPIRV_DESERIALIZATION_H

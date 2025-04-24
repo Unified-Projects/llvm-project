@@ -1,7 +1,5 @@
 add_mlir_conversion_library(MLIRTosaToLinalg
   TosaToLinalg.cpp
-  TosaToLinalgNamed.cpp
-  TosaToLinalgNamedPass.cpp
   TosaToLinalgPass.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -12,17 +10,14 @@ add_mlir_conversion_library(MLIRTosaToLinalg
   MLIRConversionPassIncGen
 
   LINK_LIBS PUBLIC
-  MLIRArithDialect
   MLIRDialectUtils
   MLIRIR
-  MLIRIndexDialect
-  MLIRLinalgDialect
+  MLIRLinalg
   MLIRLinalgUtils
-  MLIRMathDialect
+  MLIRMath
   MLIRPass
-  MLIRSupport
-  MLIRTensorDialect
-  MLIRTosaDialect
+  MLIRTensor
+  MLIRTosa
   MLIRTosaTransforms
-  MLIRTransforms
+  MLIRSupport
   )

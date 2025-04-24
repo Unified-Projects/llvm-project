@@ -21,6 +21,8 @@
 #include "llvm/Pass.h"
 
 namespace llvm {
+class AnalysisUsage;
+class BranchProbabilityInfo;
 class Function;
 class LoopInfo;
 
@@ -32,7 +34,8 @@ template <typename FunctionT, typename BranchProbabilityInfoPassT,
           typename LoopInfoT, typename BlockFrequencyInfoT>
 class LazyBlockFrequencyInfo {
 public:
-  LazyBlockFrequencyInfo() = default;
+  LazyBlockFrequencyInfo()
+      : Calculated(false), F(nullptr), BPIPass(nullptr), LI(nullptr) {}
 
   /// Set up the per-function input.
   void setAnalysis(const FunctionT *F, BranchProbabilityInfoPassT *BPIPass,
@@ -65,10 +68,10 @@ public:
 
 private:
   BlockFrequencyInfoT BFI;
-  bool Calculated = false;
-  const FunctionT *F = nullptr;
-  BranchProbabilityInfoPassT *BPIPass = nullptr;
-  const LoopInfoT *LI = nullptr;
+  bool Calculated;
+  const FunctionT *F;
+  BranchProbabilityInfoPassT *BPIPass;
+  const LoopInfoT *LI;
 };
 
 /// This is an alternative analysis pass to
@@ -124,5 +127,5 @@ public:
 
 /// Helper for client passes to initialize dependent passes for LBFI.
 void initializeLazyBFIPassPass(PassRegistry &Registry);
-} // namespace llvm
+}
 #endif

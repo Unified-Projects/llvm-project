@@ -12,17 +12,13 @@
 #ifndef LLVM_TRANSFORMS_INSTRUMENTATION_CGPROFILE_H
 #define LLVM_TRANSFORMS_INSTRUMENTATION_CGPROFILE_H
 
+#include "llvm/ADT/MapVector.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
-class Module;
 class CGProfilePass : public PassInfoMixin<CGProfilePass> {
 public:
-  CGProfilePass(bool InLTO) : InLTO(InLTO) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-
-private:
-  bool InLTO = false;
 };
 } // end namespace llvm
 

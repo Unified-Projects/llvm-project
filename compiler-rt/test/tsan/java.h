@@ -1,6 +1,3 @@
-#ifndef __TSAN_JAVA_H__
-#define __TSAN_JAVA_H__
-
 #include "test.h"
 
 extern "C" {
@@ -25,10 +22,6 @@ int  __tsan_java_release_store(jptr addr);
 
 void __tsan_read1_pc(jptr addr, jptr pc);
 void __tsan_write1_pc(jptr addr, jptr pc);
-void __tsan_func_entry(jptr pc);
-void __tsan_func_exit();
 }
 
 const jptr kExternalPCBit = 1ULL << 60;
-
-#endif // __TSAN_JAVA_H__

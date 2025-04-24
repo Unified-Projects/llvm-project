@@ -38,8 +38,6 @@ static std::vector<const Instruction *>
 computeAliasingInstructions(const LLVMState &State, const Instruction *Instr,
                             size_t MaxAliasingInstructions,
                             const BitVector &ForbiddenRegisters) {
-  const auto &ET = State.getExegesisTarget();
-  const auto AvailableFeatures = State.getSubtargetInfo().getFeatureBits();
   // Randomly iterate the set of instructions.
   std::vector<unsigned> Opcodes;
   Opcodes.resize(State.getInstrInfo().getNumOpcodes());
@@ -48,14 +46,19 @@ computeAliasingInstructions(const LLVMState &State, const Instruction *Instr,
 
   std::vector<const Instruction *> AliasingInstructions;
   for (const unsigned OtherOpcode : Opcodes) {
-    if (!ET.isOpcodeAvailable(OtherOpcode, AvailableFeatures))
-      continue;
     if (OtherOpcode == Instr->Description.getOpcode())
       continue;
     const Instruction &OtherInstr = State.getIC().getInstr(OtherOpcode);
+    const MCInstrDesc &OtherInstrDesc = OtherInstr.Description;
+    // Ignore instructions that we cannot run.
+    if (OtherInstrDesc.isPseudo() || OtherInstrDesc.usesCustomInsertionHook() ||
+        OtherInstrDesc.isBranch() || OtherInstrDesc.isIndirectBranch() ||
+        OtherInstrDesc.isCall() || OtherInstrDesc.isReturn()) {
+          continue;
+    }
     if (OtherInstr.hasMemoryOperands())
       continue;
-    if (!ET.allowAsBackToBack(OtherInstr))
+    if (!State.getExegesisTarget().allowAsBackToBack(OtherInstr))
       continue;
     if (Instr->hasAliasingRegistersThrough(OtherInstr, ForbiddenRegisters))
       AliasingInstructions.push_back(&OtherInstr);
@@ -74,10 +77,12 @@ static ExecutionMode getExecutionModes(const Instruction &Instr,
     EM |= ExecutionMode::ALWAYS_SERIAL_TIED_REGS_ALIAS;
   if (Instr.hasMemoryOperands())
     EM |= ExecutionMode::SERIAL_VIA_MEMORY_INSTR;
-  if (Instr.hasAliasingNotMemoryRegisters(ForbiddenRegisters))
-    EM |= ExecutionMode::SERIAL_VIA_EXPLICIT_REGS;
-  if (Instr.hasOneUseOrOneDef())
-    EM |= ExecutionMode::SERIAL_VIA_NON_MEMORY_INSTR;
+  else {
+    if (Instr.hasAliasingRegisters(ForbiddenRegisters))
+      EM |= ExecutionMode::SERIAL_VIA_EXPLICIT_REGS;
+    if (Instr.hasOneUseOrOneDef())
+      EM |= ExecutionMode::SERIAL_VIA_NON_MEMORY_INSTR;
+  }
   return EM;
 }
 
@@ -91,7 +96,7 @@ static void appendCodeTemplates(const LLVMState &State,
   switch (ExecutionModeBit) {
   case ExecutionMode::ALWAYS_SERIAL_IMPLICIT_REGS_ALIAS:
     // Nothing to do, the instruction is always serial.
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case ExecutionMode::ALWAYS_SERIAL_TIED_REGS_ALIAS: {
     // Picking whatever value for the tied variable will make the instruction
     // serial.
@@ -110,8 +115,8 @@ static void appendCodeTemplates(const LLVMState &State,
   case ExecutionMode::SERIAL_VIA_EXPLICIT_REGS: {
     // Making the execution of this instruction serial by selecting one def
     // register to alias with one use register.
-    const AliasingConfigurations SelfAliasing(
-        Variant.getInstr(), Variant.getInstr(), ForbiddenRegisters);
+    const AliasingConfigurations SelfAliasing(Variant.getInstr(),
+                                              Variant.getInstr());
     assert(!SelfAliasing.empty() && !SelfAliasing.hasImplicitAliasing() &&
            "Instr must alias itself explicitly");
     // This is a self aliasing instruction so defs and uses are from the same
@@ -129,9 +134,8 @@ static void appendCodeTemplates(const LLVMState &State,
     // Select back-to-back non-memory instruction.
     for (const auto *OtherInstr : computeAliasingInstructions(
              State, &Instr, kMaxAliasingInstructions, ForbiddenRegisters)) {
-      const AliasingConfigurations Forward(Instr, *OtherInstr,
-                                           ForbiddenRegisters);
-      const AliasingConfigurations Back(*OtherInstr, Instr, ForbiddenRegisters);
+      const AliasingConfigurations Forward(Instr, *OtherInstr);
+      const AliasingConfigurations Back(*OtherInstr, Instr);
       InstructionTemplate ThisIT(Variant);
       InstructionTemplate OtherIT(OtherInstr);
       if (!Forward.hasImplicitAliasing())

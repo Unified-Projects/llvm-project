@@ -97,7 +97,7 @@ bool UnwindAssembly_x86::AugmentUnwindPlanFromCallSite(
       first_row->GetCFAValue().GetOffset() != wordsize) {
     return false;
   }
-  UnwindPlan::Row::AbstractRegisterLocation first_row_pc_loc;
+  UnwindPlan::Row::RegisterLocation first_row_pc_loc;
   if (!first_row->GetRegisterInfo(
           pc_regnum.GetAsKind(unwind_plan.GetRegisterKind()),
           first_row_pc_loc) ||
@@ -126,7 +126,7 @@ bool UnwindAssembly_x86::AugmentUnwindPlanFromCallSite(
       // Get the register locations for eip/rip from the first & last rows. Are
       // they both CFA plus an offset?  Is it the same offset?
 
-      UnwindPlan::Row::AbstractRegisterLocation last_row_pc_loc;
+      UnwindPlan::Row::RegisterLocation last_row_pc_loc;
       if (last_row->GetRegisterInfo(
               pc_regnum.GetAsKind(unwind_plan.GetRegisterKind()),
               last_row_pc_loc)) {
@@ -239,6 +239,14 @@ UnwindAssembly *UnwindAssembly_x86::CreateInstance(const ArchSpec &arch) {
   return nullptr;
 }
 
+// PluginInterface protocol in UnwindAssemblyParser_x86
+
+ConstString UnwindAssembly_x86::GetPluginName() {
+  return GetPluginNameStatic();
+}
+
+uint32_t UnwindAssembly_x86::GetPluginVersion() { return 1; }
+
 void UnwindAssembly_x86::Initialize() {
   PluginManager::RegisterPlugin(GetPluginNameStatic(),
                                 GetPluginDescriptionStatic(), CreateInstance);
@@ -248,6 +256,11 @@ void UnwindAssembly_x86::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
 }
 
-llvm::StringRef UnwindAssembly_x86::GetPluginDescriptionStatic() {
+lldb_private::ConstString UnwindAssembly_x86::GetPluginNameStatic() {
+  static ConstString g_name("x86");
+  return g_name;
+}
+
+const char *UnwindAssembly_x86::GetPluginDescriptionStatic() {
   return "i386 and x86_64 assembly language profiler plugin.";
 }

@@ -29,9 +29,6 @@ struct MemorySizeDistribution {
   ArrayRef<double> Probabilities; // Size indexed array of probabilities.
 };
 
-/// Returns a list of memmove size distributions.
-ArrayRef<MemorySizeDistribution> getMemmoveSizeDistributions();
-
 /// Returns a list of memcpy size distributions.
 ArrayRef<MemorySizeDistribution> getMemcpySizeDistributions();
 
@@ -40,12 +37,6 @@ ArrayRef<MemorySizeDistribution> getMemsetSizeDistributions();
 
 /// Returns a list of memcmp size distributions.
 ArrayRef<MemorySizeDistribution> getMemcmpSizeDistributions();
-
-/// Returns the first MemorySizeDistribution from Distributions with the
-/// specified Name.
-MemorySizeDistribution
-getDistributionOrDie(ArrayRef<MemorySizeDistribution> Distributions,
-                     StringRef Name);
 
 } // namespace libc_benchmarks
 } // namespace llvm

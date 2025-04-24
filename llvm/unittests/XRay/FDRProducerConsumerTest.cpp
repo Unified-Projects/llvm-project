@@ -20,6 +20,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <string>
+#include <tuple>
 
 namespace llvm {
 namespace xray {
@@ -127,6 +128,7 @@ TYPED_TEST_P(RoundTripTest, RoundTripsSingleValue) {
   ASSERT_FALSE(errorToBool(BE.apply(*this->Writer)));
   auto &R = this->Rec;
   ASSERT_FALSE(errorToBool(R->apply(*this->Writer)));
+  this->OS.flush();
 
   DataExtractor DE(this->Data, sys::IsLittleEndianHost, 8);
   uint64_t OffsetPtr = 0;
@@ -150,6 +152,7 @@ TYPED_TEST_P(RoundTripTest, RoundTripsSingleValue) {
   FDRTraceWriter Writer2(OS2, this->H);
   for (auto &P : Records)
     ASSERT_FALSE(errorToBool(P->apply(Writer2)));
+  OS2.flush();
 
   EXPECT_EQ(Data2.substr(sizeof(XRayFileHeader)),
             this->Data.substr(sizeof(XRayFileHeader)));
@@ -166,6 +169,7 @@ TYPED_TEST_P(RoundTripTestV5, RoundTripsSingleValue) {
   ASSERT_FALSE(errorToBool(BE.apply(*this->Writer)));
   auto &R = this->Rec;
   ASSERT_FALSE(errorToBool(R->apply(*this->Writer)));
+  this->OS.flush();
 
   DataExtractor DE(this->Data, sys::IsLittleEndianHost, 8);
   uint64_t OffsetPtr = 0;
@@ -189,6 +193,7 @@ TYPED_TEST_P(RoundTripTestV5, RoundTripsSingleValue) {
   FDRTraceWriter Writer2(OS2, this->H);
   for (auto &P : Records)
     ASSERT_FALSE(errorToBool(P->apply(Writer2)));
+  OS2.flush();
 
   EXPECT_EQ(Data2.substr(sizeof(XRayFileHeader)),
             this->Data.substr(sizeof(XRayFileHeader)));

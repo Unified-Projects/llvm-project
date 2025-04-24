@@ -1,3 +1,7 @@
-// RUN: %clang -### -nogpulib -nogpuinc -c %s 2>&1 | FileCheck %s
+// REQUIRES: clang-driver
+// REQUIRES: x86-registered-target
+// REQUIRES: amdgpu-registered-target
 
-// CHECK: {{.*}}clang{{.*}}"-target-cpu" "gfx906"
+// RUN: %clang -### -c %s 2>&1 | FileCheck %s
+
+// CHECK: {{.*}}clang{{.*}}"-target-cpu" "gfx803"

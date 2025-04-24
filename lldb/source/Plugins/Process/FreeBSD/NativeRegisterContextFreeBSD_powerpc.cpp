@@ -24,7 +24,6 @@
 #include <sys/ptrace.h>
 #include <sys/types.h>
 // clang-format on
-#include <optional>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -67,7 +66,7 @@ static const RegisterSet g_reg_sets_powerpc[k_num_register_sets] = {
 
 NativeRegisterContextFreeBSD *
 NativeRegisterContextFreeBSD::CreateHostNativeRegisterContextFreeBSD(
-    const ArchSpec &target_arch, NativeThreadFreeBSD &native_thread) {
+    const ArchSpec &target_arch, NativeThreadProtocol &native_thread) {
   return new NativeRegisterContextFreeBSD_powerpc(target_arch, native_thread);
 }
 
@@ -83,7 +82,7 @@ CreateRegisterInfoInterface(const ArchSpec &target_arch) {
 }
 
 NativeRegisterContextFreeBSD_powerpc::NativeRegisterContextFreeBSD_powerpc(
-    const ArchSpec &target_arch, NativeThreadFreeBSD &native_thread)
+    const ArchSpec &target_arch, NativeThreadProtocol &native_thread)
     : NativeRegisterContextRegisterInfo(
           native_thread, CreateRegisterInfoInterface(target_arch)) {}
 
@@ -107,7 +106,7 @@ NativeRegisterContextFreeBSD_powerpc::GetRegisterSet(uint32_t set_index) const {
   }
 }
 
-std::optional<NativeRegisterContextFreeBSD_powerpc::RegSetKind>
+llvm::Optional<NativeRegisterContextFreeBSD_powerpc::RegSetKind>
 NativeRegisterContextFreeBSD_powerpc::GetSetForNativeRegNum(
     uint32_t reg_num) const {
   switch (GetRegisterInfoInterface().GetTargetArchitecture().GetMachine()) {
@@ -161,27 +160,27 @@ NativeRegisterContextFreeBSD_powerpc::ReadRegister(const RegisterInfo *reg_info,
   Status error;
 
   if (!reg_info) {
-    error = Status::FromErrorString("reg_info NULL");
+    error.SetErrorString("reg_info NULL");
     return error;
   }
 
   const uint32_t reg = reg_info->kinds[lldb::eRegisterKindLLDB];
 
   if (reg == LLDB_INVALID_REGNUM)
-    return Status::FromErrorStringWithFormat(
-        "no lldb regnum for %s",
-        reg_info && reg_info->name ? reg_info->name : "<unknown register>");
+    return Status("no lldb regnum for %s", reg_info && reg_info->name
+                                               ? reg_info->name
+                                               : "<unknown register>");
 
-  std::optional<RegSetKind> opt_set = GetSetForNativeRegNum(reg);
+  llvm::Optional<RegSetKind> opt_set = GetSetForNativeRegNum(reg);
   if (!opt_set) {
     // This is likely an internal register for lldb use only and should not be
     // directly queried.
-    error = Status::FromErrorStringWithFormat(
-        "register \"%s\" is in unrecognized set", reg_info->name);
+    error.SetErrorStringWithFormat("register \"%s\" is in unrecognized set",
+                                   reg_info->name);
     return error;
   }
 
-  RegSetKind set = *opt_set;
+  RegSetKind set = opt_set.getValue();
   error = ReadRegisterSet(set);
   if (error.Fail())
     return error;
@@ -197,25 +196,25 @@ Status NativeRegisterContextFreeBSD_powerpc::WriteRegister(
   Status error;
 
   if (!reg_info)
-    return Status::FromErrorString("reg_info NULL");
+    return Status("reg_info NULL");
 
   const uint32_t reg = reg_info->kinds[lldb::eRegisterKindLLDB];
 
   if (reg == LLDB_INVALID_REGNUM)
-    return Status::FromErrorStringWithFormat(
-        "no lldb regnum for %s",
-        reg_info && reg_info->name ? reg_info->name : "<unknown register>");
+    return Status("no lldb regnum for %s", reg_info && reg_info->name
+                                               ? reg_info->name
+                                               : "<unknown register>");
 
-  std::optional<RegSetKind> opt_set = GetSetForNativeRegNum(reg);
+  llvm::Optional<RegSetKind> opt_set = GetSetForNativeRegNum(reg);
   if (!opt_set) {
     // This is likely an internal register for lldb use only and should not be
     // directly queried.
-    error = Status::FromErrorStringWithFormat(
-        "register \"%s\" is in unrecognized set", reg_info->name);
+    error.SetErrorStringWithFormat("register \"%s\" is in unrecognized set",
+                                   reg_info->name);
     return error;
   }
 
-  RegSetKind set = *opt_set;
+  RegSetKind set = opt_set.getValue();
   error = ReadRegisterSet(set);
   if (error.Fail())
     return error;
@@ -228,7 +227,7 @@ Status NativeRegisterContextFreeBSD_powerpc::WriteRegister(
 }
 
 Status NativeRegisterContextFreeBSD_powerpc::ReadAllRegisterValues(
-    lldb::WritableDataBufferSP &data_sp) {
+    lldb::DataBufferSP &data_sp) {
   Status error;
 
   error = ReadRegisterSet(GPRegSet);
@@ -251,27 +250,26 @@ Status NativeRegisterContextFreeBSD_powerpc::WriteAllRegisterValues(
   Status error;
 
   if (!data_sp) {
-    error = Status::FromErrorStringWithFormat(
+    error.SetErrorStringWithFormat(
         "NativeRegisterContextFreeBSD_powerpc::%s invalid data_sp provided",
         __FUNCTION__);
     return error;
   }
 
   if (data_sp->GetByteSize() != m_reg_data.size()) {
-    error = Status::FromErrorStringWithFormat(
+    error.SetErrorStringWithFormat(
         "NativeRegisterContextFreeBSD_powerpc::%s data_sp contained mismatched "
         "data size, expected %zu, actual %" PRIu64,
         __FUNCTION__, m_reg_data.size(), data_sp->GetByteSize());
     return error;
   }
 
-  const uint8_t *src = data_sp->GetBytes();
+  uint8_t *src = data_sp->GetBytes();
   if (src == nullptr) {
-    error = Status::FromErrorStringWithFormat(
-        "NativeRegisterContextFreeBSD_powerpc::%s "
-        "DataBuffer::GetBytes() returned a null "
-        "pointer",
-        __FUNCTION__);
+    error.SetErrorStringWithFormat("NativeRegisterContextFreeBSD_powerpc::%s "
+                                   "DataBuffer::GetBytes() returned a null "
+                                   "pointer",
+                                   __FUNCTION__);
     return error;
   }
   ::memcpy(m_reg_data.data(), src, m_reg_data.size());

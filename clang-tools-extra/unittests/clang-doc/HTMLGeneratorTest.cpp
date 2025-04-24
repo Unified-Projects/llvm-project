@@ -30,7 +30,7 @@ ClangDocContext
 getClangDocContext(std::vector<std::string> UserStylesheets = {},
                    StringRef RepositoryUrl = "") {
   ClangDocContext CDCtx{
-      {}, "test-project", {}, {}, {}, RepositoryUrl, UserStylesheets};
+      {}, "test-project", {}, {}, {}, RepositoryUrl, UserStylesheets, {}};
   CDCtx.UserStylesheets.insert(
       CDCtx.UserStylesheets.begin(),
       "../share/clang/clang-doc-default-stylesheet.css");
@@ -43,16 +43,15 @@ TEST(HTMLGeneratorTest, emitNamespaceHTML) {
   I.Name = "Namespace";
   I.Namespace.emplace_back(EmptySID, "A", InfoType::IT_namespace);
 
-  I.Children.Namespaces.emplace_back(EmptySID, "ChildNamespace",
-                                     InfoType::IT_namespace,
-                                     "Namespace::ChildNamespace", "Namespace");
-  I.Children.Records.emplace_back(EmptySID, "ChildStruct", InfoType::IT_record,
-                                  "Namespace::ChildStruct", "Namespace");
-  I.Children.Functions.emplace_back();
-  I.Children.Functions.back().Access = AccessSpecifier::AS_none;
-  I.Children.Functions.back().Name = "OneFunction";
-  I.Children.Enums.emplace_back();
-  I.Children.Enums.back().Name = "OneEnum";
+  I.ChildNamespaces.emplace_back(EmptySID, "ChildNamespace",
+                                 InfoType::IT_namespace, "Namespace");
+  I.ChildRecords.emplace_back(EmptySID, "ChildStruct", InfoType::IT_record,
+                              "Namespace");
+  I.ChildFunctions.emplace_back();
+  I.ChildFunctions.back().Access = AccessSpecifier::AS_none;
+  I.ChildFunctions.back().Name = "OneFunction";
+  I.ChildEnums.emplace_back();
+  I.ChildEnums.back().Name = "OneEnum";
 
   auto G = getHTMLGenerator();
   assert(G);
@@ -66,7 +65,6 @@ TEST(HTMLGeneratorTest, emitNamespaceHTML) {
 <title>namespace Namespace</title>
 <link rel="stylesheet" href="../clang-doc-default-stylesheet.css"/>
 <link rel="stylesheet" href="../user-provided-stylesheet.css"/>
-<script src="../index_json.js"></script>
 <script src="../index.js"></script>
 <header id="project-title">test-project</header>
 <main>
@@ -92,13 +90,7 @@ TEST(HTMLGeneratorTest, emitNamespaceHTML) {
     </div>
     <h2 id="Enums">Enums</h2>
     <div>
-      <table id="0000000000000000000000000000000000000000">
-        <thead>
-          <tr>
-            <th colspan="2">enum OneEnum</th>
-          </tr>
-        </thead>
-      </table>
+      <h3 id="0000000000000000000000000000000000000000">enum OneEnum</h3>
     </div>
   </div>
   <div id="sidebar-right" class="col-xs-6 col-sm-6 col-md-2 sidebar sidebar-offcanvas-right">
@@ -160,17 +152,17 @@ TEST(HTMLGeneratorTest, emitRecordHTML) {
 
   SmallString<16> PathTo;
   llvm::sys::path::native("path/to", PathTo);
-  I.Members.emplace_back(TypeInfo("int"), "X", AccessSpecifier::AS_private);
-  I.TagType = TagTypeKind::Class;
-  I.Parents.emplace_back(EmptySID, "F", InfoType::IT_record, "F", PathTo);
+  I.Members.emplace_back("int", "X/Y", "X", AccessSpecifier::AS_private);
+  I.TagType = TagTypeKind::TTK_Class;
+  I.Parents.emplace_back(EmptySID, "F", InfoType::IT_record, PathTo);
   I.VirtualParents.emplace_back(EmptySID, "G", InfoType::IT_record);
 
-  I.Children.Records.emplace_back(EmptySID, "ChildStruct", InfoType::IT_record,
-                                  "X::Y::Z::r::ChildStruct", "X/Y/Z/r");
-  I.Children.Functions.emplace_back();
-  I.Children.Functions.back().Name = "OneFunction";
-  I.Children.Enums.emplace_back();
-  I.Children.Enums.back().Name = "OneEnum";
+  I.ChildRecords.emplace_back(EmptySID, "ChildStruct", InfoType::IT_record,
+                              "X/Y/Z/r");
+  I.ChildFunctions.emplace_back();
+  I.ChildFunctions.back().Name = "OneFunction";
+  I.ChildEnums.emplace_back();
+  I.ChildEnums.back().Name = "OneEnum";
 
   auto G = getHTMLGenerator();
   assert(G);
@@ -183,7 +175,6 @@ TEST(HTMLGeneratorTest, emitRecordHTML) {
 <meta charset="utf-8"/>
 <title>class r</title>
 <link rel="stylesheet" href="../../../clang-doc-default-stylesheet.css"/>
-<script src="../../../index_json.js"></script>
 <script src="../../../index.js"></script>
 <header id="project-title">test-project</header>
 <main>
@@ -204,7 +195,9 @@ TEST(HTMLGeneratorTest, emitRecordHTML) {
     <h2 id="Members">Members</h2>
     <ul>
       <li>
-        <div>private int X</div>
+        private 
+        <a href="../../../X/Y/int.html">int</a>
+         X
       </li>
     </ul>
     <h2 id="Records">Records</h2>
@@ -220,13 +213,7 @@ TEST(HTMLGeneratorTest, emitRecordHTML) {
     </div>
     <h2 id="Enums">Enums</h2>
     <div>
-      <table id="0000000000000000000000000000000000000000">
-        <thead>
-          <tr>
-            <th colspan="2">enum OneEnum</th>
-          </tr>
-        </thead>
-      </table>
+      <h3 id="0000000000000000000000000000000000000000">enum OneEnum</h3>
     </div>
   </div>
   <div id="sidebar-right" class="col-xs-6 col-sm-6 col-md-2 sidebar sidebar-offcanvas-right">
@@ -289,9 +276,8 @@ TEST(HTMLGeneratorTest, emitFunctionHTML) {
 
   SmallString<16> PathTo;
   llvm::sys::path::native("path/to", PathTo);
-  I.ReturnType = TypeInfo(
-      Reference(EmptySID, "float", InfoType::IT_default, "float", PathTo));
-  I.Params.emplace_back(TypeInfo("int", PathTo), "P");
+  I.ReturnType = TypeInfo(EmptySID, "float", InfoType::IT_default, PathTo);
+  I.Params.emplace_back("int", PathTo, "P");
   I.IsMethod = true;
   I.Parent = Reference(EmptySID, "Parent", InfoType::IT_record);
 
@@ -306,7 +292,6 @@ TEST(HTMLGeneratorTest, emitFunctionHTML) {
 <meta charset="utf-8"/>
 <title></title>
 <link rel="stylesheet" href="clang-doc-default-stylesheet.css"/>
-<script src="index_json.js"></script>
 <script src="index.js"></script>
 <header id="project-title">test-project</header>
 <main>
@@ -354,25 +339,15 @@ TEST(HTMLGeneratorTest, emitEnumHTML) {
 <meta charset="utf-8"/>
 <title></title>
 <link rel="stylesheet" href="clang-doc-default-stylesheet.css"/>
-<script src="index_json.js"></script>
 <script src="index.js"></script>
 <header id="project-title">test-project</header>
 <main>
   <div id="sidebar-left" path="" class="col-xs-6 col-sm-3 col-md-2 sidebar sidebar-offcanvas-left"></div>
   <div id="main-content" class="col-xs-12 col-sm-9 col-md-8 main-content">
-    <table id="0000000000000000000000000000000000000000">
-      <thead>
-        <tr>
-          <th colspan="2">enum class e</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>X</td>
-          <td>0</td>
-        </tr>
-      </tbody>
-    </table>
+    <h3 id="0000000000000000000000000000000000000000">enum class e</h3>
+    <ul>
+      <li>X</li>
+    </ul>
     <p>
       Defined at line 
       <a href="https://www.repository.com/test.cpp#10">10</a>
@@ -395,9 +370,9 @@ TEST(HTMLGeneratorTest, emitCommentHTML) {
   FunctionInfo I;
   I.Name = "f";
   I.DefLoc = Location(10, llvm::SmallString<16>{"test.cpp"});
-  I.ReturnType = TypeInfo("void");
-  I.Params.emplace_back(TypeInfo("int"), "I");
-  I.Params.emplace_back(TypeInfo("int"), "J");
+  I.ReturnType = TypeInfo(EmptySID, "void", InfoType::IT_default);
+  I.Params.emplace_back("int", "I");
+  I.Params.emplace_back("int", "J");
   I.Access = AccessSpecifier::AS_none;
 
   CommentInfo Top;
@@ -449,7 +424,6 @@ TEST(HTMLGeneratorTest, emitCommentHTML) {
 <meta charset="utf-8"/>
 <title></title>
 <link rel="stylesheet" href="clang-doc-default-stylesheet.css"/>
-<script src="index_json.js"></script>
 <script src="index.js"></script>
 <header id="project-title">test-project</header>
 <main>

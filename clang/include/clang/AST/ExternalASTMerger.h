@@ -118,7 +118,7 @@ public:
   /// Asks all connected ASTImporters if any of them imported the given
   /// declaration. If any ASTImporter did import the given declaration,
   /// then this function returns the declaration that D was imported from.
-  /// Returns nullptr if no ASTImporter did import D.
+  /// Returns nullptr if no ASTImporter did import import D.
   Decl *FindOriginalDecl(Decl *D);
 
   /// Add a set of ASTContexts as possible origins.
@@ -141,8 +141,7 @@ public:
 
   /// Implementation of the ExternalASTSource API.
   bool FindExternalVisibleDeclsByName(const DeclContext *DC,
-                                      DeclarationName Name,
-                                      const DeclContext *OriginalDC) override;
+                                      DeclarationName Name) override;
 
   /// Implementation of the ExternalASTSource API.
   void

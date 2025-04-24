@@ -63,7 +63,6 @@ frame_hdr_cache[8];
 _Unwind_Ptr
 base_from_cb_data (struct unw_eh_callback_data *data)
 {
-  return 0;
 }
 
 void

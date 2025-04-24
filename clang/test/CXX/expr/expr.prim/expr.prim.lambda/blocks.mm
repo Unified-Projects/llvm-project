@@ -65,10 +65,10 @@ void nesting() {
 
 namespace overloading {
   void bool_conversion() {
-    if ([](){}) { // expected-warning{{address of lambda function pointer conversion operator will always evaluate to 'true'}}
+    if ([](){}) {
     }
 
-    bool b = []{}; // expected-warning{{address of lambda function pointer conversion operator will always evaluate to 'true'}}
+    bool b = []{};
     b = (bool)[]{};
   }
 
@@ -108,9 +108,8 @@ namespace overloading {
     using decltype(a)::operator id<void(*)()>; // expected-note {{here}}
   } extern d;
 
-  bool r1 = c; // expected-warning{{address of lambda function pointer conversion operator will always evaluate to 'true'}}
-  bool r2 = d; // expected-error {{private}} \
-                  expected-warning{{address of lambda function pointer conversion operator will always evaluate to 'true'}}
+  bool r1 = c;
+  bool r2 = d; // expected-error {{private}}
 }
 
 namespace PR13117 {
@@ -119,16 +118,17 @@ namespace PR13117 {
 
     template<typename ... Args> static void f1()
     {
-      (void)^(Args args) { // expected-error{{expression contains unexpanded parameter pack 'Args'}}
+      (void)^(Args args) { // expected-error{{block contains unexpanded parameter pack 'Args'}}
       };
     }
 
     template<typename ... Args> static void f2()
     {
+      // FIXME: Allow this.
       f(
-        ^(Args args)
+        ^(Args args) // expected-error{{block contains unexpanded parameter pack 'Args'}}
         { }
-        ...
+        ... // expected-error{{pack expansion does not contain any unexpanded parameter packs}}
       );
     }
 

@@ -74,7 +74,7 @@ void llvm::makeGuardControlFlowExplicit(Function *DeoptIntrinsic,
                                  {}, {}, nullptr, "widenable_cond");
     CheckBI->setCondition(B.CreateAnd(CheckBI->getCondition(), WC,
                                       "exiplicit_guard_cond"));
-    assert(isWidenableBranch(CheckBI) && "Branch must be widenable.");
+    assert(isWidenableBranch(CheckBI) && "sanity check");
   }
 }
 
@@ -100,7 +100,7 @@ void llvm::widenWidenableBranch(BranchInst *WidenableBR, Value *NewCond) {
     C->set(B.CreateAnd(NewCond, C->get()));
     Instruction *WCAnd = cast<Instruction>(WidenableBR->getCondition());
     // Condition is only guaranteed to dominate branch
-    WCAnd->moveBefore(WidenableBR->getIterator());
+    WCAnd->moveBefore(WidenableBR);    
   }
   assert(isWidenableBranch(WidenableBR) && "preserve widenabiliy");
 }
@@ -119,7 +119,7 @@ void llvm::setWidenableBranchCond(BranchInst *WidenableBR, Value *NewCond) {
     // br (wc & C), ... form
     Instruction *WCAnd = cast<Instruction>(WidenableBR->getCondition());
     // Condition is only guaranteed to dominate branch
-    WCAnd->moveBefore(WidenableBR->getIterator());
+    WCAnd->moveBefore(WidenableBR);
     C->set(NewCond);
   }
   assert(isWidenableBranch(WidenableBR) && "preserve widenabiliy");

@@ -13,11 +13,12 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::readability {
+namespace clang {
+namespace tidy {
+namespace readability {
 
 static const char KDefaultTypes[] =
-    "::std::basic_string;::std::basic_string_view;::std::vector;::std::array;::"
-    "std::span";
+    "::std::basic_string;::std::basic_string_view;::std::vector;::std::array";
 
 SimplifySubscriptExprCheck::SimplifySubscriptExprCheck(
     StringRef Name, ClangTidyContext *Context)
@@ -27,7 +28,8 @@ SimplifySubscriptExprCheck::SimplifySubscriptExprCheck(
 
 void SimplifySubscriptExprCheck::registerMatchers(MatchFinder *Finder) {
   const auto TypesMatcher = hasUnqualifiedDesugaredType(
-      recordType(hasDeclaration(cxxRecordDecl(hasAnyName(Types)))));
+      recordType(hasDeclaration(cxxRecordDecl(hasAnyName(
+          llvm::SmallVector<StringRef, 8>(Types.begin(), Types.end()))))));
 
   Finder->addMatcher(
       arraySubscriptExpr(hasBase(
@@ -65,4 +67,6 @@ void SimplifySubscriptExprCheck::storeOptions(
   Options.store(Opts, "Types", utils::options::serializeStringList(Types));
 }
 
-} // namespace clang::tidy::readability
+} // namespace readability
+} // namespace tidy
+} // namespace clang

@@ -1,4 +1,5 @@
-! RUN: %python %S/test_errors.py %s %flang_fc1 -pedantic
+! RUN: %S/test_errors.sh %s %t %flang_fc1
+! REQUIRES: shell
 ! Test 8.5.18 constraints on the VALUE attribute
 
 module m
@@ -7,9 +8,9 @@ module m
   end type
  contains
   !ERROR: VALUE attribute may apply only to a dummy data object
-  subroutine C863(notData,assumedSize,coarray,coarrayComponent,assumedRank,assumedLen)
+  subroutine C863(notData,assumedSize,coarray,coarrayComponent)
     external :: notData
-    !WARNING: Only a dummy argument should have an INTENT, VALUE, or OPTIONAL attribute
+    !ERROR: VALUE attribute may apply only to a dummy argument
     real, value :: notADummy
     value :: notData
     !ERROR: VALUE attribute may not apply to an assumed-size array
@@ -18,10 +19,6 @@ module m
     real, value :: coarray[*]
     !ERROR: VALUE attribute may not apply to a type with a coarray ultimate component
     type(hasCoarray), value :: coarrayComponent
-    !ERROR: VALUE attribute may not apply to an assumed-rank array
-    real, value :: assumedRank(..)
-    !PORTABILITY: VALUE attribute on assumed-length CHARACTER may not be portable
-    character(*), value :: assumedLen
   end subroutine
   subroutine C864(allocatable, inout, out, pointer, volatile)
     !ERROR: VALUE attribute may not apply to an ALLOCATABLE

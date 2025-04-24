@@ -15,17 +15,16 @@
 #define LLVM_LIB_TARGET_SYSTEMZ_SYSTEMZTARGETMACHINE_H
 
 #include "SystemZSubtarget.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Target/TargetMachine.h"
 #include <memory>
-#include <optional>
 
 namespace llvm {
 
-class SystemZTargetMachine : public CodeGenTargetMachineImpl {
+class SystemZTargetMachine : public LLVMTargetMachine {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
 
   mutable StringMap<std::unique_ptr<SystemZSubtarget>> SubtargetMap;
@@ -33,9 +32,8 @@ class SystemZTargetMachine : public CodeGenTargetMachineImpl {
 public:
   SystemZTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                        StringRef FS, const TargetOptions &Options,
-                       std::optional<Reloc::Model> RM,
-                       std::optional<CodeModel::Model> CM, CodeGenOptLevel OL,
-                       bool JIT);
+                       Optional<Reloc::Model> RM, Optional<CodeModel::Model> CM,
+                       CodeGenOpt::Level OL, bool JIT);
   ~SystemZTargetMachine() override;
 
   const SystemZSubtarget *getSubtargetImpl(const Function &) const override;
@@ -44,17 +42,13 @@ public:
   // attributes of each function.
   const SystemZSubtarget *getSubtargetImpl() const = delete;
 
-  // Override CodeGenTargetMachineImpl
+  // Override LLVMTargetMachine
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
-  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
+  TargetTransformInfo getTargetTransformInfo(const Function &F) override;
 
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }
-
-  MachineFunctionInfo *
-  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
-                            const TargetSubtargetInfo *STI) const override;
 
   bool targetSchedulesPostRAScheduling() const override { return true; };
 };

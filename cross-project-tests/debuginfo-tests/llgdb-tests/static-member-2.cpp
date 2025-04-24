@@ -1,22 +1,24 @@
 // RUN: %clangxx %target_itanium_abi_host_triple -O0 -g %s -o %t -c
 // RUN: %clangxx %target_itanium_abi_host_triple %t -o %t.out
 // RUN: %test_debuginfo %s %t.out
-// XFAIL: gdb-clang-incompatibility
+
+// FIXME: LLDB finds the wrong symbol for "C". rdar://problem/14933867
+// XFAIL: darwin
 
 // DEBUGGER: delete breakpoints
-// DEBUGGER: break static-member-2.cpp:36
+// DEBUGGER: break static-member.cpp:33
 // DEBUGGER: r
 // DEBUGGER: ptype C
 // CHECK:      {{struct|class}} C {
-// CHECK:      static const int a
+// CHECK:      static const int a;
 // CHECK-NEXT: static int b;
 // CHECK-NEXT: static int c;
-// CHECK:      int d;
+// CHECK-NEXT: int d;
 // CHECK-NEXT: }
 // DEBUGGER: p C::a
-// CHECK:  4
+// CHECK: ${{[0-9]}} = 4
 // DEBUGGER: p C::c
-// CHECK: 15
+// CHECK: ${{[0-9]}} = 15
 
 // PR14471, PR14734
 

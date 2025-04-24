@@ -9,30 +9,30 @@
 #include "LexerUtils.h"
 #include "clang/AST/AST.h"
 #include "clang/Basic/SourceManager.h"
-#include <optional>
-#include <utility>
 
-namespace clang::tidy::utils::lexer {
-
-std::pair<Token, SourceLocation>
-getPreviousTokenAndStart(SourceLocation Location, const SourceManager &SM,
-                         const LangOptions &LangOpts, bool SkipComments) {
-  const std::optional<Token> Tok =
-      Lexer::findPreviousToken(Location, SM, LangOpts, !SkipComments);
-
-  if (Tok.has_value()) {
-    return {*Tok, Lexer::GetBeginningOfToken(Tok->getLocation(), SM, LangOpts)};
-  }
-
-  Token Token;
-  Token.setKind(tok::unknown);
-  return {Token, SourceLocation()};
-}
+namespace clang {
+namespace tidy {
+namespace utils {
+namespace lexer {
 
 Token getPreviousToken(SourceLocation Location, const SourceManager &SM,
                        const LangOptions &LangOpts, bool SkipComments) {
-  auto [Token, Start] =
-      getPreviousTokenAndStart(Location, SM, LangOpts, SkipComments);
+  Token Token;
+  Token.setKind(tok::unknown);
+
+  Location = Location.getLocWithOffset(-1);
+  if (Location.isInvalid())
+      return Token;
+
+  auto StartOfFile = SM.getLocForStartOfFile(SM.getFileID(Location));
+  while (Location != StartOfFile) {
+    Location = Lexer::GetBeginningOfToken(Location, SM, LangOpts);
+    if (!Lexer::getRawToken(Location, Token, SM, LangOpts) &&
+        (!SkipComments || !Token.is(tok::comment))) {
+      break;
+    }
+    Location = Location.getLocWithOffset(-1);
+  }
   return Token;
 }
 
@@ -40,11 +40,11 @@ SourceLocation findPreviousTokenStart(SourceLocation Start,
                                       const SourceManager &SM,
                                       const LangOptions &LangOpts) {
   if (Start.isInvalid() || Start.isMacroID())
-    return {};
+    return SourceLocation();
 
   SourceLocation BeforeStart = Start.getLocWithOffset(-1);
   if (BeforeStart.isInvalid() || BeforeStart.isMacroID())
-    return {};
+    return SourceLocation();
 
   return Lexer::GetBeginningOfToken(BeforeStart, SM, LangOpts);
 }
@@ -54,16 +54,16 @@ SourceLocation findPreviousTokenKind(SourceLocation Start,
                                      const LangOptions &LangOpts,
                                      tok::TokenKind TK) {
   if (Start.isInvalid() || Start.isMacroID())
-    return {};
+    return SourceLocation();
 
   while (true) {
     SourceLocation L = findPreviousTokenStart(Start, SM, LangOpts);
     if (L.isInvalid() || L.isMacroID())
-      return {};
+      return SourceLocation();
 
     Token T;
     if (Lexer::getRawToken(L, T, SM, LangOpts, /*IgnoreWhiteSpace=*/true))
-      return {};
+      return SourceLocation();
 
     if (T.is(TK))
       return T.getLocation();
@@ -77,19 +77,14 @@ SourceLocation findNextTerminator(SourceLocation Start, const SourceManager &SM,
   return findNextAnyTokenKind(Start, SM, LangOpts, tok::comma, tok::semi);
 }
 
-std::optional<Token>
-findNextTokenSkippingComments(SourceLocation Start, const SourceManager &SM,
-                              const LangOptions &LangOpts) {
-  while (Start.isValid()) {
-    std::optional<Token> CurrentToken =
-        Lexer::findNextToken(Start, SM, LangOpts);
-    if (!CurrentToken || !CurrentToken->is(tok::comment))
-      return CurrentToken;
-
-    Start = CurrentToken->getLocation();
-  }
-
-  return std::nullopt;
+Optional<Token> findNextTokenSkippingComments(SourceLocation Start,
+                                              const SourceManager &SM,
+                                              const LangOptions &LangOpts) {
+  Optional<Token> CurrentToken;
+  do {
+    CurrentToken = Lexer::findNextToken(Start, SM, LangOpts);
+  } while (CurrentToken && CurrentToken->is(tok::comment));
+  return CurrentToken;
 }
 
 bool rangeContainsExpansionsOrDirectives(SourceRange Range,
@@ -98,11 +93,11 @@ bool rangeContainsExpansionsOrDirectives(SourceRange Range,
   assert(Range.isValid() && "Invalid Range for relexing provided");
   SourceLocation Loc = Range.getBegin();
 
-  while (Loc <= Range.getEnd()) {
+  while (Loc < Range.getEnd()) {
     if (Loc.isMacroID())
       return true;
 
-    std::optional<Token> Tok = Lexer::findNextToken(Loc, SM, LangOpts);
+    llvm::Optional<Token> Tok = Lexer::findNextToken(Loc, SM, LangOpts);
 
     if (!Tok)
       return true;
@@ -110,16 +105,16 @@ bool rangeContainsExpansionsOrDirectives(SourceRange Range,
     if (Tok->is(tok::hash))
       return true;
 
-    Loc = Tok->getLocation();
+    Loc = Lexer::getLocForEndOfToken(Loc, 0, SM, LangOpts).getLocWithOffset(1);
   }
 
   return false;
 }
 
-std::optional<Token> getQualifyingToken(tok::TokenKind TK,
-                                        CharSourceRange Range,
-                                        const ASTContext &Context,
-                                        const SourceManager &SM) {
+llvm::Optional<Token> getQualifyingToken(tok::TokenKind TK,
+                                         CharSourceRange Range,
+                                         const ASTContext &Context,
+                                         const SourceManager &SM) {
   assert((TK == tok::kw_const || TK == tok::kw_volatile ||
           TK == tok::kw_restrict) &&
          "TK is not a qualifier keyword");
@@ -127,8 +122,8 @@ std::optional<Token> getQualifyingToken(tok::TokenKind TK,
   StringRef File = SM.getBufferData(LocInfo.first);
   Lexer RawLexer(SM.getLocForStartOfFile(LocInfo.first), Context.getLangOpts(),
                  File.begin(), File.data() + LocInfo.second, File.end());
-  std::optional<Token> LastMatchBeforeTemplate;
-  std::optional<Token> LastMatchAfterTemplate;
+  llvm::Optional<Token> LastMatchBeforeTemplate;
+  llvm::Optional<Token> LastMatchAfterTemplate;
   bool SawTemplate = false;
   Token Tok;
   while (!RawLexer.LexFromRawLexer(Tok) &&
@@ -143,7 +138,7 @@ std::optional<Token> getQualifyingToken(tok::TokenKind TK,
     if (Tok.is(tok::less))
       SawTemplate = true;
     else if (Tok.isOneOf(tok::greater, tok::greatergreater))
-      LastMatchAfterTemplate = std::nullopt;
+      LastMatchAfterTemplate = None;
     else if (Tok.is(TK)) {
       if (SawTemplate)
         LastMatchAfterTemplate = Tok;
@@ -151,8 +146,8 @@ std::optional<Token> getQualifyingToken(tok::TokenKind TK,
         LastMatchBeforeTemplate = Tok;
     }
   }
-  return LastMatchAfterTemplate != std::nullopt ? LastMatchAfterTemplate
-                                                : LastMatchBeforeTemplate;
+  return LastMatchAfterTemplate != None ? LastMatchAfterTemplate
+                                        : LastMatchBeforeTemplate;
 }
 
 static bool breakAndReturnEnd(const Stmt &S) {
@@ -160,8 +155,7 @@ static bool breakAndReturnEnd(const Stmt &S) {
 }
 
 static bool breakAndReturnEndPlus1Token(const Stmt &S) {
-  return isa<Expr, DoStmt, ReturnStmt, BreakStmt, ContinueStmt, GotoStmt,
-             SEHLeaveStmt>(S);
+  return isa<Expr, DoStmt, ReturnStmt, BreakStmt, ContinueStmt, GotoStmt, SEHLeaveStmt>(S);
 }
 
 // Given a Stmt which does not include it's semicolon this method returns the
@@ -177,14 +171,14 @@ static SourceLocation getSemicolonAfterStmtEndLoc(const SourceLocation &EndLoc,
     //  F     (      foo()               ;   )
     //  ^ EndLoc         ^ SpellingLoc   ^ next token of SpellingLoc
     const SourceLocation SpellingLoc = SM.getSpellingLoc(EndLoc);
-    std::optional<Token> NextTok =
+    Optional<Token> NextTok =
         findNextTokenSkippingComments(SpellingLoc, SM, LangOpts);
 
     // Was the next token found successfully?
     // All macro issues are simply resolved by ensuring it's a semicolon.
     if (NextTok && NextTok->is(tok::TokenKind::semi)) {
       // Ideally this would return `F` with spelling location `;` (NextTok)
-      // following the example above. For now simply return NextTok location.
+      // following the examle above. For now simply return NextTok location.
       return NextTok->getLocation();
     }
 
@@ -193,14 +187,13 @@ static SourceLocation getSemicolonAfterStmtEndLoc(const SourceLocation &EndLoc,
     //  ^ EndLoc         ^ SpellingLoc  ) ^ next token of EndLoc
   }
 
-  std::optional<Token> NextTok =
-      findNextTokenSkippingComments(EndLoc, SM, LangOpts);
+  Optional<Token> NextTok = findNextTokenSkippingComments(EndLoc, SM, LangOpts);
 
   // Testing for semicolon again avoids some issues with macros.
   if (NextTok && NextTok->is(tok::TokenKind::semi))
     return NextTok->getLocation();
 
-  return {};
+  return SourceLocation();
 }
 
 SourceLocation getUnifiedEndLoc(const Stmt &S, const SourceManager &SM,
@@ -213,46 +206,14 @@ SourceLocation getUnifiedEndLoc(const Stmt &S, const SourceManager &SM,
       LastChild = Child;
   }
 
-  if (!breakAndReturnEnd(*LastChild) && breakAndReturnEndPlus1Token(*LastChild))
+  if (!breakAndReturnEnd(*LastChild) &&
+      breakAndReturnEndPlus1Token(*LastChild))
     return getSemicolonAfterStmtEndLoc(S.getEndLoc(), SM, LangOpts);
 
   return S.getEndLoc();
 }
 
-SourceLocation getLocationForNoexceptSpecifier(const FunctionDecl *FuncDecl,
-                                               const SourceManager &SM) {
-  if (!FuncDecl)
-    return {};
-
-  const LangOptions &LangOpts = FuncDecl->getLangOpts();
-
-  if (FuncDecl->getNumParams() == 0) {
-    // Start at the beginning of the function declaration, and find the closing
-    // parenthesis after which we would place the noexcept specifier.
-    Token CurrentToken;
-    SourceLocation CurrentLocation = FuncDecl->getBeginLoc();
-    while (!Lexer::getRawToken(CurrentLocation, CurrentToken, SM, LangOpts,
-                               true)) {
-      if (CurrentToken.is(tok::r_paren))
-        return CurrentLocation.getLocWithOffset(1);
-
-      CurrentLocation = CurrentToken.getEndLoc();
-    }
-
-    // Failed to find the closing parenthesis, so just return an invalid
-    // SourceLocation.
-    return {};
-  }
-
-  // FunctionDecl with parameters
-  const SourceLocation NoexceptLoc =
-      FuncDecl->getParamDecl(FuncDecl->getNumParams() - 1)->getEndLoc();
-  if (NoexceptLoc.isValid())
-    return Lexer::findLocationAfterToken(
-        NoexceptLoc, tok::r_paren, SM, LangOpts,
-        /*SkipTrailingWhitespaceAndNewLine=*/true);
-
-  return {};
-}
-
-} // namespace clang::tidy::utils::lexer
+} // namespace lexer
+} // namespace utils
+} // namespace tidy
+} // namespace clang

@@ -17,15 +17,19 @@
 
 #define DEBUG_TYPE "format-test"
 
+using clang::tooling::ReplacementTest;
+using clang::tooling::toReplacements;
+
 namespace clang {
 namespace format {
 namespace {
 
-class FormatTestRawStrings : public testing::Test {
+class FormatTestRawStrings : public ::testing::Test {
 protected:
   enum StatusCheck { SC_ExpectComplete, SC_ExpectIncomplete, SC_DoNotCheck };
 
-  std::string format(StringRef Code, const FormatStyle &Style = getLLVMStyle(),
+  std::string format(llvm::StringRef Code,
+                     const FormatStyle &Style = getLLVMStyle(),
                      StatusCheck CheckComplete = SC_ExpectComplete) {
     LLVM_DEBUG(llvm::errs() << "---\n");
     LLVM_DEBUG(llvm::errs() << Code << "\n\n");

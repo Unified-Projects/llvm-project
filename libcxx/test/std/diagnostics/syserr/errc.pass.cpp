@@ -6,13 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_DISABLE_DEPRECATION_WARNINGS
-
 // <system_error>
 
 // enum errc {...}
 
-#include <cerrno>
 #include <system_error>
 
 #include "test_macros.h"

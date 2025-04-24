@@ -6,22 +6,37 @@
 // CHECK-BAD-ARG: invalid value 'bad_arg' in '-fsanitize-address-destructor=bad_arg'
 
 // Default is global dtor
-// RUN: %clang_cc1 -fsanitize=address -emit-llvm -o - -triple x86_64-apple-macosx10.15 %s \
+// RUN: %clang_cc1 -fsanitize=address -emit-llvm -o - -triple x86_64-apple-macosx10.15 \
+// RUN:   -fno-legacy-pass-manager %s \
+// RUN:   | FileCheck %s --check-prefixes=CHECK-GLOBAL-DTOR
+//
+// RUN: %clang_cc1 -fsanitize=address -emit-llvm -o - -triple x86_64-apple-macosx10.15 \
+// RUN:   -flegacy-pass-manager %s \
 // RUN:   | FileCheck %s --check-prefixes=CHECK-GLOBAL-DTOR
 
-// Explicitly ask for global dtor
+// Explictly ask for global dtor
 // RUN: %clang_cc1 -fsanitize=address \
 // RUN:   -fsanitize-address-destructor=global -emit-llvm -o - \
-// RUN:   -triple x86_64-apple-macosx10.15 %s | \
+// RUN:   -triple x86_64-apple-macosx10.15 -fno-legacy-pass-manager %s | \
+// RUN:   FileCheck %s --check-prefixes=CHECK-GLOBAL-DTOR
+//
+// RUN: %clang_cc1 -fsanitize=address \
+// RUN:   -fsanitize-address-destructor=global -emit-llvm -o - \
+// RUN:   -triple x86_64-apple-macosx10.15 -flegacy-pass-manager %s | \
 // RUN:   FileCheck %s --check-prefixes=CHECK-GLOBAL-DTOR
 
 // CHECK-GLOBAL-DTOR: llvm.global_dtor{{.+}}asan.module_dtor
 // CHECK-GLOBAL-DTOR: define internal void @asan.module_dtor
 
-// Explicitly ask for no dtors
+// Explictly ask for no dtors
 // RUN: %clang_cc1 -fsanitize=address \
 // RUN:   -fsanitize-address-destructor=none -emit-llvm -o - \
-// RUN:   -triple x86_64-apple-macosx10.15 %s | \
+// RUN:   -triple x86_64-apple-macosx10.15 -fno-legacy-pass-manager %s | \
+// RUN:   FileCheck %s --check-prefixes=CHECK-NONE-DTOR
+//
+// RUN: %clang_cc1 -fsanitize=address \
+// RUN:   -fsanitize-address-destructor=none -emit-llvm -o - \
+// RUN:   -triple x86_64-apple-macosx10.15 -flegacy-pass-manager %s | \
 // RUN:   FileCheck %s --check-prefixes=CHECK-NONE-DTOR
 
 int global;

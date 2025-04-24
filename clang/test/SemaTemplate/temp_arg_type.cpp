@@ -11,7 +11,7 @@ A<0> *a1; // expected-error{{template argument for template type parameter must 
 A<A> *a2; // expected-error{{use of class template 'A' requires template arguments}}
 
 A<int> *a3;
-A<int()> *a4;
+A<int()> *a4; 
 A<int(float)> *a5;
 A<A<int> > *a6;
 
@@ -69,10 +69,11 @@ namespace deduce_noexcept {
   void noexcept_function() noexcept;
   void throwing_function();
 
-  template<typename T, bool B> float &deduce_function(T(*)() noexcept(B));
-  template<typename T> int &deduce_function(T(*)() noexcept);
+  template<typename T, bool B> float &deduce_function(T(*)() noexcept(B)); // expected-note {{candidate}}
+  template<typename T> int &deduce_function(T(*)() noexcept); // expected-note {{candidate}}
   void test_function_deduction() {
-    int &r = deduce_function(noexcept_function);
+    // FIXME: This should probably unambiguously select the second overload.
+    int &r = deduce_function(noexcept_function); // expected-error {{ambiguous}}
     float &s = deduce_function(throwing_function);
   }
 
@@ -94,13 +95,15 @@ namespace deduce_noexcept {
   template void dep() noexcept(true); // expected-error {{does not refer to a function template}}
   template void dep() noexcept(false); // expected-error {{does not refer to a function template}}
 
-  template<typename T> typename T::type1 f() noexcept(T::a); // expected-note {{candidate}}
-  template<typename T> typename T::type2 f() noexcept(T::b) {} // expected-note {{candidate}}
+  // FIXME: It's also not clear whether this should be valid: do we substitute
+  // into the function type (including the exception specification) or not?
+  template<typename T> typename T::type1 f() noexcept(T::a);
+  template<typename T> typename T::type2 f() noexcept(T::b) {}
   struct X {
     static constexpr bool b = true;
     using type1 = void;
     using type2 = void;
   };
-  template void f<X>(); // expected-error {{partial ordering for explicit instantiation of 'f' is ambiguous}}
+  template void f<X>();
 }
 #endif

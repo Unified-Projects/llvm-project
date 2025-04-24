@@ -10,19 +10,14 @@
 #ifndef __CLANG_FLOAT_H
 #define __CLANG_FLOAT_H
 
-#if defined(__MVS__) && __has_include_next(<float.h>)
-#include_next <float.h>
-#else
-
 /* If we're on MinGW, fall back to the system's float.h, which might have
  * additional definitions provided for Windows.
  * For more details see http://msdn.microsoft.com/en-us/library/y0ybw9fy.aspx
  *
- * Also fall back on Darwin and AIX to allow additional definitions and
+ * Also fall back on Darwin to allow additional definitions and
  * implementation-defined values.
  */
-#if (defined(__APPLE__) || defined(__MINGW32__) || defined(_MSC_VER) ||        \
-     defined(_AIX)) &&                                                         \
+#if (defined(__APPLE__) || (defined(__MINGW32__) || defined(_MSC_VER))) && \
     __STDC_HOSTED__ && __has_include_next(<float.h>)
 
 /* Prior to Apple's 10.7 SDK, float.h SDK header used to apply an extra level
@@ -42,10 +37,7 @@
 #  undef FLT_MANT_DIG
 #  undef DBL_MANT_DIG
 #  undef LDBL_MANT_DIG
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) ||              \
-    !defined(__STRICT_ANSI__) ||                                               \
-    (defined(__cplusplus) && __cplusplus >= 201103L) ||                        \
-    (__STDC_HOSTED__ && defined(_AIX) && defined(_ALL_SOURCE))
+#  if __STDC_VERSION__ >= 199901L || !defined(__STRICT_ANSI__) || __cplusplus >= 201103L
 #    undef DECIMAL_DIG
 #  endif
 #  undef FLT_DIG
@@ -72,10 +64,7 @@
 #  undef FLT_MIN
 #  undef DBL_MIN
 #  undef LDBL_MIN
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) ||              \
-    !defined(__STRICT_ANSI__) ||                                               \
-    (defined(__cplusplus) && __cplusplus >= 201703L) ||                        \
-    (__STDC_HOSTED__ && defined(_AIX) && defined(_ALL_SOURCE))
+#  if __STDC_VERSION__ >= 201112L || !defined(__STRICT_ANSI__) || __cplusplus >= 201703L
 #    undef FLT_TRUE_MIN
 #    undef DBL_TRUE_MIN
 #    undef LDBL_TRUE_MIN
@@ -86,26 +75,11 @@
 #    undef DBL_HAS_SUBNORM
 #    undef LDBL_HAS_SUBNORM
 #  endif
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) ||              \
-    !defined(__STRICT_ANSI__)
-#    undef FLT_NORM_MAX
-#    undef DBL_NORM_MAX
-#    undef LDBL_NORM_MAX
-#endif
-#endif
-
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) ||              \
-    !defined(__STRICT_ANSI__)
-#  undef INFINITY
-#  undef NAN
 #endif
 
 /* Characteristics of floating point types, C99 5.2.4.2.2 */
 
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) ||              \
-    (defined(__cplusplus) && __cplusplus >= 201103L)
 #define FLT_EVAL_METHOD __FLT_EVAL_METHOD__
-#endif
 #define FLT_ROUNDS (__builtin_flt_rounds())
 #define FLT_RADIX __FLT_RADIX__
 
@@ -113,10 +87,7 @@
 #define DBL_MANT_DIG __DBL_MANT_DIG__
 #define LDBL_MANT_DIG __LDBL_MANT_DIG__
 
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) ||              \
-    !defined(__STRICT_ANSI__) ||                                               \
-    (defined(__cplusplus) && __cplusplus >= 201103L) ||                        \
-    (__STDC_HOSTED__ && defined(_AIX) && defined(_ALL_SOURCE))
+#if __STDC_VERSION__ >= 199901L || !defined(__STRICT_ANSI__) || __cplusplus >= 201103L
 #  define DECIMAL_DIG __DECIMAL_DIG__
 #endif
 
@@ -152,10 +123,7 @@
 #define DBL_MIN __DBL_MIN__
 #define LDBL_MIN __LDBL_MIN__
 
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) ||              \
-    !defined(__STRICT_ANSI__) ||                                               \
-    (defined(__cplusplus) && __cplusplus >= 201703L) ||                        \
-    (__STDC_HOSTED__ && defined(_AIX) && defined(_ALL_SOURCE))
+#if __STDC_VERSION__ >= 201112L || !defined(__STRICT_ANSI__) || __cplusplus >= 201703L
 #  define FLT_TRUE_MIN __FLT_DENORM_MIN__
 #  define DBL_TRUE_MIN __DBL_DENORM_MIN__
 #  define LDBL_TRUE_MIN __LDBL_DENORM_MIN__
@@ -165,17 +133,6 @@
 #  define FLT_HAS_SUBNORM __FLT_HAS_DENORM__
 #  define DBL_HAS_SUBNORM __DBL_HAS_DENORM__
 #  define LDBL_HAS_SUBNORM __LDBL_HAS_DENORM__
-#endif
-
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L) ||              \
-    !defined(__STRICT_ANSI__)
-   /* C23 5.2.5.3.3p29-30 */
-#  define INFINITY (__builtin_inff())
-#  define NAN (__builtin_nanf(""))
-   /* C23 5.2.5.3.3p32 */
-#  define FLT_NORM_MAX __FLT_NORM_MAX__
-#  define DBL_NORM_MAX __DBL_NORM_MAX__
-#  define LDBL_NORM_MAX __LDBL_NORM_MAX__
 #endif
 
 #ifdef __STDC_WANT_IEC_60559_TYPES_EXT__
@@ -192,5 +149,4 @@
 #  define FLT16_TRUE_MIN    __FLT16_TRUE_MIN__
 #endif /* __STDC_WANT_IEC_60559_TYPES_EXT__ */
 
-#endif /* __MVS__ */
 #endif /* __CLANG_FLOAT_H */

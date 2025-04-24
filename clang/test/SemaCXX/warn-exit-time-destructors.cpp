@@ -1,5 +1,4 @@
-// RUN: %clang_cc1 -std=c++11 -fsyntax-only -Wexit-time-destructors %s -verify=expected,cxx11
-// RUN: %clang_cc1 -std=c++20 -fsyntax-only -Wexit-time-destructors %s -verify=expected
+// RUN: %clang_cc1 -std=c++11 -fsyntax-only -Wexit-time-destructors %s -verify
 
 namespace test1 {
   struct A { ~A(); };
@@ -49,32 +48,3 @@ namespace test4 {
 struct A { ~A(); };
 [[clang::no_destroy]] A a; // no warning
 }
-
-namespace test5 {
-  struct A { ~A(); };
-  [[clang::always_destroy]] A a; // no warning
-
-  void func() {
-    [[clang::always_destroy]] static A a; // no warning
-  }
-}
-
-namespace test6 {
-#if __cplusplus >= 202002L
-#define CPP20_CONSTEXPR constexpr
-#else
-#define CPP20_CONSTEXPR
-#endif
-  struct S {
-    CPP20_CONSTEXPR ~S() {}
-  };
-  S s; // cxx11-warning {{exit-time destructor}}
-
-  struct T {
-    CPP20_CONSTEXPR ~T() { if (b) {} }
-    bool b;
-  };
-  T t; // expected-warning {{exit-time destructor}}
-#undef CPP20_CONSTEXPR
-}
-

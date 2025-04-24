@@ -124,7 +124,7 @@ public:
   /// cannot be resolved.
   static NestedNameSpecifier *Create(const ASTContext &Context,
                                      NestedNameSpecifier *Prefix,
-                                     const IdentifierInfo *II);
+                                     IdentifierInfo *II);
 
   /// Builds a nested name specifier that names a namespace.
   static NestedNameSpecifier *Create(const ASTContext &Context,
@@ -134,7 +134,7 @@ public:
   /// Builds a nested name specifier that names a namespace alias.
   static NestedNameSpecifier *Create(const ASTContext &Context,
                                      NestedNameSpecifier *Prefix,
-                                     const NamespaceAliasDecl *Alias);
+                                     NamespaceAliasDecl *Alias);
 
   /// Builds a nested name specifier that names a type.
   static NestedNameSpecifier *Create(const ASTContext &Context,
@@ -148,7 +148,7 @@ public:
   /// nested name specifier, e.g., in "x->Base::f", the "x" has a dependent
   /// type.
   static NestedNameSpecifier *Create(const ASTContext &Context,
-                                     const IdentifierInfo *II);
+                                     IdentifierInfo *II);
 
   /// Returns the nested name specifier representing the global
   /// scope.
@@ -162,7 +162,7 @@ public:
   /// Return the prefix of this nested name specifier.
   ///
   /// The prefix contains all of the parts of the nested name
-  /// specifier that precede this current specifier. For example, for a
+  /// specifier that preced this current specifier. For example, for a
   /// nested name specifier that represents "foo::bar::", the current
   /// specifier will contain "bar::" and the prefix will contain
   /// "foo::".
@@ -266,7 +266,7 @@ public:
   explicit operator bool() const { return Qualifier; }
 
   /// Evaluates true when this nested-name-specifier location is
-  /// non-empty.
+  /// empty.
   bool hasQualifier() const { return Qualifier; }
 
   /// Retrieve the nested-name-specifier to which this instance
@@ -521,7 +521,7 @@ public:
 /// NestedNameSpecifiers into a diagnostic with <<.
 inline const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
                                              NestedNameSpecifier *NNS) {
-  DB.AddTaggedVal(reinterpret_cast<uint64_t>(NNS),
+  DB.AddTaggedVal(reinterpret_cast<intptr_t>(NNS),
                   DiagnosticsEngine::ak_nestednamespec);
   return DB;
 }

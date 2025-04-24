@@ -8,9 +8,6 @@
 
 // <memory>
 
-// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_ENABLE_CXX20_REMOVED_TEMPORARY_BUFFER
-// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_DISABLE_DEPRECATION_WARNINGS
-
 // template <class T>
 //   pair<T*, ptrdiff_t>
 //   get_temporary_buffer(ptrdiff_t n);
@@ -19,10 +16,10 @@
 //   void
 //   return_temporary_buffer(T* p);
 
-#include <cassert>
-#include <cstddef>
 #include <memory>
-#include <utility>
+#include <cassert>
+
+#include "test_macros.h"
 
 int main(int, char**)
 {

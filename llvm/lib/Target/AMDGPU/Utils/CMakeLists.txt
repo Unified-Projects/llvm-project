@@ -1,19 +1,16 @@
 add_llvm_component_library(LLVMAMDGPUUtils
   AMDGPUAsmUtils.cpp
   AMDGPUBaseInfo.cpp
-  AMDGPUDelayedMCExpr.cpp
+  AMDGPULDSUtils.cpp
   AMDGPUPALMetadata.cpp
   AMDKernelCodeTUtils.cpp
 
   LINK_COMPONENTS
   Analysis
-  BinaryFormat
-  CodeGenTypes
   Core
   MC
-  MCParser
+  BinaryFormat
   Support
-  TargetParser
 
   ADD_TO_COMPONENT
   AMDGPU

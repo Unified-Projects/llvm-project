@@ -12,20 +12,23 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_AMDGPUALIASANALYSIS_H
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUALIASANALYSIS_H
 
+#include "AMDGPU.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/IR/Module.h"
 
 namespace llvm {
 
 class DataLayout;
+class MDNode;
 class MemoryLocation;
 
 /// A simple AA result that uses TBAA metadata to answer queries.
-class AMDGPUAAResult : public AAResultBase {
+class AMDGPUAAResult : public AAResultBase<AMDGPUAAResult> {
+  friend AAResultBase<AMDGPUAAResult>;
+
   const DataLayout &DL;
 
 public:
-  explicit AMDGPUAAResult(const DataLayout &DL) : DL(DL) {}
+  explicit AMDGPUAAResult(const DataLayout &DL) : AAResultBase(), DL(DL) {}
   AMDGPUAAResult(AMDGPUAAResult &&Arg)
       : AAResultBase(std::move(Arg)), DL(Arg.DL) {}
 
@@ -38,9 +41,9 @@ public:
   }
 
   AliasResult alias(const MemoryLocation &LocA, const MemoryLocation &LocB,
-                    AAQueryInfo &AAQI, const Instruction *CtxI);
-  ModRefInfo getModRefInfoMask(const MemoryLocation &Loc, AAQueryInfo &AAQI,
-                               bool IgnoreLocals);
+                    AAQueryInfo &AAQI);
+  bool pointsToConstantMemory(const MemoryLocation &Loc, AAQueryInfo &AAQI,
+                              bool OrLocal);
 };
 
 /// Analysis pass providing a never-invalidated alias analysis result.
@@ -53,7 +56,7 @@ public:
   using Result = AMDGPUAAResult;
 
   AMDGPUAAResult run(Function &F, AnalysisManager<Function> &AM) {
-    return AMDGPUAAResult(F.getDataLayout());
+    return AMDGPUAAResult(F.getParent()->getDataLayout());
   }
 };
 
@@ -64,7 +67,9 @@ class AMDGPUAAWrapperPass : public ImmutablePass {
 public:
   static char ID;
 
-  AMDGPUAAWrapperPass();
+  AMDGPUAAWrapperPass() : ImmutablePass(ID) {
+    initializeAMDGPUAAWrapperPassPass(*PassRegistry::getPassRegistry());
+  }
 
   AMDGPUAAResult &getResult() { return *Result; }
   const AMDGPUAAResult &getResult() const { return *Result; }

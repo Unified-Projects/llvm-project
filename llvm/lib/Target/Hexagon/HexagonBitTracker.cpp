@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "HexagonBitTracker.h"
+#include "Hexagon.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonRegisterInfo.h"
 #include "HexagonSubtarget.h"
@@ -23,6 +24,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstddef>
@@ -94,7 +96,6 @@ BT::BitMask HexagonEvaluator::mask(Register Reg, unsigned Sub) const {
   bool IsSubLo = (Sub == HRI.getHexagonSubRegIndex(RC, Hexagon::ps_sub_lo));
   switch (ID) {
     case Hexagon::DoubleRegsRegClassID:
-    case Hexagon::DoubleRegs_with_isub_hi_in_IntRegsLow8RegClassID:
     case Hexagon::HvxWRRegClassID:
     case Hexagon::HvxVQRRegClassID:
       return IsSubLo ? BT::BitMask(0, RW-1)
@@ -140,7 +141,6 @@ const TargetRegisterClass &HexagonEvaluator::composeWithSubRegIndex(
 
   switch (RC.getID()) {
     case Hexagon::DoubleRegsRegClassID:
-    case Hexagon::DoubleRegs_with_isub_hi_in_IntRegsLow8RegClassID:
       return Hexagon::IntRegsRegClass;
     case Hexagon::HvxWRRegClassID:
       return Hexagon::HvxVRRegClass;
@@ -189,7 +189,7 @@ bool HexagonEvaluator::evaluate(const MachineInstr &MI,
 
   unsigned NumDefs = 0;
 
-  // Basic correctness check: there should not be any defs with subregisters.
+  // Sanity verification: there should not be any defs with subregisters.
   for (const MachineOperand &MO : MI.operands()) {
     if (!MO.isReg() || !MO.isDef())
       continue;
@@ -329,7 +329,7 @@ bool HexagonEvaluator::evaluate(const MachineInstr &MI,
       int FI = op(1).getIndex();
       int Off = op(2).getImm();
       unsigned A = MFI.getObjectAlign(FI).value() + std::abs(Off);
-      unsigned L = llvm::countr_zero(A);
+      unsigned L = countTrailingZeros(A);
       RegisterCell RC = RegisterCell::self(Reg[0].Reg, W0);
       RC.fill(0, L, BT::BitValue::Zero);
       return rr0(RC, Outputs);
@@ -491,11 +491,6 @@ bool HexagonEvaluator::evaluate(const MachineInstr &MI,
     case M2_maci: {
       RegisterCell M = eMLS(rc(2), rc(3));
       RegisterCell RC = eADD(rc(1), lo(M, W0));
-      return rr0(RC, Outputs);
-    }
-    case M2_mnaci: {
-      RegisterCell M = eMLS(rc(2), rc(3));
-      RegisterCell RC = eSUB(rc(1), lo(M, W0));
       return rr0(RC, Outputs);
     }
     case M2_mpysmi: {
@@ -997,7 +992,7 @@ bool HexagonEvaluator::evaluate(const MachineInstr &BI,
     case Hexagon::J2_jumpfnew:
     case Hexagon::J2_jumpfnewpt:
       Negated = true;
-      [[fallthrough]];
+      LLVM_FALLTHROUGH;
     case Hexagon::J2_jumpt:
     case Hexagon::J2_jumptpt:
     case Hexagon::J2_jumptnew:
@@ -1223,7 +1218,7 @@ bool HexagonEvaluator::evaluateFormalCopy(const MachineInstr &MI,
   RegisterRef RD = MI.getOperand(0);
   RegisterRef RS = MI.getOperand(1);
   assert(RD.Sub == 0);
-  if (!RS.Reg.isPhysical())
+  if (!Register::isPhysicalRegister(RS.Reg))
     return false;
   RegExtMap::const_iterator F = VRX.find(RD.Reg);
   if (F == VRX.end())
@@ -1287,7 +1282,7 @@ unsigned HexagonEvaluator::getNextPhysReg(unsigned PReg, unsigned Width) const {
 }
 
 unsigned HexagonEvaluator::getVirtRegFor(unsigned PReg) const {
-  for (std::pair<MCRegister, Register> P : MRI.liveins())
+  for (std::pair<unsigned,unsigned> P : MRI.liveins())
     if (P.first == PReg)
       return P.second;
   return 0;

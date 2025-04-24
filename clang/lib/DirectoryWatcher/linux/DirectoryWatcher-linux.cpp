@@ -14,6 +14,7 @@
 #include "llvm/Support/AlignOf.h"
 #include "llvm/Support/Errno.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
 #include <atomic>
 #include <condition_variable>
@@ -24,8 +25,6 @@
 #include <vector>
 
 #include <fcntl.h>
-#include <limits.h>
-#include <optional>
 #include <sys/epoll.h>
 #include <sys/inotify.h>
 #include <unistd.h>
@@ -73,10 +72,10 @@ struct SemaphorePipe {
   const int FDWrite;
   bool OwnsFDs;
 
-  static std::optional<SemaphorePipe> create() {
+  static llvm::Optional<SemaphorePipe> create() {
     int InotifyPollingStopperFDs[2];
     if (pipe2(InotifyPollingStopperFDs, O_CLOEXEC) == -1)
-      return std::nullopt;
+      return llvm::None;
     return SemaphorePipe(InotifyPollingStopperFDs);
   }
 };
@@ -333,7 +332,8 @@ llvm::Expected<std::unique_ptr<DirectoryWatcher>> clang::DirectoryWatcher::creat
   const int InotifyFD = inotify_init1(IN_CLOEXEC);
   if (InotifyFD == -1)
     return llvm::make_error<llvm::StringError>(
-        llvm::errnoAsErrorCode(), std::string(": inotify_init1()"));
+        std::string("inotify_init1() error: ") + strerror(errno),
+        llvm::inconvertibleErrorCode());
 
   const int InotifyWD = inotify_add_watch(
       InotifyFD, Path.str().c_str(),
@@ -345,13 +345,15 @@ llvm::Expected<std::unique_ptr<DirectoryWatcher>> clang::DirectoryWatcher::creat
       );
   if (InotifyWD == -1)
     return llvm::make_error<llvm::StringError>(
-        llvm::errnoAsErrorCode(), std::string(": inotify_add_watch()"));
+        std::string("inotify_add_watch() error: ") + strerror(errno),
+        llvm::inconvertibleErrorCode());
 
   auto InotifyPollingStopper = SemaphorePipe::create();
 
   if (!InotifyPollingStopper)
     return llvm::make_error<llvm::StringError>(
-        llvm::errnoAsErrorCode(), std::string(": SemaphorePipe::create()"));
+        std::string("SemaphorePipe::create() error: ") + strerror(errno),
+        llvm::inconvertibleErrorCode());
 
   return std::make_unique<DirectoryWatcherLinux>(
       Path, Receiver, WaitForInitialSync, InotifyFD, InotifyWD,

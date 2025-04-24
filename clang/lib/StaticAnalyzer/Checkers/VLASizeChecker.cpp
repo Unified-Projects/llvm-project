@@ -13,9 +13,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Taint.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
-#include "clang/StaticAnalyzer/Checkers/Taint.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
@@ -24,7 +24,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -34,11 +33,14 @@ namespace {
 class VLASizeChecker
     : public Checker<check::PreStmt<DeclStmt>,
                      check::PreStmt<UnaryExprOrTypeTraitExpr>> {
-  const BugType BT{this, "Dangerous variable-length array (VLA) declaration"};
-  const BugType TaintBT{this,
-                        "Dangerous variable-length array (VLA) declaration",
-                        categories::TaintedData};
-  enum VLASize_Kind { VLA_Garbage, VLA_Zero, VLA_Negative, VLA_Overflow };
+  mutable std::unique_ptr<BugType> BT;
+  enum VLASize_Kind {
+    VLA_Garbage,
+    VLA_Zero,
+    VLA_Tainted,
+    VLA_Negative,
+    VLA_Overflow
+  };
 
   /// Check a VLA for validity.
   /// Every dimension of the array and the total size is checked for validity.
@@ -52,10 +54,8 @@ class VLASizeChecker
                                     const Expr *SizeE) const;
 
   void reportBug(VLASize_Kind Kind, const Expr *SizeE, ProgramStateRef State,
-                 CheckerContext &C) const;
-
-  void reportTaintBug(const Expr *SizeE, ProgramStateRef State,
-                      CheckerContext &C, SVal TaintedSVal) const;
+                 CheckerContext &C,
+                 std::unique_ptr<BugReporterVisitor> Visitor = nullptr) const;
 
 public:
   void checkPreStmt(const DeclStmt *DS, CheckerContext &C) const;
@@ -96,7 +96,7 @@ ProgramStateRef VLASizeChecker::checkVLA(CheckerContext &C,
   SValBuilder &SVB = C.getSValBuilder();
   CanQualType SizeTy = Ctx.getSizeType();
   uint64_t SizeMax =
-      SVB.getBasicValueFactory().getMaxValue(SizeTy)->getZExtValue();
+      SVB.getBasicValueFactory().getMaxValue(SizeTy).getZExtValue();
 
   // Get the element size.
   CharUnits EleSize = Ctx.getTypeSizeInChars(VLALast->getElementType());
@@ -164,6 +164,13 @@ ProgramStateRef VLASizeChecker::checkVLAIndexSize(CheckerContext &C,
   if (SizeV.isUnknown())
     return nullptr;
 
+  // Check if the size is tainted.
+  if (isTainted(State, SizeV)) {
+    reportBug(VLA_Tainted, SizeE, nullptr, C,
+              std::make_unique<TaintBugVisitor>(SizeV));
+    return nullptr;
+  }
+
   // Check if the size is zero.
   DefinedSVal SizeD = SizeV.castAs<DefinedSVal>();
 
@@ -184,12 +191,11 @@ ProgramStateRef VLASizeChecker::checkVLAIndexSize(CheckerContext &C,
   QualType SizeTy = SizeE->getType();
   DefinedOrUnknownSVal Zero = SVB.makeZeroVal(SizeTy);
 
-  SVal LessThanZeroVal =
-      SVB.evalBinOp(State, BO_LT, SizeD, Zero, SVB.getConditionType());
-  ProgramStateRef StatePos, StateNeg;
-  if (std::optional<DefinedSVal> LessThanZeroDVal =
+  SVal LessThanZeroVal = SVB.evalBinOp(State, BO_LT, SizeD, Zero, SizeTy);
+  if (Optional<DefinedSVal> LessThanZeroDVal =
           LessThanZeroVal.getAs<DefinedSVal>()) {
     ConstraintManager &CM = C.getConstraintManager();
+    ProgramStateRef StatePos, StateNeg;
 
     std::tie(StateNeg, StatePos) = CM.assumeDual(State, *LessThanZeroDVal);
     if (StateNeg && !StatePos) {
@@ -199,43 +205,20 @@ ProgramStateRef VLASizeChecker::checkVLAIndexSize(CheckerContext &C,
     State = StatePos;
   }
 
-  // Check if the size is tainted.
-  if ((StateNeg || StateZero) && isTainted(State, SizeV)) {
-    reportTaintBug(SizeE, State, C, SizeV);
-    return nullptr;
-  }
-
   return State;
 }
 
-void VLASizeChecker::reportTaintBug(const Expr *SizeE, ProgramStateRef State,
-                                    CheckerContext &C, SVal TaintedSVal) const {
+void VLASizeChecker::reportBug(
+    VLASize_Kind Kind, const Expr *SizeE, ProgramStateRef State,
+    CheckerContext &C, std::unique_ptr<BugReporterVisitor> Visitor) const {
   // Generate an error node.
   ExplodedNode *N = C.generateErrorNode(State);
   if (!N)
     return;
 
-  SmallString<256> buf;
-  llvm::raw_svector_ostream os(buf);
-  os << "Declared variable-length array (VLA) ";
-  os << "has tainted (attacker controlled) size that can be 0 or negative";
-
-  auto report = std::make_unique<PathSensitiveBugReport>(TaintBT, os.str(), N);
-  report->addRange(SizeE->getSourceRange());
-  bugreporter::trackExpressionValue(N, SizeE, *report);
-  // The vla size may be a complex expression where multiple memory locations
-  // are tainted.
-  for (auto Sym : getTaintedSymbols(State, TaintedSVal))
-    report->markInteresting(Sym);
-  C.emitReport(std::move(report));
-}
-
-void VLASizeChecker::reportBug(VLASize_Kind Kind, const Expr *SizeE,
-                               ProgramStateRef State, CheckerContext &C) const {
-  // Generate an error node.
-  ExplodedNode *N = C.generateErrorNode(State);
-  if (!N)
-    return;
+  if (!BT)
+    BT.reset(new BuiltinBug(
+        this, "Dangerous variable-length array (VLA) declaration"));
 
   SmallString<256> buf;
   llvm::raw_svector_ostream os(buf);
@@ -247,6 +230,9 @@ void VLASizeChecker::reportBug(VLASize_Kind Kind, const Expr *SizeE,
   case VLA_Zero:
     os << "has zero size";
     break;
+  case VLA_Tainted:
+    os << "has tainted size";
+    break;
   case VLA_Negative:
     os << "has negative size";
     break;
@@ -255,7 +241,8 @@ void VLASizeChecker::reportBug(VLASize_Kind Kind, const Expr *SizeE,
     break;
   }
 
-  auto report = std::make_unique<PathSensitiveBugReport>(BT, os.str(), N);
+  auto report = std::make_unique<PathSensitiveBugReport>(*BT, os.str(), N);
+  report->addVisitor(std::move(Visitor));
   report->addRange(SizeE->getSourceRange());
   bugreporter::trackExpressionValue(N, SizeE, *report);
   C.emitReport(std::move(report));
@@ -266,6 +253,7 @@ void VLASizeChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
     return;
 
   ASTContext &Ctx = C.getASTContext();
+  SValBuilder &SVB = C.getSValBuilder();
   ProgramStateRef State = C.getState();
   QualType TypeToCheck;
 
@@ -290,7 +278,8 @@ void VLASizeChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
   if (!State)
     return;
 
-  if (!isa<NonLoc>(ArraySize)) {
+  auto ArraySizeNL = ArraySize.getAs<NonLoc>();
+  if (!ArraySizeNL) {
     // Array size could not be determined but state may contain new assumptions.
     C.addTransition(State);
     return;
@@ -300,7 +289,7 @@ void VLASizeChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
   if (VD) {
     State =
         setDynamicExtent(State, State->getRegion(VD, C.getLocationContext()),
-                         ArraySize.castAs<NonLoc>());
+                         ArraySize.castAs<DefinedOrUnknownSVal>(), SVB);
   }
 
   // Remember our assumptions!

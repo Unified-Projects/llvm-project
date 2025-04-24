@@ -1,4 +1,4 @@
-; RUN: llc < %s -mtriple=avr | FileCheck %s
+; RUN: llc < %s -march=avr | FileCheck %s
 
 define i8 @count_population(i8) unnamed_addr {
 entry-block:
@@ -21,6 +21,7 @@ declare i8 @llvm.ctpop.i8(i8)
 ; CHECK: add    {{.*}}[[RESULT]], {{.*}}[[SCRATCH]]
 ; CHECK: mov    {{.*}}[[SCRATCH]], {{.*}}[[RESULT]]
 ; CHECK: swap   {{.*}}[[SCRATCH]]
-; CHECK: add    {{.*}}[[RESULT]], {{.*}}[[SCRATCH]]
-; CHECK: andi   {{.*}}[[RESULT]], 15
+; CHECK: add    {{.*}}[[SCRATCH]], {{.*}}[[RESULT]]
+; CHECK: andi   {{.*}}[[SCRATCH]], 15
+; CHECK: mov    {{.*}}[[RESULT]], {{.*}}[[SCRATCH]]
 ; CHECK: ret

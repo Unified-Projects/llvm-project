@@ -1,4 +1,4 @@
-; RUN: opt -S -passes=gvn-hoist < %s | FileCheck %s
+; RUN: opt -S -gvn-hoist < %s | FileCheck %s
 
 %struct.__jmp_buf_tag = type { [8 x i64], i32 }
 
@@ -17,19 +17,19 @@ entry:
   ]
 
 sw0:
-  store i32 1, ptr @G
+  store i32 1, i32* @G
   br label %exit
 
 sw1:
-  store i32 1, ptr @G
+  store i32 1, i32* @G
   br label %exit
 
 exit:
-  call void @longjmp(ptr @test_exit_buf, i32 1) #0
+  call void @longjmp(%struct.__jmp_buf_tag* @test_exit_buf, i32 1) #0
   unreachable
 }
 
-declare void @longjmp(ptr, i32) #0
+declare void @longjmp(%struct.__jmp_buf_tag*, i32) #0
 
 attributes #0 = { noreturn nounwind }
 
@@ -38,18 +38,18 @@ attributes #0 = { noreturn nounwind }
 ; CHECK: store
 ; CHECK-NOT: store
 
-define void @fun(i1 %arg) {
+define void @fun() {
 entry:
   br label %if.then
 
 if.then:                                          ; preds = %entry
-  br i1 %arg, label %sw0, label %sw1
+  br i1 undef, label %sw0, label %sw1
 
 sw0:
-  store i32 1, ptr @G
+  store i32 1, i32* @G
   unreachable
 
 sw1:
-  store i32 1, ptr @G
+  store i32 1, i32* @G
   ret void
 }

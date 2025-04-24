@@ -14,6 +14,7 @@
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/Support/Compiler.h"
+#include <cstdint>
 #include <vector>
 
 namespace llvm {
@@ -22,6 +23,7 @@ class BasicBlock;
 class MachineBranchProbabilityInfo;
 class MachineFunction;
 class MachineLoopInfo;
+class MachineModuleInfo;
 class MachineRegisterInfo;
 class MBFIWrapper;
 class ProfileSummaryInfo;
@@ -50,11 +52,10 @@ class TargetRegisterInfo;
     class MergePotentialsElt {
       unsigned Hash;
       MachineBasicBlock *Block;
-      DebugLoc BranchDebugLoc;
 
     public:
-      MergePotentialsElt(unsigned h, MachineBasicBlock *b, DebugLoc bdl)
-          : Hash(h), Block(b), BranchDebugLoc(std::move(bdl)) {}
+      MergePotentialsElt(unsigned h, MachineBasicBlock *b)
+        : Hash(h), Block(b) {}
 
       unsigned getHash() const { return Hash; }
       MachineBasicBlock *getBlock() const { return Block; }
@@ -62,8 +63,6 @@ class TargetRegisterInfo;
       void setBlock(MachineBasicBlock *MBB) {
         Block = MBB;
       }
-
-      const DebugLoc &getBranchDebugLoc() { return BranchDebugLoc; }
 
       bool operator<(const MergePotentialsElt &) const;
     };
@@ -116,15 +115,15 @@ class TargetRegisterInfo;
     };
     std::vector<SameTailElt> SameTails;
 
-    bool AfterBlockPlacement = false;
-    bool EnableTailMerge = false;
-    bool EnableHoistCommonCode = false;
-    bool UpdateLiveIns = false;
+    bool AfterBlockPlacement;
+    bool EnableTailMerge;
+    bool EnableHoistCommonCode;
+    bool UpdateLiveIns;
     unsigned MinCommonTailLength;
-    const TargetInstrInfo *TII = nullptr;
-    const MachineRegisterInfo *MRI = nullptr;
-    const TargetRegisterInfo *TRI = nullptr;
-    MachineLoopInfo *MLI = nullptr;
+    const TargetInstrInfo *TII;
+    const MachineRegisterInfo *MRI;
+    const TargetRegisterInfo *TRI;
+    MachineLoopInfo *MLI;
     LivePhysRegs LiveRegs;
 
   private:
@@ -165,9 +164,8 @@ class TargetRegisterInfo;
 
     /// Remove all blocks with hash CurHash from MergePotentials, restoring
     /// branches at ends of blocks as appropriate.
-    void RemoveBlocksWithHash(unsigned CurHash, MachineBasicBlock *SuccBB,
-                              MachineBasicBlock *PredBB,
-                              const DebugLoc &BranchDL);
+    void RemoveBlocksWithHash(unsigned CurHash, MachineBasicBlock* SuccBB,
+                                                MachineBasicBlock* PredBB);
 
     /// None of the blocks to be tail-merged consist only of the common tail.
     /// Create a block that does by splitting one.

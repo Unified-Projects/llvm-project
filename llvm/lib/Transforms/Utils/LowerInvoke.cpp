@@ -17,12 +17,14 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Utils.h"
 using namespace llvm;
 
-#define DEBUG_TYPE "lower-invoke"
+#define DEBUG_TYPE "lowerinvoke"
 
 STATISTIC(NumInvokes, "Number of invokes replaced");
 
@@ -52,7 +54,7 @@ static bool runImpl(Function &F) {
       // Insert a normal call instruction...
       CallInst *NewCall =
           CallInst::Create(II->getFunctionType(), II->getCalledOperand(),
-                           CallArgs, OpBundles, "", II->getIterator());
+                           CallArgs, OpBundles, "", II);
       NewCall->takeName(II);
       NewCall->setCallingConv(II->getCallingConv());
       NewCall->setAttributes(II->getAttributes());
@@ -60,13 +62,13 @@ static bool runImpl(Function &F) {
       II->replaceAllUsesWith(NewCall);
 
       // Insert an unconditional branch to the normal destination.
-      BranchInst::Create(II->getNormalDest(), II->getIterator());
+      BranchInst::Create(II->getNormalDest(), II);
 
       // Remove any PHI node entries from the exception destination.
       II->getUnwindDest()->removePredecessor(&BB);
 
       // Remove the invoke instruction now.
-      II->eraseFromParent();
+      BB.getInstList().erase(II);
 
       ++NumInvokes;
       Changed = true;

@@ -35,10 +35,6 @@ public:
   void DumpValue(const ExecutionContext *exe_ctx, Stream &strm,
                  uint32_t dump_mask) override;
 
-  llvm::json::Value ToJSON(const ExecutionContext *exe_ctx) override {
-    return m_current_value;
-  }
-
   Status
   SetValueFromString(llvm::StringRef value,
                      VarSetOperationType op = eVarSetOperationAssign) override;
@@ -86,8 +82,8 @@ public:
 protected:
   int64_t m_current_value = 0;
   int64_t m_default_value = 0;
-  int64_t m_min_value = std::numeric_limits<int64_t>::min();
-  int64_t m_max_value = std::numeric_limits<int64_t>::max();
+  int64_t m_min_value = INT64_MIN;
+  int64_t m_max_value = INT64_MAX;
 };
 
 } // namespace lldb_private

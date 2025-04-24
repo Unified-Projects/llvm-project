@@ -44,15 +44,13 @@ static bool isCaseSensitivePath(StringRef Path) {
   // sensitive in the absence of real_path, since this is the YAMLVFSWriter
   // default.
   UpperDest = Path.upper();
-  if (!sys::fs::real_path(UpperDest, RealDest) && Path == RealDest)
+  if (!sys::fs::real_path(UpperDest, RealDest) && Path.equals(RealDest))
     return false;
   return true;
 }
 
 FileCollector::FileCollector(std::string Root, std::string OverlayRoot)
-    : Root(Root), OverlayRoot(OverlayRoot) {
-  assert(sys::path::is_absolute(Root) && "Root not absolute");
-  assert(sys::path::is_absolute(OverlayRoot) && "OverlayRoot not absolute");
+    : Root(std::move(Root)), OverlayRoot(std::move(OverlayRoot)) {
 }
 
 void FileCollector::PathCanonicalizer::updateWithRealPath(
@@ -71,7 +69,7 @@ void FileCollector::PathCanonicalizer::updateWithRealPath(
     // cases? What if there is nothing on disk?
     if (sys::fs::real_path(Directory, RealPath))
       return;
-    CachedDirs[Directory] = std::string(RealPath);
+    CachedDirs[Directory] = std::string(RealPath.str());
   } else {
     RealPath = DirWithSymlink->second;
   }
@@ -281,7 +279,7 @@ public:
   }
 
   std::error_code getRealPath(const Twine &Path,
-                              SmallVectorImpl<char> &Output) override {
+                              SmallVectorImpl<char> &Output) const override {
     auto EC = FS->getRealPath(Path, Output);
     if (!EC) {
       Collector->addFile(Path);

@@ -15,12 +15,18 @@
 #include "GCNSubtarget.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/TargetSchedule.h"
-#include "llvm/Support/BranchProbability.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "si-pre-emit-peephole"
+
+static unsigned SkipThreshold;
+
+static cl::opt<unsigned, true> SkipThresholdFlag(
+    "amdgpu-skip-threshold", cl::Hidden,
+    cl::desc(
+        "Number of instructions before jumping over divergent control flow"),
+    cl::location(SkipThreshold), cl::init(12));
 
 namespace {
 
@@ -35,8 +41,7 @@ private:
                             MachineBasicBlock *&TrueMBB,
                             MachineBasicBlock *&FalseMBB,
                             SmallVectorImpl<MachineOperand> &Cond);
-  bool mustRetainExeczBranch(const MachineInstr &Branch,
-                             const MachineBasicBlock &From,
+  bool mustRetainExeczBranch(const MachineBasicBlock &From,
                              const MachineBasicBlock &To) const;
   bool removeExeczBranch(MachineInstr &MI, MachineBasicBlock &SrcMBB);
 
@@ -69,15 +74,6 @@ bool SIPreEmitPeephole::optimizeVccBranch(MachineInstr &MI) const {
   // We end up with this pattern sometimes after basic block placement.
   // It happens while combining a block which assigns -1 or 0 to a saved mask
   // and another block which consumes that saved mask and then a branch.
-  //
-  // While searching this also performs the following substitution:
-  // vcc = V_CMP
-  // vcc = S_AND exec, vcc
-  // S_CBRANCH_VCC[N]Z
-  // =>
-  // vcc = V_CMP
-  // S_CBRANCH_VCC[N]Z
-
   bool Changed = false;
   MachineBasicBlock &MBB = *MI.getParent();
   const GCNSubtarget &ST = MBB.getParent()->getSubtarget<GCNSubtarget>();
@@ -125,32 +121,19 @@ bool SIPreEmitPeephole::optimizeVccBranch(MachineInstr &MI) const {
     SReg = Op2.getReg();
     auto M = std::next(A);
     bool ReadsSreg = false;
-    bool ModifiesExec = false;
     for (; M != E; ++M) {
       if (M->definesRegister(SReg, TRI))
         break;
       if (M->modifiesRegister(SReg, TRI))
         return Changed;
       ReadsSreg |= M->readsRegister(SReg, TRI);
-      ModifiesExec |= M->modifiesRegister(ExecReg, TRI);
     }
-    if (M == E)
-      return Changed;
-    // If SReg is VCC and SReg definition is a VALU comparison.
-    // This means S_AND with EXEC is not required.
-    // Erase the S_AND and return.
-    // Note: isVOPC is used instead of isCompare to catch V_CMP_CLASS
-    if (A->getOpcode() == And && SReg == CondReg && !ModifiesExec &&
-        TII->isVOPC(*M)) {
-      A->eraseFromParent();
-      return true;
-    }
-    if (!M->isMoveImmediate() || !M->getOperand(1).isImm() ||
+    if (M == E || !M->isMoveImmediate() || !M->getOperand(1).isImm() ||
         (M->getOperand(1).getImm() != -1 && M->getOperand(1).getImm() != 0))
       return Changed;
     MaskValue = M->getOperand(1).getImm();
     // First if sreg is only used in the AND instruction fold the immediate
-    // into the AND.
+    // into into the AND.
     if (!ReadsSreg && Op2.isKill()) {
       A->getOperand(2).ChangeToImmediate(MaskValue);
       M->eraseFromParent();
@@ -166,7 +149,7 @@ bool SIPreEmitPeephole::optimizeVccBranch(MachineInstr &MI) const {
   if (A->getOpcode() == AndN2)
     MaskValue = ~MaskValue;
 
-  if (!ReadsCond && A->registerDefIsDead(AMDGPU::SCC, /*TRI=*/nullptr)) {
+  if (!ReadsCond && A->registerDefIsDead(AMDGPU::SCC)) {
     if (!MI.killsRegister(CondReg, TRI)) {
       // Replace AND with MOV
       if (MaskValue == 0) {
@@ -191,7 +174,7 @@ bool SIPreEmitPeephole::optimizeVccBranch(MachineInstr &MI) const {
     MI.setDesc(TII->get(AMDGPU::S_BRANCH));
   } else if (IsVCCZ && MaskValue == 0) {
     // Will always branch
-    // Remove all successors shadowed by new unconditional branch
+    // Remove all succesors shadowed by new unconditional branch
     MachineBasicBlock *Parent = MI.getParent();
     SmallVector<MachineInstr *, 4> ToRemove;
     bool Found = false;
@@ -204,7 +187,7 @@ bool SIPreEmitPeephole::optimizeVccBranch(MachineInstr &MI) const {
       }
     }
     assert(Found && "conditional branch is not terminator");
-    for (auto *BranchMI : ToRemove) {
+    for (auto BranchMI : ToRemove) {
       MachineOperand &Dst = BranchMI->getOperand(0);
       assert(Dst.isMBB() && "destination is not basic block");
       Parent->removeSuccessor(Dst.getMBB());
@@ -230,7 +213,7 @@ bool SIPreEmitPeephole::optimizeVccBranch(MachineInstr &MI) const {
         TII->get(IsVCCZ ? AMDGPU::S_CBRANCH_EXECZ : AMDGPU::S_CBRANCH_EXECNZ));
   }
 
-  MI.removeOperand(MI.findRegisterUseOperandIdx(CondReg, TRI, false /*Kill*/));
+  MI.RemoveOperand(MI.findRegisterUseOperandIdx(CondReg, false /*Kill*/, TRI));
   MI.addImplicitDefUseOperands(*MBB.getParent());
 
   return true;
@@ -274,8 +257,10 @@ bool SIPreEmitPeephole::optimizeSetGPR(MachineInstr &First,
                        })) {
         // The only exception allowed here is another indirect vector move
         // with the same mode.
-        if (!IdxOn || !(I->getOpcode() == AMDGPU::V_MOV_B32_indirect_write ||
-                        I->getOpcode() == AMDGPU::V_MOV_B32_indirect_read))
+        if (!IdxOn ||
+            !((I->getOpcode() == AMDGPU::V_MOV_B32_e32 &&
+               I->hasRegisterImplicitUseOperand(AMDGPU::M0)) ||
+              I->getOpcode() == AMDGPU::V_MOV_B32_indirect))
           return false;
       }
     }
@@ -299,95 +284,43 @@ bool SIPreEmitPeephole::getBlockDestinations(
   return true;
 }
 
-namespace {
-class BranchWeightCostModel {
-  const SIInstrInfo &TII;
-  const TargetSchedModel &SchedModel;
-  BranchProbability BranchProb;
-  static constexpr uint64_t BranchNotTakenCost = 1;
-  uint64_t BranchTakenCost;
-  uint64_t ThenCyclesCost = 0;
-
-public:
-  BranchWeightCostModel(const SIInstrInfo &TII, const MachineInstr &Branch,
-                        const MachineBasicBlock &Succ)
-      : TII(TII), SchedModel(TII.getSchedModel()) {
-    const MachineBasicBlock &Head = *Branch.getParent();
-    const auto *FromIt = find(Head.successors(), &Succ);
-    assert(FromIt != Head.succ_end());
-
-    BranchProb = Head.getSuccProbability(FromIt);
-    if (BranchProb.isUnknown())
-      BranchProb = BranchProbability::getZero();
-    BranchTakenCost = SchedModel.computeInstrLatency(&Branch);
-  }
-
-  bool isProfitable(const MachineInstr &MI) {
-    if (TII.isWaitcnt(MI.getOpcode()))
-      return false;
-
-    ThenCyclesCost += SchedModel.computeInstrLatency(&MI);
-
-    // Consider `P = N/D` to be the probability of execz being false (skipping
-    // the then-block) The transformation is profitable if always executing the
-    // 'then' block is cheaper than executing sometimes 'then' and always
-    // executing s_cbranch_execz:
-    // * ThenCost <= P*ThenCost + (1-P)*BranchTakenCost + P*BranchNotTakenCost
-    // * (1-P) * ThenCost <= (1-P)*BranchTakenCost + P*BranchNotTakenCost
-    // * (D-N)/D * ThenCost <= (D-N)/D * BranchTakenCost + N/D *
-    // BranchNotTakenCost
-    uint64_t Numerator = BranchProb.getNumerator();
-    uint64_t Denominator = BranchProb.getDenominator();
-    return (Denominator - Numerator) * ThenCyclesCost <=
-           ((Denominator - Numerator) * BranchTakenCost +
-            Numerator * BranchNotTakenCost);
-  }
-};
-
 bool SIPreEmitPeephole::mustRetainExeczBranch(
-    const MachineInstr &Branch, const MachineBasicBlock &From,
-    const MachineBasicBlock &To) const {
-  assert(is_contained(Branch.getParent()->successors(), &From));
-  BranchWeightCostModel CostModel{*TII, Branch, From};
-
+    const MachineBasicBlock &From, const MachineBasicBlock &To) const {
+  unsigned NumInstr = 0;
   const MachineFunction *MF = From.getParent();
+
   for (MachineFunction::const_iterator MBBI(&From), ToI(&To), End = MF->end();
        MBBI != End && MBBI != ToI; ++MBBI) {
     const MachineBasicBlock &MBB = *MBBI;
 
-    for (const MachineInstr &MI : MBB) {
+    for (MachineBasicBlock::const_iterator I = MBB.begin(), E = MBB.end();
+         I != E; ++I) {
       // When a uniform loop is inside non-uniform control flow, the branch
       // leaving the loop might never be taken when EXEC = 0.
       // Hence we should retain cbranch out of the loop lest it become infinite.
-      if (MI.isConditionalBranch())
+      if (I->isConditionalBranch())
         return true;
 
-      if (MI.isUnconditionalBranch() &&
-          TII->getBranchDestBlock(MI) != MBB.getNextNode())
+      if (TII->hasUnwantedEffectsWhenEXECEmpty(*I))
         return true;
 
-      if (MI.isMetaInstruction())
-        continue;
-
-      if (TII->hasUnwantedEffectsWhenEXECEmpty(MI))
+      // These instructions are potentially expensive even if EXEC = 0.
+      if (TII->isSMRD(*I) || TII->isVMEM(*I) || TII->isFLAT(*I) ||
+          TII->isDS(*I) || I->getOpcode() == AMDGPU::S_WAITCNT)
         return true;
 
-      if (!CostModel.isProfitable(MI))
+      ++NumInstr;
+      if (NumInstr >= SkipThreshold)
         return true;
     }
   }
 
   return false;
 }
-} // namespace
 
 // Returns true if the skip branch instruction is removed.
 bool SIPreEmitPeephole::removeExeczBranch(MachineInstr &MI,
                                           MachineBasicBlock &SrcMBB) {
-
-  if (!TII->getSchedModel().hasInstrSchedModel())
-    return false;
-
   MachineBasicBlock *TrueMBB = nullptr;
   MachineBasicBlock *FalseMBB = nullptr;
   SmallVector<MachineOperand, 1> Cond;
@@ -396,11 +329,8 @@ bool SIPreEmitPeephole::removeExeczBranch(MachineInstr &MI,
     return false;
 
   // Consider only the forward branches.
-  if (SrcMBB.getNumber() >= TrueMBB->getNumber())
-    return false;
-
-  // Consider only when it is legal and profitable
-  if (mustRetainExeczBranch(MI, *FalseMBB, *TrueMBB))
+  if ((SrcMBB.getNumber() >= TrueMBB->getNumber()) ||
+      mustRetainExeczBranch(*FalseMBB, *TrueMBB))
     return false;
 
   LLVM_DEBUG(dbgs() << "Removing the execz branch: " << MI);
@@ -445,7 +375,8 @@ bool SIPreEmitPeephole::runOnMachineFunction(MachineFunction &MF) {
     // and limit the distance to 20 instructions for compile time purposes.
     // Note: this needs to work on bundles as S_SET_GPR_IDX* instructions
     // may be bundled with the instructions they modify.
-    for (auto &MI : make_early_inc_range(MBB.instrs())) {
+    for (auto &MI :
+         make_early_inc_range(make_range(MBB.instr_begin(), MBB.instr_end()))) {
       if (Count == Threshold)
         SetGPRMI = nullptr;
       else

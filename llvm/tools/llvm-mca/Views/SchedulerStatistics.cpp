@@ -48,23 +48,23 @@ void SchedulerStatistics::onEvent(const HWInstructionEvent &Event) {
   } else if (Event.Type == HWInstructionEvent::Dispatched) {
     const Instruction &Inst = *Event.IR.getInstruction();
     const unsigned Index = Event.IR.getSourceIndex();
-    if (LQResourceID && Inst.getMayLoad() &&
+    if (LQResourceID && Inst.getDesc().MayLoad &&
         MostRecentLoadDispatched != Index) {
       Usage[LQResourceID].SlotsInUse++;
       MostRecentLoadDispatched = Index;
     }
-    if (SQResourceID && Inst.getMayStore() &&
+    if (SQResourceID && Inst.getDesc().MayStore &&
         MostRecentStoreDispatched != Index) {
       Usage[SQResourceID].SlotsInUse++;
       MostRecentStoreDispatched = Index;
     }
   } else if (Event.Type == HWInstructionEvent::Executed) {
     const Instruction &Inst = *Event.IR.getInstruction();
-    if (LQResourceID && Inst.getMayLoad()) {
+    if (LQResourceID && Inst.getDesc().MayLoad) {
       assert(Usage[LQResourceID].SlotsInUse);
       Usage[LQResourceID].SlotsInUse--;
     }
-    if (SQResourceID && Inst.getMayStore()) {
+    if (SQResourceID && Inst.getDesc().MayStore) {
       assert(Usage[SQResourceID].SlotsInUse);
       Usage[SQResourceID].SlotsInUse--;
     }
@@ -105,7 +105,8 @@ void SchedulerStatistics::printSchedulerStats(raw_ostream &OS) const {
   OS << "[# issued], [# cycles]\n";
 
   bool HasColors = OS.has_colors();
-  const auto It = llvm::max_element(IssueWidthPerCycle);
+  const auto It =
+      std::max_element(IssueWidthPerCycle.begin(), IssueWidthPerCycle.end());
   for (const std::pair<const unsigned, unsigned> &Entry : IssueWidthPerCycle) {
     unsigned NumIssued = Entry.first;
     if (NumIssued == It->first && HasColors)

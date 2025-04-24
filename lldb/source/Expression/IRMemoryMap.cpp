@@ -13,7 +13,6 @@
 #include "lldb/Utility/DataBufferHeap.h"
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/LLDBAssert.h"
-#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
@@ -84,7 +83,7 @@ lldb::addr_t IRMemoryMap::FindSpace(size_t size) {
   // any allocations.  Otherwise start at the beginning of memory.
 
   if (m_allocations.empty()) {
-    ret = 0;
+    ret = 0x0;
   } else {
     auto back = m_allocations.rbegin();
     lldb::addr_t addr = back->first;
@@ -92,42 +91,25 @@ lldb::addr_t IRMemoryMap::FindSpace(size_t size) {
     ret = llvm::alignTo(addr + alloc_size, 4096);
   }
 
-  uint64_t end_of_memory;
-  switch (GetAddressByteSize()) {
-  case 2:
-    end_of_memory = 0xffffull;
-    break;
-  case 4:
-    end_of_memory = 0xffffffffull;
-    break;
-  case 8:
-    end_of_memory = 0xffffffffffffffffull;
-    break;
-  default:
-    lldbassert(false && "Invalid address size.");
-    return LLDB_INVALID_ADDRESS;
-  }
-
   // Now, if it's possible to use the GetMemoryRegionInfo API to detect mapped
   // regions, walk forward through memory until a region is found that has
   // adequate space for our allocation.
   if (process_is_alive) {
+    const uint64_t end_of_memory = process_sp->GetAddressByteSize() == 8
+                                       ? 0xffffffffffffffffull
+                                       : 0xffffffffull;
+
+    lldbassert(process_sp->GetAddressByteSize() == 4 ||
+               end_of_memory != 0xffffffffull);
+
     MemoryRegionInfo region_info;
     Status err = process_sp->GetMemoryRegionInfo(ret, region_info);
     if (err.Success()) {
       while (true) {
-        if (region_info.GetRange().GetRangeBase() == 0 &&
-            region_info.GetRange().GetRangeEnd() < end_of_memory) {
-          // Don't use a region that starts at address 0,
-          // it can make it harder to debug null dereference crashes
-          // in the inferior.
-          ret = region_info.GetRange().GetRangeEnd();
-        } else if (region_info.GetReadable() !=
-                       MemoryRegionInfo::OptionalBool::eNo ||
-                   region_info.GetWritable() !=
-                       MemoryRegionInfo::OptionalBool::eNo ||
-                   region_info.GetExecutable() !=
-                       MemoryRegionInfo::OptionalBool::eNo) {
+        if (region_info.GetReadable() != MemoryRegionInfo::OptionalBool::eNo ||
+            region_info.GetWritable() != MemoryRegionInfo::OptionalBool::eNo ||
+            region_info.GetExecutable() !=
+                MemoryRegionInfo::OptionalBool::eNo) {
           if (region_info.GetRange().GetRangeEnd() - 1 >= end_of_memory) {
             ret = LLDB_INVALID_ADDRESS;
             break;
@@ -154,42 +136,26 @@ lldb::addr_t IRMemoryMap::FindSpace(size_t size) {
   // We've tried our algorithm, and it didn't work.  Now we have to reset back
   // to the end of the allocations we've already reported, or use a 'sensible'
   // default if this is our first allocation.
+
   if (m_allocations.empty()) {
-    uint64_t alloc_address = target_sp->GetExprAllocAddress();
-    if (alloc_address > 0) {
-      if (alloc_address >= end_of_memory) {
-        lldbassert(0 && "The allocation address for expression evaluation must "
-                        "be within process address space");
-        return LLDB_INVALID_ADDRESS;
-      }
-      ret = alloc_address;
-    } else {
-      uint32_t address_byte_size = GetAddressByteSize();
-      if (address_byte_size != UINT32_MAX) {
-        switch (address_byte_size) {
-        case 2:
-          ret = 0x8000ull;
-          break;
-        case 4:
-          ret = 0xee000000ull;
-          break;
-        case 8:
-          ret = 0xdead0fff00000000ull;
-          break;
-        default:
-          lldbassert(false && "Invalid address size.");
-          return LLDB_INVALID_ADDRESS;
-        }
+    uint32_t address_byte_size = GetAddressByteSize();
+    if (address_byte_size != UINT32_MAX) {
+      switch (address_byte_size) {
+      case 8:
+        ret = 0xffffffff00000000ull;
+        break;
+      case 4:
+        ret = 0xee000000ull;
+        break;
+      default:
+        break;
       }
     }
   } else {
     auto back = m_allocations.rbegin();
     lldb::addr_t addr = back->first;
     size_t alloc_size = back->second.m_size;
-    uint64_t align = target_sp->GetExprAllocAlign();
-    if (align == 0)
-      align = 4096;
-    ret = llvm::alignTo(addr + alloc_size, align);
+    ret = llvm::alignTo(addr + alloc_size, 4096);
   }
 
   return ret;
@@ -322,7 +288,8 @@ IRMemoryMap::Allocation::Allocation(lldb::addr_t process_alloc,
 lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
                                  uint32_t permissions, AllocationPolicy policy,
                                  bool zero_memory, Status &error) {
-  lldb_private::Log *log(GetLog(LLDBLog::Expressions));
+  lldb_private::Log *log(
+      lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
   error.Clear();
 
   lldb::ProcessSP process_sp;
@@ -347,13 +314,14 @@ lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
 
   switch (policy) {
   default:
-    error =
-        Status::FromErrorString("Couldn't malloc: invalid allocation policy");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't malloc: invalid allocation policy");
     return LLDB_INVALID_ADDRESS;
   case eAllocationPolicyHostOnly:
     allocation_address = FindSpace(allocation_size);
     if (allocation_address == LLDB_INVALID_ADDRESS) {
-      error = Status::FromErrorString("Couldn't malloc: address space is full");
+      error.SetErrorToGenericError();
+      error.SetErrorString("Couldn't malloc: address space is full");
       return LLDB_INVALID_ADDRESS;
     }
     break;
@@ -383,8 +351,8 @@ lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
       policy = eAllocationPolicyHostOnly;
       allocation_address = FindSpace(allocation_size);
       if (allocation_address == LLDB_INVALID_ADDRESS) {
-        error =
-            Status::FromErrorString("Couldn't malloc: address space is full");
+        error.SetErrorToGenericError();
+        error.SetErrorString("Couldn't malloc: address space is full");
         return LLDB_INVALID_ADDRESS;
       }
     }
@@ -403,14 +371,15 @@ lldb::addr_t IRMemoryMap::Malloc(size_t size, uint8_t alignment,
         if (!error.Success())
           return LLDB_INVALID_ADDRESS;
       } else {
-        error = Status::FromErrorString(
+        error.SetErrorToGenericError();
+        error.SetErrorString(
             "Couldn't malloc: process doesn't support allocating memory");
         return LLDB_INVALID_ADDRESS;
       }
     } else {
-      error = Status::FromErrorString(
-          "Couldn't malloc: process doesn't exist, and this "
-          "memory must be in the process");
+      error.SetErrorToGenericError();
+      error.SetErrorString("Couldn't malloc: process doesn't exist, and this "
+                           "memory must be in the process");
       return LLDB_INVALID_ADDRESS;
     }
     break;
@@ -464,7 +433,8 @@ void IRMemoryMap::Leak(lldb::addr_t process_address, Status &error) {
   AllocationMap::iterator iter = m_allocations.find(process_address);
 
   if (iter == m_allocations.end()) {
-    error = Status::FromErrorString("Couldn't leak: allocation doesn't exist");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't leak: allocation doesn't exist");
     return;
   }
 
@@ -479,7 +449,8 @@ void IRMemoryMap::Free(lldb::addr_t process_address, Status &error) {
   AllocationMap::iterator iter = m_allocations.find(process_address);
 
   if (iter == m_allocations.end()) {
-    error = Status::FromErrorString("Couldn't free: allocation doesn't exist");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't free: allocation doesn't exist");
     return;
   }
 
@@ -505,7 +476,8 @@ void IRMemoryMap::Free(lldb::addr_t process_address, Status &error) {
   }
   }
 
-  if (lldb_private::Log *log = GetLog(LLDBLog::Expressions)) {
+  if (lldb_private::Log *log =
+          lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS)) {
     LLDB_LOGF(log,
               "IRMemoryMap::Free (0x%" PRIx64 ") freed [0x%" PRIx64
               "..0x%" PRIx64 ")",
@@ -553,9 +525,9 @@ void IRMemoryMap::WriteMemory(lldb::addr_t process_address,
       return;
     }
 
-    error = Status::FromErrorString(
-        "Couldn't write: no allocation contains the target "
-        "range and the process doesn't exist");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't write: no allocation contains the target "
+                         "range and the process doesn't exist");
     return;
   }
 
@@ -567,19 +539,21 @@ void IRMemoryMap::WriteMemory(lldb::addr_t process_address,
 
   switch (allocation.m_policy) {
   default:
-    error =
-        Status::FromErrorString("Couldn't write: invalid allocation policy");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't write: invalid allocation policy");
     return;
   case eAllocationPolicyHostOnly:
     if (!allocation.m_data.GetByteSize()) {
-      error = Status::FromErrorString("Couldn't write: data buffer is empty");
+      error.SetErrorToGenericError();
+      error.SetErrorString("Couldn't write: data buffer is empty");
       return;
     }
     ::memcpy(allocation.m_data.GetBytes() + offset, bytes, size);
     break;
   case eAllocationPolicyMirror:
     if (!allocation.m_data.GetByteSize()) {
-      error = Status::FromErrorString("Couldn't write: data buffer is empty");
+      error.SetErrorToGenericError();
+      error.SetErrorString("Couldn't write: data buffer is empty");
       return;
     }
     ::memcpy(allocation.m_data.GetBytes() + offset, bytes, size);
@@ -600,7 +574,8 @@ void IRMemoryMap::WriteMemory(lldb::addr_t process_address,
     break;
   }
 
-  if (lldb_private::Log *log = GetLog(LLDBLog::Expressions)) {
+  if (lldb_private::Log *log =
+          lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS)) {
     LLDB_LOGF(log,
               "IRMemoryMap::WriteMemory (0x%" PRIx64 ", 0x%" PRIxPTR
               ", 0x%" PRId64 ") went to [0x%" PRIx64 "..0x%" PRIx64 ")",
@@ -626,12 +601,15 @@ void IRMemoryMap::WriteScalarToMemory(lldb::addr_t process_address,
     if (mem_size > 0) {
       return WriteMemory(process_address, buf, mem_size, error);
     } else {
-      error = Status::FromErrorString(
+      error.SetErrorToGenericError();
+      error.SetErrorString(
           "Couldn't write scalar: failed to get scalar as memory data");
     }
   } else {
-    error = Status::FromErrorString("Couldn't write scalar: its size was zero");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't write scalar: its size was zero");
   }
+  return;
 }
 
 void IRMemoryMap::WritePointerToMemory(lldb::addr_t process_address,
@@ -665,9 +643,9 @@ void IRMemoryMap::ReadMemory(uint8_t *bytes, lldb::addr_t process_address,
       return;
     }
 
-    error = Status::FromErrorString(
-        "Couldn't read: no allocation contains the target "
-        "range, and neither the process nor the target exist");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't read: no allocation contains the target "
+                         "range, and neither the process nor the target exist");
     return;
   }
 
@@ -676,8 +654,8 @@ void IRMemoryMap::ReadMemory(uint8_t *bytes, lldb::addr_t process_address,
   uint64_t offset = process_address - allocation.m_process_start;
 
   if (offset > allocation.m_size) {
-    error =
-        Status::FromErrorString("Couldn't read: data is not in the allocation");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't read: data is not in the allocation");
     return;
   }
 
@@ -685,16 +663,18 @@ void IRMemoryMap::ReadMemory(uint8_t *bytes, lldb::addr_t process_address,
 
   switch (allocation.m_policy) {
   default:
-    error = Status::FromErrorString("Couldn't read: invalid allocation policy");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't read: invalid allocation policy");
     return;
   case eAllocationPolicyHostOnly:
     if (!allocation.m_data.GetByteSize()) {
-      error = Status::FromErrorString("Couldn't read: data buffer is empty");
+      error.SetErrorToGenericError();
+      error.SetErrorString("Couldn't read: data buffer is empty");
       return;
     }
     if (allocation.m_data.GetByteSize() < offset + size) {
-      error =
-          Status::FromErrorString("Couldn't read: not enough underlying data");
+      error.SetErrorToGenericError();
+      error.SetErrorString("Couldn't read: not enough underlying data");
       return;
     }
 
@@ -708,7 +688,8 @@ void IRMemoryMap::ReadMemory(uint8_t *bytes, lldb::addr_t process_address,
         return;
     } else {
       if (!allocation.m_data.GetByteSize()) {
-        error = Status::FromErrorString("Couldn't read: data buffer is empty");
+        error.SetErrorToGenericError();
+        error.SetErrorString("Couldn't read: data buffer is empty");
         return;
       }
       ::memcpy(bytes, allocation.m_data.GetBytes() + offset, size);
@@ -724,7 +705,8 @@ void IRMemoryMap::ReadMemory(uint8_t *bytes, lldb::addr_t process_address,
     break;
   }
 
-  if (lldb_private::Log *log = GetLog(LLDBLog::Expressions)) {
+  if (lldb_private::Log *log =
+          lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS)) {
     LLDB_LOGF(log,
               "IRMemoryMap::ReadMemory (0x%" PRIx64 ", 0x%" PRIxPTR
               ", 0x%" PRId64 ") came from [0x%" PRIx64 "..0x%" PRIx64 ")",
@@ -754,7 +736,8 @@ void IRMemoryMap::ReadScalarFromMemory(Scalar &scalar,
 
     switch (size) {
     default:
-      error = Status::FromErrorStringWithFormat(
+      error.SetErrorToGenericError();
+      error.SetErrorStringWithFormat(
           "Couldn't read scalar: unsupported size %" PRIu64, (uint64_t)size);
       return;
     case 1:
@@ -771,8 +754,10 @@ void IRMemoryMap::ReadScalarFromMemory(Scalar &scalar,
       break;
     }
   } else {
-    error = Status::FromErrorString("Couldn't read scalar: its size was zero");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't read scalar: its size was zero");
   }
+  return;
 }
 
 void IRMemoryMap::ReadPointerFromMemory(lldb::addr_t *address,
@@ -788,6 +773,8 @@ void IRMemoryMap::ReadPointerFromMemory(lldb::addr_t *address,
     return;
 
   *address = pointer_scalar.ULongLong();
+
+  return;
 }
 
 void IRMemoryMap::GetMemoryData(DataExtractor &extractor,
@@ -799,7 +786,8 @@ void IRMemoryMap::GetMemoryData(DataExtractor &extractor,
     AllocationMap::iterator iter = FindAllocation(process_address, size);
 
     if (iter == m_allocations.end()) {
-      error = Status::FromErrorStringWithFormat(
+      error.SetErrorToGenericError();
+      error.SetErrorStringWithFormat(
           "Couldn't find an allocation containing [0x%" PRIx64 "..0x%" PRIx64
           ")",
           process_address, process_address + size);
@@ -810,19 +798,21 @@ void IRMemoryMap::GetMemoryData(DataExtractor &extractor,
 
     switch (allocation.m_policy) {
     default:
-      error = Status::FromErrorString(
+      error.SetErrorToGenericError();
+      error.SetErrorString(
           "Couldn't get memory data: invalid allocation policy");
       return;
     case eAllocationPolicyProcessOnly:
-      error = Status::FromErrorString(
+      error.SetErrorToGenericError();
+      error.SetErrorString(
           "Couldn't get memory data: memory is only in the target");
       return;
     case eAllocationPolicyMirror: {
       lldb::ProcessSP process_sp = m_process_wp.lock();
 
       if (!allocation.m_data.GetByteSize()) {
-        error = Status::FromErrorString(
-            "Couldn't get memory data: data buffer is empty");
+        error.SetErrorToGenericError();
+        error.SetErrorString("Couldn't get memory data: data buffer is empty");
         return;
       }
       if (process_sp) {
@@ -839,8 +829,8 @@ void IRMemoryMap::GetMemoryData(DataExtractor &extractor,
     } break;
     case eAllocationPolicyHostOnly:
       if (!allocation.m_data.GetByteSize()) {
-        error = Status::FromErrorString(
-            "Couldn't get memory data: data buffer is empty");
+        error.SetErrorToGenericError();
+        error.SetErrorString("Couldn't get memory data: data buffer is empty");
         return;
       }
       uint64_t offset = process_address - allocation.m_process_start;
@@ -849,8 +839,8 @@ void IRMemoryMap::GetMemoryData(DataExtractor &extractor,
       return;
     }
   } else {
-    error =
-        Status::FromErrorString("Couldn't get memory data: its size was zero");
+    error.SetErrorToGenericError();
+    error.SetErrorString("Couldn't get memory data: its size was zero");
     return;
   }
 }

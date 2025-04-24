@@ -13,6 +13,7 @@
 
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/Config/config.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Process.h"
 
 namespace llvm {
@@ -100,7 +101,7 @@ uint8_t *SectionMemoryManager::allocateSection(
   // FIXME: Initialize the Near member for each memory group to avoid
   // interleaving.
   std::error_code ec;
-  sys::MemoryBlock MB = MMapper->allocateMappedMemory(
+  sys::MemoryBlock MB = MMapper.allocateMappedMemory(
       Purpose, RequiredSize, &MemGroup.Near,
       sys::Memory::MF_READ | sys::Memory::MF_WRITE, ec);
   if (ec) {
@@ -113,11 +114,11 @@ uint8_t *SectionMemoryManager::allocateSection(
 
   // Copy the address to all the other groups, if they have not
   // been initialized.
-  if (CodeMem.Near.base() == nullptr)
+  if (CodeMem.Near.base() == 0)
     CodeMem.Near = MB;
-  if (RODataMem.Near.base() == nullptr)
+  if (RODataMem.Near.base() == 0)
     RODataMem.Near = MB;
-  if (RWDataMem.Near.base() == nullptr)
+  if (RWDataMem.Near.base() == 0)
     RWDataMem.Near = MB;
 
   // Remember that we allocated this memory
@@ -203,7 +204,7 @@ std::error_code
 SectionMemoryManager::applyMemoryGroupPermissions(MemoryGroup &MemGroup,
                                                   unsigned Permissions) {
   for (sys::MemoryBlock &MB : MemGroup.PendingMem)
-    if (std::error_code EC = MMapper->protectMappedMemory(MB, Permissions))
+    if (std::error_code EC = MMapper.protectMappedMemory(MB, Permissions))
       return EC;
 
   MemGroup.PendingMem.clear();
@@ -233,11 +234,11 @@ void SectionMemoryManager::invalidateInstructionCache() {
 SectionMemoryManager::~SectionMemoryManager() {
   for (MemoryGroup *Group : {&CodeMem, &RWDataMem, &RODataMem}) {
     for (sys::MemoryBlock &Block : Group->AllocatedMem)
-      MMapper->releaseMappedMemory(Block);
+      MMapper.releaseMappedMemory(Block);
   }
 }
 
-SectionMemoryManager::MemoryMapper::~MemoryMapper() = default;
+SectionMemoryManager::MemoryMapper::~MemoryMapper() {}
 
 void SectionMemoryManager::anchor() {}
 
@@ -262,14 +263,11 @@ public:
     return sys::Memory::releaseMappedMemory(M);
   }
 };
+
+DefaultMMapper DefaultMMapperInstance;
 } // namespace
 
-SectionMemoryManager::SectionMemoryManager(MemoryMapper *UnownedMM)
-    : MMapper(UnownedMM), OwnedMMapper(nullptr) {
-  if (!MMapper) {
-    OwnedMMapper = std::make_unique<DefaultMMapper>();
-    MMapper = OwnedMMapper.get();
-  }
-}
+SectionMemoryManager::SectionMemoryManager(MemoryMapper *MM)
+    : MMapper(MM ? *MM : DefaultMMapperInstance) {}
 
 } // namespace llvm

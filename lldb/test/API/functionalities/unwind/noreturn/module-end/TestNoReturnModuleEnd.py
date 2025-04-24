@@ -4,6 +4,7 @@ be at the end of the stack.
 """
 
 
+
 import lldb
 from lldbsuite.test.decorators import *
 from lldbsuite.test.lldbtest import *
@@ -12,6 +13,7 @@ from lldbsuite.test import lldbutil
 
 class TestNoreturnModuleEnd(TestBase):
     NO_DEBUG_INFO_TESTCASE = True
+    mydir = TestBase.compute_mydir(__file__)
 
     @skipIfLLVMTargetMissing("X86")
     def test(self):
@@ -36,6 +38,6 @@ class TestNoreturnModuleEnd(TestBase):
             self.assertTrue(symbol.IsValid())
             self.assertEqual(symbol.GetName(), backtrace[i][0])
             function_start = symbol.GetStartAddress().GetLoadAddress(target)
-            self.assertEqual(function_start + backtrace[i][1], frame.GetPC())
+            self.assertEquals(function_start + backtrace[i][1], frame.GetPC())
 
         self.dbg.DeleteTarget(target)

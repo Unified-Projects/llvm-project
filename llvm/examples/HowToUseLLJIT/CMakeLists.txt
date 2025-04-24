@@ -7,6 +7,4 @@ set(LLVM_LINK_COMPONENTS
 
 add_llvm_example(HowToUseLLJIT
   HowToUseLLJIT.cpp
-
-  EXPORT_SYMBOLS
   )

@@ -13,11 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/LoopUnrollAnalyzer.h"
-#include "llvm/Analysis/ConstantFolding.h"
-#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/ScalarEvolutionExpressions.h"
-#include "llvm/IR/Operator.h"
 
 using namespace llvm;
 
@@ -59,13 +55,13 @@ bool UnrolledInstAnalyzer::simplifyInstWithSCEV(Instruction *I) {
   auto *Base = dyn_cast<SCEVUnknown>(SE.getPointerBase(S));
   if (!Base)
     return false;
-  std::optional<APInt> Offset =
-      SE.computeConstantDifference(ValueAtIteration, Base);
+  auto *Offset =
+      dyn_cast<SCEVConstant>(SE.getMinusSCEV(ValueAtIteration, Base));
   if (!Offset)
     return false;
   SimplifiedAddress Address;
   Address.Base = Base->getValue();
-  Address.Offset = *Offset;
+  Address.Offset = Offset->getValue();
   SimplifiedAddresses[I] = Address;
   return false;
 }
@@ -85,12 +81,12 @@ bool UnrolledInstAnalyzer::visitBinaryOperator(BinaryOperator &I) {
       RHS = SimpleRHS;
 
   Value *SimpleV = nullptr;
-  const DataLayout &DL = I.getDataLayout();
+  const DataLayout &DL = I.getModule()->getDataLayout();
   if (auto FI = dyn_cast<FPMathOperator>(&I))
     SimpleV =
-        simplifyBinOp(I.getOpcode(), LHS, RHS, FI->getFastMathFlags(), DL);
+        SimplifyBinOp(I.getOpcode(), LHS, RHS, FI->getFastMathFlags(), DL);
   else
-    SimpleV = simplifyBinOp(I.getOpcode(), LHS, RHS, DL);
+    SimpleV = SimplifyBinOp(I.getOpcode(), LHS, RHS, DL);
 
   if (SimpleV) {
     SimplifiedValues[&I] = SimpleV;
@@ -106,6 +102,7 @@ bool UnrolledInstAnalyzer::visitLoad(LoadInst &I) {
   auto AddressIt = SimplifiedAddresses.find(AddrOp);
   if (AddressIt == SimplifiedAddresses.end())
     return false;
+  ConstantInt *SimplifiedAddrOp = AddressIt->second.Offset;
 
   auto *GV = dyn_cast<GlobalVariable>(AddressIt->second.Base);
   // We're only interested in loads that can be completely folded to a
@@ -113,13 +110,37 @@ bool UnrolledInstAnalyzer::visitLoad(LoadInst &I) {
   if (!GV || !GV->hasDefinitiveInitializer() || !GV->isConstant())
     return false;
 
-  Constant *Res =
-      ConstantFoldLoadFromConst(GV->getInitializer(), I.getType(),
-                                AddressIt->second.Offset, I.getDataLayout());
-  if (!Res)
+  ConstantDataSequential *CDS =
+      dyn_cast<ConstantDataSequential>(GV->getInitializer());
+  if (!CDS)
     return false;
 
-  SimplifiedValues[&I] = Res;
+  // We might have a vector load from an array. FIXME: for now we just bail
+  // out in this case, but we should be able to resolve and simplify such
+  // loads.
+  if (CDS->getElementType() != I.getType())
+    return false;
+
+  unsigned ElemSize = CDS->getElementType()->getPrimitiveSizeInBits() / 8U;
+  if (SimplifiedAddrOp->getValue().getActiveBits() > 64)
+    return false;
+  int64_t SimplifiedAddrOpV = SimplifiedAddrOp->getSExtValue();
+  if (SimplifiedAddrOpV < 0) {
+    // FIXME: For now we conservatively ignore out of bound accesses, but
+    // we're allowed to perform the optimization in this case.
+    return false;
+  }
+  uint64_t Index = static_cast<uint64_t>(SimplifiedAddrOpV) / ElemSize;
+  if (Index >= CDS->getNumElements()) {
+    // FIXME: For now we conservatively ignore out of bound accesses, but
+    // we're allowed to perform the optimization in this case.
+    return false;
+  }
+
+  Constant *CV = CDS->getElementAsConstant(Index);
+  assert(CV && "Constant expected.");
+  SimplifiedValues[&I] = CV;
+
   return true;
 }
 
@@ -133,8 +154,8 @@ bool UnrolledInstAnalyzer::visitCastInst(CastInst &I) {
   // analysis, which operates on integers (and, e.g., might convert i8* null to
   // i32 0).
   if (CastInst::castIsValid(I.getOpcode(), Op, I.getType())) {
-    const DataLayout &DL = I.getDataLayout();
-    if (Value *V = simplifyCastInst(I.getOpcode(), Op, I.getType(), DL)) {
+    const DataLayout &DL = I.getModule()->getDataLayout();
+    if (Value *V = SimplifyCastInst(I.getOpcode(), Op, I.getType(), DL)) {
       SimplifiedValues[&I] = V;
       return true;
     }
@@ -155,7 +176,7 @@ bool UnrolledInstAnalyzer::visitCmpInst(CmpInst &I) {
     if (Value *SimpleRHS = SimplifiedValues.lookup(RHS))
       RHS = SimpleRHS;
 
-  if (!isa<Constant>(LHS) && !isa<Constant>(RHS) && !I.isSigned()) {
+  if (!isa<Constant>(LHS) && !isa<Constant>(RHS)) {
     auto SimplifiedLHS = SimplifiedAddresses.find(LHS);
     if (SimplifiedLHS != SimplifiedAddresses.end()) {
       auto SimplifiedRHS = SimplifiedAddresses.find(RHS);
@@ -163,22 +184,15 @@ bool UnrolledInstAnalyzer::visitCmpInst(CmpInst &I) {
         SimplifiedAddress &LHSAddr = SimplifiedLHS->second;
         SimplifiedAddress &RHSAddr = SimplifiedRHS->second;
         if (LHSAddr.Base == RHSAddr.Base) {
-          // FIXME: This is only correct for equality predicates. For
-          // unsigned predicates, this only holds if we have nowrap flags,
-          // which we don't track (for nuw it's valid as-is, for nusw it
-          // requires converting the predicated to signed). As this is used only
-          // for cost modelling, this is not a correctness issue.
-          bool Res = ICmpInst::compare(LHSAddr.Offset, RHSAddr.Offset,
-                                       I.getPredicate());
-          SimplifiedValues[&I] = ConstantInt::getBool(I.getType(), Res);
-          return true;
+          LHS = LHSAddr.Offset;
+          RHS = RHSAddr.Offset;
         }
       }
     }
   }
 
-  const DataLayout &DL = I.getDataLayout();
-  if (Value *V = simplifyCmpInst(I.getPredicate(), LHS, RHS, DL)) {
+  const DataLayout &DL = I.getModule()->getDataLayout();
+  if (Value *V = SimplifyCmpInst(I.getPredicate(), LHS, RHS, DL)) {
     SimplifiedValues[&I] = V;
     return true;
   }

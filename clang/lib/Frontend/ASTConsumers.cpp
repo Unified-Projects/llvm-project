@@ -57,11 +57,8 @@ namespace {
         bool ShowColors = Out.has_colors();
         if (ShowColors)
           Out.changeColor(raw_ostream::BLUE);
-
-        if (OutputFormat == ADOF_Default)
-          Out << (OutputKind != Print ? "Dumping " : "Printing ") << getName(D)
-              << ":\n";
-
+        Out << (OutputKind != Print ? "Dumping " : "Printing ") << getName(D)
+            << ":\n";
         if (ShowColors)
           Out.resetColor();
         print(D);
@@ -101,8 +98,7 @@ namespace {
       if (DumpDeclTypes) {
         Decl *InnerD = D;
         if (auto *TD = dyn_cast<TemplateDecl>(D))
-          if (Decl *TempD = TD->getTemplatedDecl())
-            InnerD = TempD;
+          InnerD = TD->getTemplatedDecl();
 
         // FIXME: Support OutputFormat in type dumping.
         // FIXME: Support combining -ast-dump-decl-types with -ast-dump-lookups.
@@ -184,20 +180,21 @@ std::unique_ptr<ASTConsumer> clang::CreateASTDeclNodeLister() {
 /// ASTViewer - AST Visualization
 
 namespace {
-class ASTViewer : public ASTConsumer {
-  ASTContext *Context = nullptr;
+  class ASTViewer : public ASTConsumer {
+    ASTContext *Context;
+  public:
+    void Initialize(ASTContext &Context) override {
+      this->Context = &Context;
+    }
 
-public:
-  void Initialize(ASTContext &Context) override { this->Context = &Context; }
+    bool HandleTopLevelDecl(DeclGroupRef D) override {
+      for (DeclGroupRef::iterator I = D.begin(), E = D.end(); I != E; ++I)
+        HandleTopLevelSingleDecl(*I);
+      return true;
+    }
 
-  bool HandleTopLevelDecl(DeclGroupRef D) override {
-    for (DeclGroupRef::iterator I = D.begin(), E = D.end(); I != E; ++I)
-      HandleTopLevelSingleDecl(*I);
-    return true;
-  }
-
-  void HandleTopLevelSingleDecl(Decl *D);
-};
+    void HandleTopLevelSingleDecl(Decl *D);
+  };
 }
 
 void ASTViewer::HandleTopLevelSingleDecl(Decl *D) {

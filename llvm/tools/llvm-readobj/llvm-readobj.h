@@ -9,13 +9,11 @@
 #ifndef LLVM_TOOLS_LLVM_READOBJ_LLVM_READOBJ_H
 #define LLVM_TOOLS_LLVM_READOBJ_LLVM_READOBJ_H
 
-#include "ObjDumper.h"
-
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/Error.h"
+#include <string>
 
 namespace llvm {
   namespace object {
@@ -23,7 +21,7 @@ namespace llvm {
   }
 
   // Various helper functions.
-  [[noreturn]] void reportError(Error Err, StringRef Input);
+  LLVM_ATTRIBUTE_NORETURN void reportError(Error Err, StringRef Input); 
   void reportWarning(Error Err, StringRef Input);
 
   template <class T> T unwrapOrError(StringRef Input, Expected<T> EO) {
@@ -38,9 +36,10 @@ extern bool SectionRelocations;
 extern bool SectionSymbols;
 extern bool SectionData;
 extern bool ExpandRelocs;
+extern bool RawRelr;
 extern bool CodeViewSubsectionBytes;
 extern bool Demangle;
-enum OutputStyleTy { LLVM, GNU, JSON, UNKNOWN };
+enum OutputStyleTy { LLVM, GNU };
 extern OutputStyleTy Output;
 } // namespace opts
 
@@ -48,6 +47,6 @@ extern OutputStyleTy Output;
   { #enum, ns::enum }
 
 #define LLVM_READOBJ_ENUM_CLASS_ENT(enum_class, enum) \
-  { #enum, std::underlying_type_t<enum_class>(enum_class::enum) }
+  { #enum, std::underlying_type<enum_class>::type(enum_class::enum) }
 
 #endif

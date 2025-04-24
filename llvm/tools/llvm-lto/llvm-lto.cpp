@@ -46,12 +46,12 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/WithColor.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <list>
 #include <map>
 #include <memory>
 #include <string>
@@ -70,7 +70,7 @@ static cl::opt<char>
     OptLevel("O",
              cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
                       "(default = '-O2')"),
-             cl::Prefix, cl::init('2'), cl::cat(LTOCategory));
+             cl::Prefix, cl::ZeroOrMore, cl::init('2'), cl::cat(LTOCategory));
 
 static cl::opt<bool>
     IndexStats("thinlto-index-stats",
@@ -209,12 +209,12 @@ static cl::opt<std::string> OutputFilename("o", cl::init(""),
 static cl::list<std::string> ExportedSymbols(
     "exported-symbol",
     cl::desc("List of symbols to export from the resulting object file"),
-    cl::cat(LTOCategory));
+    cl::ZeroOrMore, cl::cat(LTOCategory));
 
 static cl::list<std::string>
     DSOSymbols("dso-symbol",
                cl::desc("Symbol to put in the symtab in the resulting dso"),
-               cl::cat(LTOCategory));
+               cl::ZeroOrMore, cl::cat(LTOCategory));
 
 static cl::opt<bool> ListSymbolsOnly(
     "list-symbols-only", cl::init(false),
@@ -226,10 +226,6 @@ static cl::opt<bool> ListDependentLibrariesOnly(
     cl::desc(
         "Instead of running LTO, list the dependent libraries in each IR file"),
     cl::cat(LTOCategory));
-
-static cl::opt<bool> QueryHasCtorDtor(
-    "query-hasCtorDtor", cl::init(false),
-    cl::desc("Queries LTOModule::hasCtorDtor() on each IR file"));
 
 static cl::opt<bool>
     SetMergedModule("set-merged-module", cl::init(false),
@@ -255,28 +251,19 @@ static cl::opt<bool> PrintMachOCPUOnly(
     cl::desc("Instead of running LTO, print the mach-o cpu in each IR file"),
     cl::cat(LTOCategory));
 
+static cl::opt<bool> UseNewPM(
+    "use-new-pm", cl::desc("Run LTO passes using the new pass manager"),
+    cl::init(LLVM_ENABLE_NEW_PASS_MANAGER), cl::Hidden, cl::cat(LTOCategory));
+
 static cl::opt<bool>
     DebugPassManager("debug-pass-manager", cl::init(false), cl::Hidden,
                      cl::desc("Print pass management debugging information"),
                      cl::cat(LTOCategory));
 
-static cl::opt<bool>
-    LTOSaveBeforeOpt("lto-save-before-opt", cl::init(false),
-                     cl::desc("Save the IR before running optimizations"));
-
-static cl::opt<bool> TryUseNewDbgInfoFormat(
-    "try-experimental-debuginfo-iterators",
-    cl::desc("Enable debuginfo iterator positions, if they're built in"),
-    cl::init(false), cl::Hidden);
-
-extern cl::opt<bool> UseNewDbgInfoFormat;
-extern cl::opt<cl::boolOrDefault> LoadBitcodeIntoNewDbgInfoFormat;
-extern cl::opt<cl::boolOrDefault> PreserveInputDbgFormat;
-
 namespace {
 
 struct ModuleInfo {
-  BitVector CanBeHidden;
+  std::vector<bool> CanBeHidden;
 };
 
 } // end anonymous namespace
@@ -325,11 +312,11 @@ namespace {
       if (!CurrentActivity.empty())
         OS << ' ' << CurrentActivity;
       OS << ": ";
-
+  
       DiagnosticPrinterRawOStream DP(OS);
       DI.print(DP);
       OS << '\n';
-
+  
       if (DI.getSeverity() == DS_Error)
         exit(1);
       return true;
@@ -384,7 +371,7 @@ static void printIndexStats() {
         ExitOnErr(getModuleSummaryIndexForFile(Filename));
     // Skip files without a module summary.
     if (!Index)
-      report_fatal_error(Twine(Filename) + " does not contain an index");
+      report_fatal_error(Filename + " does not contain an index");
 
     unsigned Calls = 0, Refs = 0, Functions = 0, Alias = 0, Globals = 0;
     for (auto &Summaries : *Index) {
@@ -407,88 +394,22 @@ static void printIndexStats() {
   }
 }
 
-/// Print the lto symbol attributes.
-static void printLTOSymbolAttributes(lto_symbol_attributes Attrs) {
-  outs() << "{ ";
-  unsigned Permission = Attrs & LTO_SYMBOL_PERMISSIONS_MASK;
-  switch (Permission) {
-  case LTO_SYMBOL_PERMISSIONS_CODE:
-    outs() << "function ";
-    break;
-  case LTO_SYMBOL_PERMISSIONS_DATA:
-    outs() << "data ";
-    break;
-  case LTO_SYMBOL_PERMISSIONS_RODATA:
-    outs() << "constant ";
-    break;
-  }
-  unsigned Definition = Attrs & LTO_SYMBOL_DEFINITION_MASK;
-  switch (Definition) {
-  case LTO_SYMBOL_DEFINITION_REGULAR:
-    outs() << "defined ";
-    break;
-  case LTO_SYMBOL_DEFINITION_TENTATIVE:
-    outs() << "common ";
-    break;
-  case LTO_SYMBOL_DEFINITION_WEAK:
-    outs() << "weak ";
-    break;
-  case LTO_SYMBOL_DEFINITION_UNDEFINED:
-    outs() << "extern ";
-    break;
-  case LTO_SYMBOL_DEFINITION_WEAKUNDEF:
-    outs() << "extern-weak ";
-    break;
-  }
-  unsigned Scope = Attrs & LTO_SYMBOL_SCOPE_MASK;
-  switch (Scope) {
-  case LTO_SYMBOL_SCOPE_INTERNAL:
-    outs() << "internal ";
-    break;
-  case LTO_SYMBOL_SCOPE_HIDDEN:
-    outs() << "hidden ";
-    break;
-  case LTO_SYMBOL_SCOPE_PROTECTED:
-    outs() << "protected ";
-    break;
-  case LTO_SYMBOL_SCOPE_DEFAULT:
-    outs() << "default ";
-    break;
-  case LTO_SYMBOL_SCOPE_DEFAULT_CAN_BE_HIDDEN:
-    outs() << "omitted ";
-    break;
-  }
-  if (Attrs & LTO_SYMBOL_COMDAT)
-    outs() << "comdat ";
-  if (Attrs & LTO_SYMBOL_ALIAS)
-    outs() << "alias ";
-  outs() << "}";
-}
-
-/// Load each IR file and dump certain information based on active flags.
+/// List symbols in each IR file.
 ///
 /// The main point here is to provide lit-testable coverage for the LTOModule
-/// functionality that's exposed by the C API. Moreover, this provides testing
-/// coverage for modules that have been created in their own contexts.
-static void testLTOModule(const TargetOptions &Options) {
+/// functionality that's exposed by the C API to list symbols.  Moreover, this
+/// provides testing coverage for modules that have been created in their own
+/// contexts.
+static void listSymbols(const TargetOptions &Options) {
   for (auto &Filename : InputFilenames) {
     std::unique_ptr<MemoryBuffer> Buffer;
     std::unique_ptr<LTOModule> Module =
         getLocalLTOModule(Filename, Buffer, Options);
 
-    if (ListSymbolsOnly) {
-      // List the symbols.
-      outs() << Filename << ":\n";
-      for (int I = 0, E = Module->getSymbolCount(); I != E; ++I) {
-        outs() << Module->getSymbolName(I) << "    ";
-        printLTOSymbolAttributes(Module->getSymbolAttributes(I));
-        outs() << "\n";
-      }
-    }
-    if (QueryHasCtorDtor)
-      outs() << Filename
-             << ": hasCtorDtor = " << (Module->hasCtorDtor() ? "true" : "false")
-             << "\n";
+    // List the symbols.
+    outs() << Filename << ":\n";
+    for (int I = 0, E = Module->getSymbolCount(); I != E; ++I)
+      outs() << Module->getSymbolName(I) << "\n";
   }
 }
 
@@ -550,22 +471,19 @@ static void printMachOCPUOnly() {
 /// currently available via the gold plugin via -thinlto.
 static void createCombinedModuleSummaryIndex() {
   ModuleSummaryIndex CombinedIndex(/*HaveGVs=*/false);
+  uint64_t NextModuleId = 0;
   for (auto &Filename : InputFilenames) {
     ExitOnError ExitOnErr("llvm-lto: error loading file '" + Filename + "': ");
     std::unique_ptr<MemoryBuffer> MB =
         ExitOnErr(errorOrToExpected(MemoryBuffer::getFileOrSTDIN(Filename)));
-    ExitOnErr(readModuleSummaryIndex(*MB, CombinedIndex));
+    ExitOnErr(readModuleSummaryIndex(*MB, CombinedIndex, NextModuleId++));
   }
-  // In order to use this index for testing, specifically import testing, we
-  // need to update any indirect call edges created from SamplePGO, so that they
-  // point to the correct GUIDs.
-  updateIndirectCalls(CombinedIndex);
   std::error_code EC;
   assert(!OutputFilename.empty());
   raw_fd_ostream OS(OutputFilename + ".thinlto.bc", EC,
                     sys::fs::OpenFlags::OF_None);
   error(EC, "error opening the file '" + OutputFilename + ".thinlto.bc'");
-  writeIndexToFile(CombinedIndex, OS);
+  WriteIndexToFile(CombinedIndex, OS);
   OS.close();
 }
 
@@ -584,10 +502,11 @@ static void getThinLTOOldAndNewPrefix(std::string &OldPrefix,
 /// Given the original \p Path to an output file, replace any path
 /// prefix matching \p OldPrefix with \p NewPrefix. Also, create the
 /// resulting directory if it does not yet exist.
-static std::string getThinLTOOutputFile(StringRef Path, StringRef OldPrefix,
-                                        StringRef NewPrefix) {
+static std::string getThinLTOOutputFile(const std::string &Path,
+                                        const std::string &OldPrefix,
+                                        const std::string &NewPrefix) {
   if (OldPrefix.empty() && NewPrefix.empty())
-    return std::string(Path);
+    return Path;
   SmallString<128> NewPath(Path);
   llvm::sys::path::replace_path_prefix(NewPath, OldPrefix, NewPrefix);
   StringRef ParentPath = llvm::sys::path::parent_path(NewPath.str());
@@ -596,7 +515,7 @@ static std::string getThinLTOOutputFile(StringRef Path, StringRef OldPrefix,
     if (std::error_code EC = llvm::sys::fs::create_directories(ParentPath))
       error(EC, "error creating the directory '" + ParentPath + "'");
   }
-  return std::string(NewPath);
+  return std::string(NewPath.str());
 }
 
 namespace thinlto {
@@ -671,6 +590,7 @@ public:
     ThinGenerator.setCacheMaxSizeFiles(ThinLTOCacheMaxSizeFiles);
     ThinGenerator.setCacheMaxSizeBytes(ThinLTOCacheMaxSizeBytes);
     ThinGenerator.setFreestanding(EnableFreestanding);
+    ThinGenerator.setUseNewPM(UseNewPM);
     ThinGenerator.setDebugPassManager(DebugPassManager);
 
     // Add all the exported symbols to the table of symbols to preserve.
@@ -726,7 +646,7 @@ private:
     std::error_code EC;
     raw_fd_ostream OS(OutputFilename, EC, sys::fs::OpenFlags::OF_None);
     error(EC, "error opening the file '" + OutputFilename + "'");
-    writeIndexToFile(*CombinedIndex, OS);
+    WriteIndexToFile(*CombinedIndex, OS);
   }
 
   /// Load the combined index from disk, then compute and generate
@@ -752,10 +672,9 @@ private:
 
       // Build a map of module to the GUIDs and summary objects that should
       // be written to its index.
-      ModuleToSummariesForIndexTy ModuleToSummariesForIndex;
-      GVSummaryPtrSet DecSummaries;
+      std::map<std::string, GVSummaryMapTy> ModuleToSummariesForIndex;
       ThinGenerator.gatherImportedSummariesForModule(
-          *TheModule, *Index, ModuleToSummariesForIndex, DecSummaries, *Input);
+          *TheModule, *Index, ModuleToSummariesForIndex, *Input);
 
       std::string OutputName = OutputFilename;
       if (OutputName.empty()) {
@@ -765,7 +684,7 @@ private:
       std::error_code EC;
       raw_fd_ostream OS(OutputName, EC, sys::fs::OpenFlags::OF_None);
       error(EC, "error opening the file '" + OutputName + "'");
-      writeIndexToFile(*Index, OS, &ModuleToSummariesForIndex, &DecSummaries);
+      WriteIndexToFile(*Index, OS, &ModuleToSummariesForIndex);
     }
   }
 
@@ -1007,20 +926,6 @@ int main(int argc, char **argv) {
   InitLLVM X(argc, argv);
   cl::HideUnrelatedOptions({&LTOCategory, &getColorCategory()});
   cl::ParseCommandLineOptions(argc, argv, "llvm LTO linker\n");
-  // Load bitcode into the new debug info format by default.
-  if (LoadBitcodeIntoNewDbgInfoFormat == cl::boolOrDefault::BOU_UNSET)
-    LoadBitcodeIntoNewDbgInfoFormat = cl::boolOrDefault::BOU_TRUE;
-
-  // RemoveDIs debug-info transition: tests may request that we /try/ to use the
-  // new debug-info format.
-  if (TryUseNewDbgInfoFormat) {
-    // Turn the new debug-info format on.
-    UseNewDbgInfoFormat = true;
-  }
-  // Since llvm-lto collects multiple IR modules together, for simplicity's sake
-  // we disable the "PreserveInputDbgFormat" flag to enforce a single debug info
-  // format.
-  PreserveInputDbgFormat = cl::boolOrDefault::BOU_FALSE;
 
   if (OptLevel < '0' || OptLevel > '3')
     error("optimization level must be between 0 and 3");
@@ -1034,8 +939,8 @@ int main(int argc, char **argv) {
   // set up the TargetOptions for the machine
   TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags(Triple());
 
-  if (ListSymbolsOnly || QueryHasCtorDtor) {
-    testLTOModule(Options);
+  if (ListSymbolsOnly) {
+    listSymbols(Options);
     return 0;
   }
 
@@ -1096,7 +1001,6 @@ int main(int argc, char **argv) {
 
   CodeGen.setCodePICModel(codegen::getExplicitRelocModel());
   CodeGen.setFreestanding(EnableFreestanding);
-  CodeGen.setDebugPassManager(DebugPassManager);
 
   CodeGen.setDebugInfo(LTO_DEBUG_MODEL_DWARF);
   CodeGen.setTargetOptions(Options);
@@ -1146,18 +1050,17 @@ int main(int argc, char **argv) {
     CodeGen.addMustPreserveSymbol(KeptDSOSyms[i]);
 
   // Set cpu and attrs strings for the default target/subtarget.
-  CodeGen.setCpu(codegen::getMCPU());
+  CodeGen.setCpu(codegen::getMCPU().c_str());
 
   CodeGen.setOptLevel(OptLevel - '0');
   CodeGen.setAttrs(codegen::getMAttrs());
 
+  CodeGen.setUseNewPM(UseNewPM);
+
   if (auto FT = codegen::getExplicitFileType())
-    CodeGen.setFileType(*FT);
+    CodeGen.setFileType(FT.getValue());
 
   if (!OutputFilename.empty()) {
-    if (LTOSaveBeforeOpt)
-      CodeGen.setSaveIRBeforeOptPath(OutputFilename + ".0.preopt.bc");
-
     if (SaveLinkedModuleFile) {
       std::string ModuleFilename = OutputFilename;
       ModuleFilename += ".linked.bc";
@@ -1182,8 +1085,7 @@ int main(int argc, char **argv) {
     }
 
     auto AddStream =
-        [&](size_t Task,
-            const Twine &ModuleName) -> std::unique_ptr<CachedFileStream> {
+        [&](size_t Task) -> std::unique_ptr<lto::NativeObjectStream> {
       std::string PartFilename = OutputFilename;
       if (Parallelism != 1)
         PartFilename += "." + utostr(Task);
@@ -1193,7 +1095,7 @@ int main(int argc, char **argv) {
           std::make_unique<raw_fd_ostream>(PartFilename, EC, sys::fs::OF_None);
       if (EC)
         error("error opening the file '" + PartFilename + "': " + EC.message());
-      return std::make_unique<CachedFileStream>(std::move(S));
+      return std::make_unique<lto::NativeObjectStream>(std::move(S));
     };
 
     if (!CodeGen.compileOptimized(AddStream, Parallelism))

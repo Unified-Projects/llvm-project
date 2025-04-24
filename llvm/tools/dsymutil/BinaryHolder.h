@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/Error.h"
 #include "llvm/Object/MachOUniversal.h"
@@ -23,7 +24,6 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/VirtualFileSystem.h"
-#include "llvm/TargetParser/Triple.h"
 
 #include <mutex>
 
@@ -38,15 +38,8 @@ class BinaryHolder {
 public:
   using TimestampTy = sys::TimePoint<std::chrono::seconds>;
 
-  struct Options {
-    Options(bool Verbose = false, bool Warn = true)
-        : Verbose(Verbose), Warn(Warn) {}
-    bool Verbose;
-    bool Warn;
-  };
-
-  BinaryHolder(IntrusiveRefCntPtr<vfs::FileSystem> VFS,
-               BinaryHolder::Options Opts = {});
+  BinaryHolder(IntrusiveRefCntPtr<vfs::FileSystem> VFS, bool Verbose = false)
+      : VFS(VFS), Verbose(Verbose) {}
 
   // Forward declarations for friend declaration.
   class ObjectEntry;
@@ -65,7 +58,7 @@ public:
   public:
     /// Load the given object binary in memory.
     Error load(IntrusiveRefCntPtr<vfs::FileSystem> VFS, StringRef Filename,
-               TimestampTy Timestamp, BinaryHolder::Options = {});
+               TimestampTy Timestamp, bool Verbose = false);
 
     /// Access all owned ObjectFiles.
     std::vector<const object::ObjectFile *> getObjects() const;
@@ -110,22 +103,22 @@ public:
       std::string Filename;
       TimestampTy Timestamp;
 
-      KeyTy() {}
+      KeyTy() : Filename(), Timestamp() {}
       KeyTy(StringRef Filename, TimestampTy Timestamp)
           : Filename(Filename.str()), Timestamp(Timestamp) {}
     };
 
     /// Load the given object binary in memory.
     Error load(IntrusiveRefCntPtr<vfs::FileSystem> VFS, StringRef Filename,
-               TimestampTy Timestamp, BinaryHolder::Options = {});
+               TimestampTy Timestamp, bool Verbose = false);
 
     Expected<const ObjectEntry &> getObjectEntry(StringRef Filename,
                                                  TimestampTy Timestamp,
-                                                 BinaryHolder::Options = {});
+                                                 bool Verbose = false);
 
   private:
     std::vector<std::unique_ptr<object::Archive>> Archives;
-    DenseMap<KeyTy, std::unique_ptr<ObjectEntry>> MemberCache;
+    DenseMap<KeyTy, ObjectEntry> MemberCache;
     std::mutex MemberCacheMutex;
   };
 
@@ -133,24 +126,21 @@ public:
   getObjectEntry(StringRef Filename, TimestampTy Timestamp = TimestampTy());
 
   void clear();
-  void eraseObjectEntry(StringRef Filename);
 
 private:
   /// Cache of static archives. Objects that are part of a static archive are
   /// stored under this object, rather than in the map below.
-  StringMap<std::unique_ptr<ArchiveEntry>> ArchiveCache;
-  StringMap<uint32_t> ArchiveRefCounter;
+  StringMap<ArchiveEntry> ArchiveCache;
   std::mutex ArchiveCacheMutex;
 
   /// Object entries for objects that are not in a static archive.
-  StringMap<std::unique_ptr<ObjectEntry>> ObjectCache;
-  StringMap<uint32_t> ObjectRefCounter;
+  StringMap<ObjectEntry> ObjectCache;
   std::mutex ObjectCacheMutex;
 
   /// Virtual File System instance.
   IntrusiveRefCntPtr<vfs::FileSystem> VFS;
 
-  Options Opts;
+  bool Verbose;
 };
 
 } // namespace dsymutil

@@ -10,28 +10,23 @@
 #include "LibcBenchmark.h"
 #include "LibcMemoryBenchmark.h"
 #include "MemorySizeDistributions.h"
-#include "src/__support/macros/config.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstring>
-#include <unistd.h>
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 extern void *memcpy(void *__restrict, const void *__restrict, size_t);
-extern void *memmove(void *, const void *, size_t);
 extern void *memset(void *, int, size_t);
 extern void bzero(void *, size_t);
 extern int memcmp(const void *, const void *, size_t);
-extern int bcmp(const void *, const void *, size_t);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 namespace llvm {
 namespace libc_benchmarks {
@@ -43,15 +38,9 @@ static cl::opt<std::string>
     SizeDistributionName("size-distribution-name",
                          cl::desc("The name of the distribution to use"));
 
-static cl::opt<bool> SweepMode(
-    "sweep-mode",
-    cl::desc(
-        "If set, benchmark all sizes from sweep-min-size to sweep-max-size"));
-
-static cl::opt<uint32_t>
-    SweepMinSize("sweep-min-size",
-                 cl::desc("The minimum size to use in sweep-mode"),
-                 cl::init(0));
+static cl::opt<bool>
+    SweepMode("sweep-mode",
+              cl::desc("If set, benchmark all sizes from 0 to sweep-max-size"));
 
 static cl::opt<uint32_t>
     SweepMaxSize("sweep-max-size",
@@ -73,49 +62,172 @@ static cl::opt<uint32_t>
     NumTrials("num-trials", cl::desc("The number of benchmarks run to perform"),
               cl::init(1));
 
+static constexpr int64_t KiB = 1024;
+static constexpr int64_t ParameterStorageBytes = 4 * KiB;
+static constexpr int64_t L1LeftAsideBytes = 1 * KiB;
+
+struct ParameterType {
+  unsigned OffsetBytes : 16; // max : 16 KiB - 1
+  unsigned SizeBytes : 16;   // max : 16 KiB - 1
+};
+
 #if defined(LIBC_BENCHMARK_FUNCTION_MEMCPY)
-#define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_MEMCPY
-using BenchmarkSetup = CopySetup;
-#elif defined(LIBC_BENCHMARK_FUNCTION_MEMMOVE)
-#define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_MEMMOVE
-using BenchmarkSetup = MoveSetup;
+struct Benchmark {
+  static constexpr auto GetDistributions = &getMemcpySizeDistributions;
+  static constexpr size_t BufferCount = 2;
+
+  Benchmark(const size_t BufferSize)
+      : SrcBuffer(BufferSize), DstBuffer(BufferSize) {}
+
+  inline auto functor() {
+    return [this](ParameterType P) {
+      __llvm_libc::memcpy(DstBuffer + P.OffsetBytes, SrcBuffer + P.OffsetBytes,
+                          P.SizeBytes);
+      return DstBuffer[P.OffsetBytes];
+    };
+  }
+
+  AlignedBuffer SrcBuffer;
+  AlignedBuffer DstBuffer;
+};
 #elif defined(LIBC_BENCHMARK_FUNCTION_MEMSET)
-#define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_MEMSET
-using BenchmarkSetup = SetSetup;
+struct Benchmark {
+  static constexpr auto GetDistributions = &getMemsetSizeDistributions;
+  static constexpr size_t BufferCount = 1;
+
+  Benchmark(const size_t BufferSize) : DstBuffer(BufferSize) {}
+
+  inline auto functor() {
+    return [this](ParameterType P) {
+      __llvm_libc::memset(DstBuffer + P.OffsetBytes, P.OffsetBytes & 0xFF,
+                          P.SizeBytes);
+      return DstBuffer[P.OffsetBytes];
+    };
+  }
+
+  AlignedBuffer DstBuffer;
+};
 #elif defined(LIBC_BENCHMARK_FUNCTION_BZERO)
-#define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_BZERO
-using BenchmarkSetup = SetSetup;
+struct Benchmark {
+  static constexpr auto GetDistributions = &getMemsetSizeDistributions;
+  static constexpr size_t BufferCount = 1;
+
+  Benchmark(const size_t BufferSize) : DstBuffer(BufferSize) {}
+
+  inline auto functor() {
+    return [this](ParameterType P) {
+      __llvm_libc::bzero(DstBuffer + P.OffsetBytes, P.SizeBytes);
+      return DstBuffer[P.OffsetBytes];
+    };
+  }
+
+  AlignedBuffer DstBuffer;
+};
 #elif defined(LIBC_BENCHMARK_FUNCTION_MEMCMP)
-#define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_MEMCMP
-using BenchmarkSetup = ComparisonSetup;
-#elif defined(LIBC_BENCHMARK_FUNCTION_BCMP)
-#define LIBC_BENCHMARK_FUNCTION LIBC_BENCHMARK_FUNCTION_BCMP
-using BenchmarkSetup = ComparisonSetup;
+struct Benchmark {
+  static constexpr auto GetDistributions = &getMemcmpSizeDistributions;
+  static constexpr size_t BufferCount = 2;
+
+  Benchmark(const size_t BufferSize)
+      : BufferA(BufferSize), BufferB(BufferSize) {
+    // The memcmp buffers always compare equal.
+    memset(BufferA.begin(), 0xF, BufferSize);
+    memset(BufferB.begin(), 0xF, BufferSize);
+  }
+
+  inline auto functor() {
+    return [this](ParameterType P) {
+      return __llvm_libc::memcmp(BufferA + P.OffsetBytes,
+                                 BufferB + P.OffsetBytes, P.SizeBytes);
+    };
+  }
+
+  AlignedBuffer BufferA;
+  AlignedBuffer BufferB;
+};
 #else
 #error "Missing LIBC_BENCHMARK_FUNCTION_XXX definition"
 #endif
 
-struct MemfunctionBenchmarkBase : public BenchmarkSetup {
-  MemfunctionBenchmarkBase() : ReportProgress(isatty(fileno(stdout))) {}
-  virtual ~MemfunctionBenchmarkBase() {}
+struct Harness : Benchmark {
+  Harness(const size_t BufferSize, size_t BatchParameterCount,
+          std::function<unsigned()> SizeSampler,
+          std::function<unsigned()> OffsetSampler)
+      : Benchmark(BufferSize), BufferSize(BufferSize),
+        Parameters(BatchParameterCount), SizeSampler(SizeSampler),
+        OffsetSampler(OffsetSampler) {}
 
-  virtual Study run() = 0;
-
-  CircularArrayRef<ParameterBatch::ParameterType>
-  generateBatch(size_t Iterations) {
-    randomize();
-    return cycle(ArrayRef(Parameters), Iterations);
+  CircularArrayRef<ParameterType> generateBatch(size_t Iterations) {
+    for (auto &P : Parameters) {
+      P.OffsetBytes = OffsetSampler();
+      P.SizeBytes = SizeSampler();
+      if (P.OffsetBytes + P.SizeBytes >= BufferSize)
+        report_fatal_error("Call would result in buffer overflow");
+    }
+    return cycle(makeArrayRef(Parameters), Iterations);
   }
 
-protected:
-  Study createStudy() {
-    Study Study;
+private:
+  const size_t BufferSize;
+  std::vector<ParameterType> Parameters;
+  std::function<unsigned()> SizeSampler;
+  std::function<unsigned()> OffsetSampler;
+};
+
+size_t getL1DataCacheSize() {
+  const std::vector<CacheInfo> &CacheInfos = HostState::get().Caches;
+  const auto IsL1DataCache = [](const CacheInfo &CI) {
+    return CI.Type == "Data" && CI.Level == 1;
+  };
+  const auto CacheIt = find_if(CacheInfos, IsL1DataCache);
+  if (CacheIt != CacheInfos.end())
+    return CacheIt->Size;
+  report_fatal_error("Unable to read L1 Cache Data Size");
+}
+
+struct MemfunctionBenchmark {
+  MemfunctionBenchmark(int64_t L1Size = getL1DataCacheSize())
+      : AvailableSize(L1Size - L1LeftAsideBytes - ParameterStorageBytes),
+        BufferSize(AvailableSize / Benchmark::BufferCount),
+        BatchParameterCount(BufferSize / sizeof(ParameterType)) {
+    // Handling command line flags
+    if (AvailableSize <= 0 || BufferSize <= 0 || BatchParameterCount < 100)
+      report_fatal_error("Not enough L1 cache");
+
+    if (!isPowerOfTwoOrZero(AlignedAccess))
+      report_fatal_error(AlignedAccess.ArgStr +
+                         Twine(" must be a power of two or zero"));
+
+    const bool HasDistributionName = !SizeDistributionName.empty();
+    if (SweepMode && HasDistributionName)
+      report_fatal_error("Select only one of `--" + Twine(SweepMode.ArgStr) +
+                         "` or `--" + Twine(SizeDistributionName.ArgStr) + "`");
+
+    if (SweepMode) {
+      MaxSizeValue = SweepMaxSize;
+    } else {
+      std::map<StringRef, MemorySizeDistribution> Map;
+      for (MemorySizeDistribution Distribution : Benchmark::GetDistributions())
+        Map[Distribution.Name] = Distribution;
+      if (Map.count(SizeDistributionName) == 0) {
+        std::string Message;
+        raw_string_ostream Stream(Message);
+        Stream << "Unknown --" << SizeDistributionName.ArgStr << "='"
+               << SizeDistributionName << "', available distributions:\n";
+        for (const auto &Pair : Map)
+          Stream << "'" << Pair.first << "'\n";
+        report_fatal_error(Stream.str());
+      }
+      SizeDistribution = Map[SizeDistributionName];
+      MaxSizeValue = SizeDistribution.Probabilities.size() - 1;
+    }
+
     // Setup study.
     Study.StudyName = StudyName;
     Runtime &RI = Study.Runtime;
     RI.Host = HostState::get();
     RI.BufferSize = BufferSize;
-    RI.BatchParameterCount = BatchSize;
+    RI.BatchParameterCount = BatchParameterCount;
 
     BenchmarkOptions &BO = RI.BenchmarkOptions;
     BO.MinDuration = std::chrono::milliseconds(1);
@@ -129,34 +241,56 @@ protected:
     StudyConfiguration &SC = Study.Configuration;
     SC.NumTrials = NumTrials;
     SC.IsSweepMode = SweepMode;
+    if (SweepMode)
+      SC.SweepModeMaxSize = SweepMaxSize;
+    else
+      SC.SizeDistributionName = SizeDistributionName;
     SC.AccessAlignment = MaybeAlign(AlignedAccess);
     SC.Function = LIBC_BENCHMARK_FUNCTION_NAME;
+  }
+
+  Study run() {
+    if (SweepMode)
+      runSweepMode();
+    else
+      runDistributionMode();
     return Study;
   }
 
-  void runTrials(const BenchmarkOptions &Options,
-                 std::vector<Duration> &Measurements) {
-    for (size_t i = 0; i < NumTrials; ++i) {
-      const BenchmarkResult Result = benchmark(
-          Options, *this, [this](ParameterBatch::ParameterType Parameter) {
-            return Call(Parameter, LIBC_BENCHMARK_FUNCTION);
-          });
-      Measurements.push_back(Result.BestGuess);
-      reportProgress(Measurements);
-    }
+private:
+  const int64_t AvailableSize;
+  const int64_t BufferSize;
+  const size_t BatchParameterCount;
+  size_t MaxSizeValue = 0;
+  MemorySizeDistribution SizeDistribution;
+  Study Study;
+  std::mt19937_64 Gen;
+
+  static constexpr bool isPowerOfTwoOrZero(size_t Value) {
+    return (Value & (Value - 1U)) == 0;
   }
 
-  virtual void randomize() = 0;
+  std::function<unsigned()> geOffsetSampler() {
+    return [this]() {
+      static OffsetDistribution OD(BufferSize, MaxSizeValue,
+                                   Study.Configuration.AccessAlignment);
+      return OD(Gen);
+    };
+  }
 
-private:
-  bool ReportProgress;
+  std::function<unsigned()> getSizeSampler() {
+    return [this]() {
+      static std::discrete_distribution<unsigned> Distribution(
+          SizeDistribution.Probabilities.begin(),
+          SizeDistribution.Probabilities.end());
+      return Distribution(Gen);
+    };
+  }
 
-  void reportProgress(const std::vector<Duration> &Measurements) {
-    if (!ReportProgress)
-      return;
+  void reportProgress() {
     static size_t LastPercent = -1;
-    const size_t TotalSteps = Measurements.capacity();
-    const size_t Steps = Measurements.size();
+    const size_t TotalSteps = Study.Measurements.capacity();
+    const size_t Steps = Study.Measurements.size();
     const size_t Percent = 100 * Steps / TotalSteps;
     if (Percent == LastPercent)
       return;
@@ -169,76 +303,40 @@ private:
       errs() << '_';
     errs() << "] " << Percent << '%' << '\r';
   }
-};
 
-struct MemfunctionBenchmarkSweep final : public MemfunctionBenchmarkBase {
-  MemfunctionBenchmarkSweep()
-      : OffsetSampler(MemfunctionBenchmarkBase::BufferSize, SweepMaxSize,
-                      MaybeAlign(AlignedAccess)) {}
-
-  virtual void randomize() override {
-    for (auto &P : Parameters) {
-      P.OffsetBytes = OffsetSampler(Gen);
-      P.SizeBytes = CurrentSweepSize;
-      checkValid(P);
+  void runTrials(const BenchmarkOptions &Options,
+                 std::function<unsigned()> SizeSampler,
+                 std::function<unsigned()> OffsetSampler) {
+    Harness B(BufferSize, BatchParameterCount, SizeSampler, OffsetSampler);
+    for (size_t i = 0; i < NumTrials; ++i) {
+      const BenchmarkResult Result = benchmark(Options, B, B.functor());
+      Study.Measurements.push_back(Result.BestGuess);
+      reportProgress();
     }
   }
 
-  virtual Study run() override {
-    Study Study = createStudy();
-    Study.Configuration.SweepModeMaxSize = SweepMaxSize;
+  void runSweepMode() {
+    Study.Measurements.reserve(NumTrials * SweepMaxSize);
+
     BenchmarkOptions &BO = Study.Runtime.BenchmarkOptions;
     BO.MinDuration = std::chrono::milliseconds(1);
     BO.InitialIterations = 100;
-    auto &Measurements = Study.Measurements;
-    Measurements.reserve(NumTrials * SweepMaxSize);
-    for (size_t Size = SweepMinSize; Size <= SweepMaxSize; ++Size) {
-      CurrentSweepSize = Size;
-      runTrials(BO, Measurements);
-    }
-    return Study;
-  }
 
-private:
-  size_t CurrentSweepSize = 0;
-  OffsetDistribution OffsetSampler;
-  std::mt19937_64 Gen;
-};
-
-struct MemfunctionBenchmarkDistribution final
-    : public MemfunctionBenchmarkBase {
-  MemfunctionBenchmarkDistribution(MemorySizeDistribution Distribution)
-      : Distribution(Distribution), Probabilities(Distribution.Probabilities),
-        SizeSampler(Probabilities.begin(), Probabilities.end()),
-        OffsetSampler(MemfunctionBenchmarkBase::BufferSize,
-                      Probabilities.size() - 1, MaybeAlign(AlignedAccess)) {}
-
-  virtual void randomize() override {
-    for (auto &P : Parameters) {
-      P.OffsetBytes = OffsetSampler(Gen);
-      P.SizeBytes = SizeSampler(Gen);
-      checkValid(P);
+    for (size_t Size = 0; Size <= SweepMaxSize; ++Size) {
+      const auto SizeSampler = [Size]() { return Size; };
+      runTrials(BO, SizeSampler, geOffsetSampler());
     }
   }
 
-  virtual Study run() override {
-    Study Study = createStudy();
-    Study.Configuration.SizeDistributionName = Distribution.Name.str();
+  void runDistributionMode() {
+    Study.Measurements.reserve(NumTrials);
+
     BenchmarkOptions &BO = Study.Runtime.BenchmarkOptions;
     BO.MinDuration = std::chrono::milliseconds(10);
-    BO.InitialIterations = BatchSize * 10;
-    auto &Measurements = Study.Measurements;
-    Measurements.reserve(NumTrials);
-    runTrials(BO, Measurements);
-    return Study;
-  }
+    BO.InitialIterations = BatchParameterCount * 10;
 
-private:
-  MemorySizeDistribution Distribution;
-  ArrayRef<double> Probabilities;
-  std::discrete_distribution<unsigned> SizeSampler;
-  OffsetDistribution OffsetSampler;
-  std::mt19937_64 Gen;
+    runTrials(BO, getSizeSampler(), geOffsetSampler());
+  }
 };
 
 void writeStudy(const Study &S) {
@@ -256,33 +354,20 @@ void writeStudy(const Study &S) {
 
 void main() {
   checkRequirements();
-  if (!isPowerOf2_32(AlignedAccess))
-    report_fatal_error(AlignedAccess.ArgStr +
-                       Twine(" must be a power of two or zero"));
-
-  const bool HasDistributionName = !SizeDistributionName.empty();
-  if (SweepMode && HasDistributionName)
-    report_fatal_error("Select only one of `--" + Twine(SweepMode.ArgStr) +
-                       "` or `--" + Twine(SizeDistributionName.ArgStr) + "`");
-
-  std::unique_ptr<MemfunctionBenchmarkBase> Benchmark;
-  if (SweepMode)
-    Benchmark.reset(new MemfunctionBenchmarkSweep());
-  else
-    Benchmark.reset(new MemfunctionBenchmarkDistribution(getDistributionOrDie(
-        BenchmarkSetup::getDistributions(), SizeDistributionName)));
-  writeStudy(Benchmark->run());
+  MemfunctionBenchmark MB;
+  writeStudy(MB.run());
 }
 
 } // namespace libc_benchmarks
 } // namespace llvm
 
-#ifndef NDEBUG
-#error For reproducibility benchmarks should not be compiled in DEBUG mode.
-#endif
-
 int main(int argc, char **argv) {
   llvm::cl::ParseCommandLineOptions(argc, argv);
+#ifndef NDEBUG
+  static_assert(
+      false,
+      "For reproducibility benchmarks should not be compiled in DEBUG mode.");
+#endif
   llvm::libc_benchmarks::main();
   return EXIT_SUCCESS;
 }

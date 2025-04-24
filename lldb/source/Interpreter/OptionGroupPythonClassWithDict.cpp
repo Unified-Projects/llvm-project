@@ -94,38 +94,20 @@ Status OptionGroupPythonClassWithDict::SetOptionValue(
       if (m_current_key.empty())
         m_current_key.assign(std::string(option_arg));
       else
-        return Status::FromErrorStringWithFormatv("Key: \"{0}\" missing value.",
-                                                  m_current_key);
-
+        error.SetErrorStringWithFormat("Key: \"%s\" missing value.",
+                                        m_current_key.c_str());
+    
   } break;
   case 2: {
       if (!m_dict_sp)
         m_dict_sp = std::make_shared<StructuredData::Dictionary>();
       if (!m_current_key.empty()) {
-        if (!option_arg.empty()) {
-          double d = 0;
-          std::string opt = option_arg.lower();
-
-          if (llvm::to_integer(option_arg, d)) {
-            if (opt[0] == '-')
-              m_dict_sp->AddIntegerItem(m_current_key, static_cast<int64_t>(d));
-            else
-              m_dict_sp->AddIntegerItem(m_current_key,
-                                        static_cast<uint64_t>(d));
-          } else if (llvm::to_float(option_arg, d)) {
-            m_dict_sp->AddFloatItem(m_current_key, d);
-          } else if (opt == "true" || opt == "false") {
-            m_dict_sp->AddBooleanItem(m_current_key, opt == "true");
-          } else {
-            m_dict_sp->AddStringItem(m_current_key, option_arg);
-          }
-        }
-
-        m_current_key.clear();
+          m_dict_sp->AddStringItem(m_current_key, option_arg);
+          m_current_key.clear();
       }
       else
-        return Status::FromErrorStringWithFormatv(
-            "Value: \"{0}\" missing matching key.", option_arg);
+        error.SetErrorStringWithFormat("Value: \"%s\" missing matching key.",
+                                       option_arg.str().c_str());
   } break;
   default:
     llvm_unreachable("Unimplemented option");
@@ -149,8 +131,8 @@ Status OptionGroupPythonClassWithDict::OptionParsingFinished(
   // If we get here and there's contents in the m_current_key, somebody must
   // have provided a key but no value.
   if (!m_current_key.empty())
-    error = Status::FromErrorStringWithFormat("Key: \"%s\" missing value.",
-                                              m_current_key.c_str());
+      error.SetErrorStringWithFormat("Key: \"%s\" missing value.",
+                                     m_current_key.c_str());
   return error;
 }
 

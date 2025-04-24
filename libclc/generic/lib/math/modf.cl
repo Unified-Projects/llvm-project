@@ -21,7 +21,8 @@
  */
 
 #include <clc/clc.h>
-#include <clc/math/math.h>
+
+#include "math.h"
 
 #define __CLC_BODY <modf.inc>
 #include <clc/math/gentype.inc>

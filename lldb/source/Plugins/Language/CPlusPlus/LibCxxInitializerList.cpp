@@ -8,10 +8,9 @@
 
 #include "LibCxx.h"
 
+#include "lldb/Core/ValueObject.h"
 #include "lldb/DataFormatters/FormattersHelpers.h"
 #include "lldb/Utility/ConstString.h"
-#include "lldb/ValueObject/ValueObject.h"
-#include <optional>
 
 using namespace lldb;
 using namespace lldb_private;
@@ -26,28 +25,29 @@ public:
 
   ~LibcxxInitializerListSyntheticFrontEnd() override;
 
-  llvm::Expected<uint32_t> CalculateNumChildren() override;
+  size_t CalculateNumChildren() override;
 
-  lldb::ValueObjectSP GetChildAtIndex(uint32_t idx) override;
+  lldb::ValueObjectSP GetChildAtIndex(size_t idx) override;
 
-  lldb::ChildCacheState Update() override;
+  bool Update() override;
 
   bool MightHaveChildren() override;
 
   size_t GetIndexOfChildWithName(ConstString name) override;
 
 private:
-  ValueObject *m_start = nullptr;
+  ValueObject *m_start;
   CompilerType m_element_type;
-  uint32_t m_element_size = 0;
-  size_t m_num_elements = 0;
+  uint32_t m_element_size;
+  size_t m_num_elements;
 };
 } // namespace formatters
 } // namespace lldb_private
 
 lldb_private::formatters::LibcxxInitializerListSyntheticFrontEnd::
     LibcxxInitializerListSyntheticFrontEnd(lldb::ValueObjectSP valobj_sp)
-    : SyntheticChildrenFrontEnd(*valobj_sp), m_element_type() {
+    : SyntheticChildrenFrontEnd(*valobj_sp), m_start(nullptr), m_element_type(),
+      m_element_size(0), m_num_elements(0) {
   if (valobj_sp)
     Update();
 }
@@ -59,17 +59,18 @@ lldb_private::formatters::LibcxxInitializerListSyntheticFrontEnd::
   // delete m_start;
 }
 
-llvm::Expected<uint32_t> lldb_private::formatters::
-    LibcxxInitializerListSyntheticFrontEnd::CalculateNumChildren() {
+size_t lldb_private::formatters::LibcxxInitializerListSyntheticFrontEnd::
+    CalculateNumChildren() {
+  static ConstString g___size_("__size_");
   m_num_elements = 0;
-  ValueObjectSP size_sp(m_backend.GetChildMemberWithName("__size_"));
+  ValueObjectSP size_sp(m_backend.GetChildMemberWithName(g___size_, true));
   if (size_sp)
     m_num_elements = size_sp->GetValueAsUnsigned(0);
   return m_num_elements;
 }
 
 lldb::ValueObjectSP lldb_private::formatters::
-    LibcxxInitializerListSyntheticFrontEnd::GetChildAtIndex(uint32_t idx) {
+    LibcxxInitializerListSyntheticFrontEnd::GetChildAtIndex(size_t idx) {
   if (!m_start)
     return lldb::ValueObjectSP();
 
@@ -82,21 +83,23 @@ lldb::ValueObjectSP lldb_private::formatters::
                                       m_element_type);
 }
 
-lldb::ChildCacheState
-lldb_private::formatters::LibcxxInitializerListSyntheticFrontEnd::Update() {
+bool lldb_private::formatters::LibcxxInitializerListSyntheticFrontEnd::
+    Update() {
+  static ConstString g___begin_("__begin_");
+
   m_start = nullptr;
   m_num_elements = 0;
   m_element_type = m_backend.GetCompilerType().GetTypeTemplateArgument(0);
   if (!m_element_type.IsValid())
-    return lldb::ChildCacheState::eRefetch;
+    return false;
 
-  if (std::optional<uint64_t> size = m_element_type.GetByteSize(nullptr)) {
+  if (llvm::Optional<uint64_t> size = m_element_type.GetByteSize(nullptr)) {
     m_element_size = *size;
     // Store raw pointers or end up with a circular dependency.
-    m_start = m_backend.GetChildMemberWithName("__begin_").get();
+    m_start = m_backend.GetChildMemberWithName(g___begin_, true).get();
   }
 
-  return lldb::ChildCacheState::eRefetch;
+  return false;
 }
 
 bool lldb_private::formatters::LibcxxInitializerListSyntheticFrontEnd::

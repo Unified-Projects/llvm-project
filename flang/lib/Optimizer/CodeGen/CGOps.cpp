@@ -10,7 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "flang/Optimizer/CodeGen/CGOps.h"
+#include "CGOps.h"
 #include "flang/Optimizer/Dialect/FIRDialect.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
@@ -33,32 +33,32 @@ fir::FIRCodeGenDialect::~FIRCodeGenDialect() {
 #include "flang/Optimizer/CodeGen/CGOps.cpp.inc"
 
 unsigned fir::cg::XEmboxOp::getOutRank() {
-  if (getSlice().empty())
+  if (slice().empty())
     return getRank();
-  auto outRank = fir::SliceOp::getOutputRank(getSlice());
+  auto outRank = fir::SliceOp::getOutputRank(slice());
   assert(outRank >= 1);
   return outRank;
 }
 
 unsigned fir::cg::XReboxOp::getOutRank() {
-  if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(
-          fir::dyn_cast_ptrOrBoxEleTy(getType())))
+  if (auto seqTy =
+          fir::dyn_cast_ptrOrBoxEleTy(getType()).dyn_cast<fir::SequenceType>())
     return seqTy.getDimension();
   return 0;
 }
 
 unsigned fir::cg::XReboxOp::getRank() {
-  if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(
-          fir::dyn_cast_ptrOrBoxEleTy(getBox().getType())))
+  if (auto seqTy = fir::dyn_cast_ptrOrBoxEleTy(box().getType())
+                       .dyn_cast<fir::SequenceType>())
     return seqTy.getDimension();
   return 0;
 }
 
 unsigned fir::cg::XArrayCoorOp::getRank() {
-  auto memrefTy = getMemref().getType();
-  if (mlir::isa<fir::BaseBoxType>(memrefTy))
-    if (auto seqty = mlir::dyn_cast<fir::SequenceType>(
-            fir::dyn_cast_ptrOrBoxEleTy(memrefTy)))
+  auto memrefTy = memref().getType();
+  if (memrefTy.isa<fir::BoxType>())
+    if (auto seqty =
+            fir::dyn_cast_ptrOrBoxEleTy(memrefTy).dyn_cast<fir::SequenceType>())
       return seqty.getDimension();
-  return getShape().size();
+  return shape().size();
 }

@@ -14,6 +14,7 @@
 #ifndef LLVM_BITCODE_BITCODEWRITERPASS_H
 #define LLVM_BITCODE_BITCODEWRITERPASS_H
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
@@ -28,8 +29,16 @@ class raw_ostream;
 ///
 /// If \c ShouldPreserveUseListOrder, encode use-list order so it can be
 /// reproduced when deserialized.
+///
+/// If \c EmitSummaryIndex, emit the summary index (currently for use in ThinLTO
+/// optimization).
+///
+/// If \c EmitModuleHash, compute and emit the module hash in the bitcode
+/// (currently for use in ThinLTO incremental build).
 ModulePass *createBitcodeWriterPass(raw_ostream &Str,
-                                    bool ShouldPreserveUseListOrder = false);
+                                    bool ShouldPreserveUseListOrder = false,
+                                    bool EmitSummaryIndex = false,
+                                    bool EmitModuleHash = false);
 
 /// Check whether a pass is a BitcodeWriterPass.
 bool isBitcodeWriterPass(Pass *P);

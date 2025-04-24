@@ -9,15 +9,14 @@
 #include "lldb/Target/ABI.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Value.h"
+#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Symbol/CompilerType.h"
 #include "lldb/Symbol/TypeSystem.h"
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
-#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
-#include "lldb/ValueObject/ValueObjectConstResult.h"
-#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetRegistry.h"
 #include <cctype>
 
 using namespace lldb;
@@ -147,39 +146,6 @@ ValueObjectSP ABI::GetReturnValueObject(Thread &thread, CompilerType &ast_type,
   return return_valobj_sp;
 }
 
-addr_t ABI::FixCodeAddress(lldb::addr_t pc) {
-  ProcessSP process_sp(GetProcessSP());
-
-  addr_t mask = process_sp->GetCodeAddressMask();
-  if (mask == LLDB_INVALID_ADDRESS_MASK)
-    return pc;
-
-  // Assume the high bit is used for addressing, which
-  // may not be correct on all architectures e.g. AArch64
-  // where Top Byte Ignore mode is often used to store
-  // metadata in the top byte, and b55 is the bit used for
-  // differentiating between low- and high-memory addresses.
-  // That target's ABIs need to override this method.
-  bool is_highmem = pc & (1ULL << 63);
-  return is_highmem ? pc | mask : pc & (~mask);
-}
-
-addr_t ABI::FixDataAddress(lldb::addr_t pc) {
-  ProcessSP process_sp(GetProcessSP());
-  addr_t mask = process_sp->GetDataAddressMask();
-  if (mask == LLDB_INVALID_ADDRESS_MASK)
-    return pc;
-
-  // Assume the high bit is used for addressing, which
-  // may not be correct on all architectures e.g. AArch64
-  // where Top Byte Ignore mode is often used to store
-  // metadata in the top byte, and b55 is the bit used for
-  // differentiating between low- and high-memory addresses.
-  // That target's ABIs need to override this method.
-  bool is_highmem = pc & (1ULL << 63);
-  return is_highmem ? pc | mask : pc & (~mask);
-}
-
 ValueObjectSP ABI::GetReturnValueObject(Thread &thread, llvm::Type &ast_type,
                                         bool persistent) const {
   ValueObjectSP return_valobj_sp;
@@ -210,7 +176,7 @@ bool ABI::PrepareTrivialCall(Thread &thread, lldb::addr_t sp,
 
 bool ABI::GetFallbackRegisterLocation(
     const RegisterInfo *reg_info,
-    UnwindPlan::Row::AbstractRegisterLocation &unwind_regloc) {
+    UnwindPlan::Row::RegisterLocation &unwind_regloc) {
   // Did the UnwindPlan fail to give us the caller's stack pointer? The stack
   // pointer is defined to be the same as THIS frame's CFA, so return the CFA
   // value as the caller's stack pointer.  This is true on x86-32/x86-64 at
@@ -237,7 +203,7 @@ std::unique_ptr<llvm::MCRegisterInfo> ABI::MakeMCRegisterInfo(const ArchSpec &ar
   const llvm::Target *target =
       llvm::TargetRegistry::lookupTarget(triple, lookup_error);
   if (!target) {
-    LLDB_LOG(GetLog(LLDBLog::Process),
+    LLDB_LOG(GetLogIfAllCategoriesSet(LIBLLDB_LOG_PROCESS),
              "Failed to create an llvm target for {0}: {1}", triple,
              lookup_error);
     return nullptr;
@@ -248,39 +214,33 @@ std::unique_ptr<llvm::MCRegisterInfo> ABI::MakeMCRegisterInfo(const ArchSpec &ar
   return info_up;
 }
 
-void RegInfoBasedABI::AugmentRegisterInfo(
-    std::vector<DynamicRegisterInfo::Register> &regs) {
-  for (DynamicRegisterInfo::Register &info : regs) {
-    if (info.regnum_ehframe != LLDB_INVALID_REGNUM &&
-        info.regnum_dwarf != LLDB_INVALID_REGNUM)
-      continue;
+void RegInfoBasedABI::AugmentRegisterInfo(RegisterInfo &info) {
+  if (info.kinds[eRegisterKindEHFrame] != LLDB_INVALID_REGNUM &&
+      info.kinds[eRegisterKindDWARF] != LLDB_INVALID_REGNUM)
+    return;
 
-    RegisterInfo abi_info;
-    if (!GetRegisterInfoByName(info.name.GetStringRef(), abi_info))
-      continue;
+  RegisterInfo abi_info;
+  if (!GetRegisterInfoByName(info.name, abi_info))
+    return;
 
-    if (info.regnum_ehframe == LLDB_INVALID_REGNUM)
-      info.regnum_ehframe = abi_info.kinds[eRegisterKindEHFrame];
-    if (info.regnum_dwarf == LLDB_INVALID_REGNUM)
-      info.regnum_dwarf = abi_info.kinds[eRegisterKindDWARF];
-    if (info.regnum_generic == LLDB_INVALID_REGNUM)
-      info.regnum_generic = abi_info.kinds[eRegisterKindGeneric];
-  }
+  if (info.kinds[eRegisterKindEHFrame] == LLDB_INVALID_REGNUM)
+    info.kinds[eRegisterKindEHFrame] = abi_info.kinds[eRegisterKindEHFrame];
+  if (info.kinds[eRegisterKindDWARF] == LLDB_INVALID_REGNUM)
+    info.kinds[eRegisterKindDWARF] = abi_info.kinds[eRegisterKindDWARF];
+  if (info.kinds[eRegisterKindGeneric] == LLDB_INVALID_REGNUM)
+    info.kinds[eRegisterKindGeneric] = abi_info.kinds[eRegisterKindGeneric];
 }
 
-void MCBasedABI::AugmentRegisterInfo(
-    std::vector<DynamicRegisterInfo::Register> &regs) {
-  for (DynamicRegisterInfo::Register &info : regs) {
-    uint32_t eh, dwarf;
-    std::tie(eh, dwarf) = GetEHAndDWARFNums(info.name.GetStringRef());
+void MCBasedABI::AugmentRegisterInfo(RegisterInfo &info) {
+  uint32_t eh, dwarf;
+  std::tie(eh, dwarf) = GetEHAndDWARFNums(info.name);
 
-    if (info.regnum_ehframe == LLDB_INVALID_REGNUM)
-      info.regnum_ehframe = eh;
-    if (info.regnum_dwarf == LLDB_INVALID_REGNUM)
-      info.regnum_dwarf = dwarf;
-    if (info.regnum_generic == LLDB_INVALID_REGNUM)
-      info.regnum_generic = GetGenericNum(info.name.GetStringRef());
-  }
+  if (info.kinds[eRegisterKindEHFrame] == LLDB_INVALID_REGNUM)
+    info.kinds[eRegisterKindEHFrame] = eh;
+  if (info.kinds[eRegisterKindDWARF] == LLDB_INVALID_REGNUM)
+    info.kinds[eRegisterKindDWARF] = dwarf;
+  if (info.kinds[eRegisterKindGeneric] == LLDB_INVALID_REGNUM)
+    info.kinds[eRegisterKindGeneric] = GetGenericNum(info.name);
 }
 
 std::pair<uint32_t, uint32_t>

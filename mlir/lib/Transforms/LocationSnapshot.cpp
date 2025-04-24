@@ -7,20 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Transforms/LocationSnapshot.h"
-
+#include "PassDetail.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/OperationSupport.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include <optional>
-
-namespace mlir {
-#define GEN_PASS_DEF_LOCATIONSNAPSHOT
-#include "mlir/Transforms/Passes.h.inc"
-} // namespace mlir
 
 using namespace mlir;
 
@@ -35,15 +27,15 @@ static void generateLocationsFromIR(raw_ostream &os, StringRef fileName,
   // Print the IR to the stream, and collect the raw line+column information.
   AsmState::LocationMap opToLineCol;
   AsmState state(op, flags, &opToLineCol);
-  op->print(os, state);
+  op->print(os, state, flags);
 
   Builder builder(op->getContext());
-  std::optional<StringAttr> tagIdentifier;
+  Optional<Identifier> tagIdentifier;
   if (!tag.empty())
-    tagIdentifier = builder.getStringAttr(tag);
+    tagIdentifier = builder.getIdentifier(tag);
 
   // Walk and generate new locations for each of the operations.
-  StringAttr file = builder.getStringAttr(fileName);
+  Identifier file = builder.getIdentifier(fileName);
   op->walk([&](Operation *opIt) {
     // Check to see if this operation has a mapped location. Some operations may
     // be elided from the printed form, e.g. the body terminators of some region
@@ -131,24 +123,30 @@ LogicalResult mlir::generateLocationsFromIR(StringRef fileName, StringRef tag,
 
 namespace {
 struct LocationSnapshotPass
-    : public impl::LocationSnapshotBase<LocationSnapshotPass> {
-  using impl::LocationSnapshotBase<LocationSnapshotPass>::LocationSnapshotBase;
+    : public LocationSnapshotBase<LocationSnapshotPass> {
+  LocationSnapshotPass() = default;
+  LocationSnapshotPass(OpPrintingFlags flags, StringRef fileName, StringRef tag)
+      : flags(flags) {
+    this->fileName = fileName.str();
+    this->tag = tag.str();
+  }
 
   void runOnOperation() override {
     Operation *op = getOperation();
-    if (failed(generateLocationsFromIR(fileName, op, getFlags(), tag)))
+    if (failed(generateLocationsFromIR(fileName, op, OpPrintingFlags(), tag)))
       return signalPassFailure();
   }
 
-private:
-  /// build the flags from the command line arguments to the pass
-  OpPrintingFlags getFlags() {
-    OpPrintingFlags flags;
-    flags.enableDebugInfo(enableDebugInfo, printPrettyDebugInfo);
-    flags.printGenericOpForm(printGenericOpForm);
-    if (useLocalScope)
-      flags.useLocalScope();
-    return flags;
-  }
+  /// The printing flags to use when creating the snapshot.
+  OpPrintingFlags flags;
 };
-} // namespace
+} // end anonymous namespace
+
+std::unique_ptr<Pass> mlir::createLocationSnapshotPass(OpPrintingFlags flags,
+                                                       StringRef fileName,
+                                                       StringRef tag) {
+  return std::make_unique<LocationSnapshotPass>(flags, fileName, tag);
+}
+std::unique_ptr<Pass> mlir::createLocationSnapshotPass() {
+  return std::make_unique<LocationSnapshotPass>();
+}

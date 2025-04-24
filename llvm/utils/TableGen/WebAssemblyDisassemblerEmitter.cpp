@@ -14,28 +14,29 @@
 //===----------------------------------------------------------------------===//
 
 #include "WebAssemblyDisassemblerEmitter.h"
-#include "Common/CodeGenInstruction.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/TableGen/Record.h"
+
+namespace llvm {
 
 static constexpr int WebAssemblyInstructionTableSize = 256;
 
-void llvm::emitWebAssemblyDisassemblerTables(
+void emitWebAssemblyDisassemblerTables(
     raw_ostream &OS,
-    ArrayRef<const CodeGenInstruction *> NumberedInstructions) {
+    const ArrayRef<const CodeGenInstruction *> &NumberedInstructions) {
   // First lets organize all opcodes by (prefix) byte. Prefix 0 is the
   // starting table.
   std::map<unsigned,
            std::map<unsigned, std::pair<unsigned, const CodeGenInstruction *>>>
       OpcodeTable;
   for (unsigned I = 0; I != NumberedInstructions.size(); ++I) {
-    const CodeGenInstruction &CGI = *NumberedInstructions[I];
-    const Record &Def = *CGI.TheDef;
+    auto &CGI = *NumberedInstructions[I];
+    auto &Def = *CGI.TheDef;
     if (!Def.getValue("Inst"))
       continue;
-    const BitsInit &Inst = *Def.getValueAsBitsInit("Inst");
-    unsigned Opc = static_cast<unsigned>(*Inst.convertInitializerToInt());
+    auto &Inst = *Def.getValueAsBitsInit("Inst");
+    auto Opc = static_cast<unsigned>(
+        reinterpret_cast<IntInit *>(Inst.convertInitializerTo(IntRecTy::get()))
+            ->getValue());
     if (Opc == 0xFFFFFFFF)
       continue; // No opcode defined.
     assert(Opc <= 0xFFFFFF);
@@ -50,7 +51,11 @@ void llvm::emitWebAssemblyDisassemblerTables(
     auto &CGIP = OpcodeTable[Prefix][Opc];
     // All wasm instructions have a StackBased field of type string, we only
     // want the instructions for which this is "true".
-    bool IsStackBased = Def.getValueAsBit("StackBased");
+    auto StackString =
+        Def.getValue("StackBased")->getValue()->getCastTo(StringRecTy::get());
+    auto IsStackBased =
+        StackString &&
+        reinterpret_cast<const StringInit *>(StackString)->getValue() == "true";
     if (!IsStackBased)
       continue;
     if (CGIP.second) {
@@ -58,12 +63,14 @@ void llvm::emitWebAssemblyDisassemblerTables(
       // should be the canonical one. This determines which variant gets
       // printed in a disassembly. We want e.g. "call" not "i32.call", and
       // "end" when we don't know if its "end_loop" or "end_block" etc.
-      bool IsCanonicalExisting =
-          CGIP.second->TheDef->getValueAsBit("IsCanonical");
+      auto IsCanonicalExisting = CGIP.second->TheDef->getValue("IsCanonical")
+                                     ->getValue()
+                                     ->getAsString() == "1";
       // We already have one marked explicitly as canonical, so keep it.
       if (IsCanonicalExisting)
         continue;
-      bool IsCanonicalNew = Def.getValueAsBit("IsCanonical");
+      auto IsCanonicalNew =
+          Def.getValue("IsCanonical")->getValue()->getAsString() == "1";
       // If the new one is explicitly marked as canonical, take it.
       if (!IsCanonicalNew) {
         // Neither the existing or new instruction is canonical.
@@ -75,7 +82,7 @@ void llvm::emitWebAssemblyDisassemblerTables(
       }
     }
     // Set this instruction as the one to use.
-    CGIP = {I, &CGI};
+    CGIP = std::make_pair(I, &CGI);
   }
   OS << "#include \"MCTargetDesc/WebAssemblyMCTargetDesc.h\"\n";
   OS << "\n";
@@ -92,14 +99,14 @@ void llvm::emitWebAssemblyDisassemblerTables(
   OS << "};\n\n";
   std::vector<std::string> OperandTable, CurOperandList;
   // Output one table per prefix.
-  for (const auto &[Prefix, Table] : OpcodeTable) {
-    if (Table.empty())
+  for (auto &PrefixPair : OpcodeTable) {
+    if (PrefixPair.second.empty())
       continue;
-    OS << "WebAssemblyInstruction InstructionTable" << Prefix;
+    OS << "WebAssemblyInstruction InstructionTable" << PrefixPair.first;
     OS << "[] = {\n";
     for (unsigned I = 0; I < WebAssemblyInstructionTableSize; I++) {
-      auto InstIt = Table.find(I);
-      if (InstIt != Table.end()) {
+      auto InstIt = PrefixPair.second.find(I);
+      if (InstIt != PrefixPair.second.end()) {
         // Regular instruction.
         assert(InstIt->second.second);
         auto &CGI = *InstIt->second.second;
@@ -122,8 +129,7 @@ void llvm::emitWebAssemblyDisassemblerTables(
                ++J) {
             size_t K = 0;
             for (; K < CurOperandList.size(); ++K) {
-              if (OperandTable[J + K] != CurOperandList[K])
-                break;
+              if (OperandTable[J + K] != CurOperandList[K]) break;
             }
             if (K == CurOperandList.size()) {
               OperandStart = J;
@@ -139,7 +145,7 @@ void llvm::emitWebAssemblyDisassemblerTables(
       } else {
         auto PrefixIt = OpcodeTable.find(I);
         // If we have a non-empty table for it that's not 0, this is a prefix.
-        if (PrefixIt != OpcodeTable.end() && I && !Prefix) {
+        if (PrefixIt != OpcodeTable.end() && I && !PrefixPair.first) {
           OS << "  { 0, ET_Prefix, 0, 0";
         } else {
           OS << "  { 0, ET_Unused, 0, 0";
@@ -158,11 +164,15 @@ void llvm::emitWebAssemblyDisassemblerTables(
   // Create a table of all extension tables:
   OS << "struct { uint8_t Prefix; const WebAssemblyInstruction *Table; }\n";
   OS << "PrefixTable[] = {\n";
-  for (const auto &[Prefix, Table] : OpcodeTable) {
-    if (Table.empty() || !Prefix)
+  for (auto &PrefixPair : OpcodeTable) {
+    if (PrefixPair.second.empty() || !PrefixPair.first)
       continue;
-    OS << "  { " << Prefix << ", InstructionTable" << Prefix << " },\n";
+    OS << "  { " << PrefixPair.first << ", InstructionTable"
+       << PrefixPair.first;
+    OS << " },\n";
   }
   OS << "  { 0, nullptr }\n};\n\n";
   OS << "} // end namespace llvm\n";
 }
+
+} // namespace llvm

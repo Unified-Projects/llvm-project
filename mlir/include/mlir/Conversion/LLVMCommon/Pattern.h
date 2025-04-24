@@ -11,25 +11,18 @@
 
 #include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
-class CallOpInterface;
 
 namespace LLVM {
 namespace detail {
-/// Handle generically setting flags as native properties on LLVM operations.
-void setNativeProperties(Operation *op, IntegerOverflowFlags overflowFlags);
-
 /// Replaces the given operation "op" with a new operation of type "targetOp"
 /// and given operands.
-LogicalResult oneToOneRewrite(
-    Operation *op, StringRef targetOp, ValueRange operands,
-    ArrayRef<NamedAttribute> targetAttrs,
-    const LLVMTypeConverter &typeConverter, ConversionPatternRewriter &rewriter,
-    IntegerOverflowFlags overflowFlags = IntegerOverflowFlags::none);
-
+LogicalResult oneToOneRewrite(Operation *op, StringRef targetOp,
+                              ValueRange operands,
+                              LLVMTypeConverter &typeConverter,
+                              ConversionPatternRewriter &rewriter);
 } // namespace detail
 } // namespace LLVM
 
@@ -41,14 +34,14 @@ LogicalResult oneToOneRewrite(
 class ConvertToLLVMPattern : public ConversionPattern {
 public:
   ConvertToLLVMPattern(StringRef rootOpName, MLIRContext *context,
-                       const LLVMTypeConverter &typeConverter,
+                       LLVMTypeConverter &typeConverter,
                        PatternBenefit benefit = 1);
 
 protected:
   /// Returns the LLVM dialect.
   LLVM::LLVMDialect &getDialect() const;
 
-  const LLVMTypeConverter *getTypeConverter() const;
+  LLVMTypeConverter *getTypeConverter() const;
 
   /// Gets the MLIR type wrapping the LLVM integer type whose bit width is
   /// defined by the used type converter.
@@ -69,6 +62,10 @@ protected:
   static Value createIndexAttrConstant(OpBuilder &builder, Location loc,
                                        Type resultType, int64_t value);
 
+  /// Create an LLVM dialect operation defining the given index constant.
+  Value createIndexConstant(ConversionPatternRewriter &builder, Location loc,
+                            uint64_t value) const;
+
   // This is a strided getElementPtr variant that linearizes subscripts as:
   //   `base_offset + index_0 * stride_0 + ... + index_n * stride_n`.
   Value getStridedElementPtr(Location loc, MemRefType type, Value memRefDesc,
@@ -82,42 +79,34 @@ protected:
   /// Returns the type of a pointer to an element of the memref.
   Type getElementPtrType(MemRefType type) const;
 
-  /// Computes sizes, strides and buffer size of `memRefType` with identity
-  /// layout. Emits constant ops for the static sizes of `memRefType`, and uses
-  /// `dynamicSizes` for the others. Emits instructions to compute strides and
-  /// buffer size from these sizes.
+  /// Computes sizes, strides and buffer size in bytes of `memRefType` with
+  /// identity layout. Emits constant ops for the static sizes of `memRefType`,
+  /// and uses `dynamicSizes` for the others. Emits instructions to compute
+  /// strides and buffer size from these sizes.
   ///
-  /// For example, memref<4x?xf32> with `sizeInBytes = true` emits:
+  /// For example, memref<4x?xf32> emits:
   /// `sizes[0]`   = llvm.mlir.constant(4 : index) : i64
   /// `sizes[1]`   = `dynamicSizes[0]`
   /// `strides[1]` = llvm.mlir.constant(1 : index) : i64
   /// `strides[0]` = `sizes[0]`
   /// %size        = llvm.mul `sizes[0]`, `sizes[1]` : i64
-  /// %nullptr     = llvm.mlir.zero : !llvm.ptr
+  /// %nullptr     = llvm.mlir.null : !llvm.ptr<f32>
   /// %gep         = llvm.getelementptr %nullptr[%size]
-  ///                  : (!llvm.ptr, i64) -> !llvm.ptr, f32
-  /// `sizeBytes`  = llvm.ptrtoint %gep : !llvm.ptr to i64
-  ///
-  /// If `sizeInBytes = false`, memref<4x?xf32> emits:
-  /// `sizes[0]`   = llvm.mlir.constant(4 : index) : i64
-  /// `sizes[1]`   = `dynamicSizes[0]`
-  /// `strides[1]` = llvm.mlir.constant(1 : index) : i64
-  /// `strides[0]` = `sizes[0]`
-  /// %size        = llvm.mul `sizes[0]`, `sizes[1]` : i64
+  ///                  : (!llvm.ptr<f32>, i64) -> !llvm.ptr<f32>
+  /// `sizeBytes`  = llvm.ptrtoint %gep : !llvm.ptr<f32> to i64
   void getMemRefDescriptorSizes(Location loc, MemRefType memRefType,
                                 ValueRange dynamicSizes,
                                 ConversionPatternRewriter &rewriter,
                                 SmallVectorImpl<Value> &sizes,
-                                SmallVectorImpl<Value> &strides, Value &size,
-                                bool sizeInBytes = true) const;
+                                SmallVectorImpl<Value> &strides,
+                                Value &sizeBytes) const;
 
   /// Computes the size of type in bytes.
   Value getSizeInBytes(Location loc, Type type,
                        ConversionPatternRewriter &rewriter) const;
 
-  /// Computes total number of elements for the given MemRef and dynamicSizes.
-  Value getNumElements(Location loc, MemRefType memRefType,
-                       ValueRange dynamicSizes,
+  /// Computes total number of elements for the given shape.
+  Value getNumElements(Location loc, ArrayRef<Value> shape,
                        ConversionPatternRewriter &rewriter) const;
 
   /// Creates and populates a canonical memref descriptor struct.
@@ -142,11 +131,7 @@ protected:
 template <typename SourceOp>
 class ConvertOpToLLVMPattern : public ConvertToLLVMPattern {
 public:
-  using OpAdaptor = typename SourceOp::Adaptor;
-  using OneToNOpAdaptor =
-      typename SourceOp::template GenericAdaptor<ArrayRef<ValueRange>>;
-
-  explicit ConvertOpToLLVMPattern(const LLVMTypeConverter &typeConverter,
+  explicit ConvertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                   PatternBenefit benefit = 1)
       : ConvertToLLVMPattern(SourceOp::getOperationName(),
                              &typeConverter.getContext(), typeConverter,
@@ -155,13 +140,7 @@ public:
   /// Wrappers around the RewritePattern methods that pass the derived op type.
   void rewrite(Operation *op, ArrayRef<Value> operands,
                ConversionPatternRewriter &rewriter) const final {
-    auto sourceOp = cast<SourceOp>(op);
-    rewrite(sourceOp, OpAdaptor(operands, sourceOp), rewriter);
-  }
-  void rewrite(Operation *op, ArrayRef<ValueRange> operands,
-               ConversionPatternRewriter &rewriter) const final {
-    auto sourceOp = cast<SourceOp>(op);
-    rewrite(sourceOp, OneToNOpAdaptor(operands, sourceOp), rewriter);
+    rewrite(cast<SourceOp>(op), operands, rewriter);
   }
   LogicalResult match(Operation *op) const final {
     return match(cast<SourceOp>(op));
@@ -169,46 +148,26 @@ public:
   LogicalResult
   matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const final {
-    auto sourceOp = cast<SourceOp>(op);
-    return matchAndRewrite(sourceOp, OpAdaptor(operands, sourceOp), rewriter);
-  }
-  LogicalResult
-  matchAndRewrite(Operation *op, ArrayRef<ValueRange> operands,
-                  ConversionPatternRewriter &rewriter) const final {
-    auto sourceOp = cast<SourceOp>(op);
-    return matchAndRewrite(sourceOp, OneToNOpAdaptor(operands, sourceOp),
-                           rewriter);
+    return matchAndRewrite(cast<SourceOp>(op), operands, rewriter);
   }
 
   /// Rewrite and Match methods that operate on the SourceOp type. These must be
   /// overridden by the derived pattern class.
-  virtual LogicalResult match(SourceOp op) const {
-    llvm_unreachable("must override match or matchAndRewrite");
-  }
-  virtual void rewrite(SourceOp op, OpAdaptor adaptor,
+  virtual void rewrite(SourceOp op, ArrayRef<Value> operands,
                        ConversionPatternRewriter &rewriter) const {
     llvm_unreachable("must override rewrite or matchAndRewrite");
   }
-  virtual void rewrite(SourceOp op, OneToNOpAdaptor adaptor,
-                       ConversionPatternRewriter &rewriter) const {
-    SmallVector<Value> oneToOneOperands =
-        getOneToOneAdaptorOperands(adaptor.getOperands());
-    rewrite(op, OpAdaptor(oneToOneOperands, adaptor), rewriter);
+  virtual LogicalResult match(SourceOp op) const {
+    llvm_unreachable("must override match or matchAndRewrite");
   }
   virtual LogicalResult
-  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+  matchAndRewrite(SourceOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const {
-    if (failed(match(op)))
-      return failure();
-    rewrite(op, adaptor, rewriter);
-    return success();
-  }
-  virtual LogicalResult
-  matchAndRewrite(SourceOp op, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const {
-    SmallVector<Value> oneToOneOperands =
-        getOneToOneAdaptorOperands(adaptor.getOperands());
-    return matchAndRewrite(op, OpAdaptor(oneToOneOperands, adaptor), rewriter);
+    if (succeeded(match(op))) {
+      rewrite(op, operands, rewriter);
+      return success();
+    }
+    return failure();
   }
 
 private:
@@ -230,11 +189,11 @@ public:
   /// Converts the type of the result to an LLVM type, pass operands as is,
   /// preserve attributes.
   LogicalResult
-  matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
+  matchAndRewrite(SourceOp op, ArrayRef<Value> operands,
                   ConversionPatternRewriter &rewriter) const override {
     return LLVM::detail::oneToOneRewrite(op, TargetOp::getOperationName(),
-                                         adaptor.getOperands(), op->getAttrs(),
-                                         *this->getTypeConverter(), rewriter);
+                                         operands, *this->getTypeConverter(),
+                                         rewriter);
   }
 };
 

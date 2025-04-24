@@ -21,6 +21,7 @@ class Pass;
 class SPIRVTypeConverter;
 struct ScfToSPIRVContextImpl;
 class RewritePatternSet;
+using OwningRewritePatternList = RewritePatternSet;
 
 struct ScfToSPIRVContext {
   ScfToSPIRVContext();
@@ -34,7 +35,7 @@ private:
 
 /// Collects a set of patterns to lower from scf.for, scf.if, and
 /// loop.terminator to CFG operations within the SPIR-V dialect.
-void populateSCFToSPIRVPatterns(const SPIRVTypeConverter &typeConverter,
+void populateSCFToSPIRVPatterns(SPIRVTypeConverter &typeConverter,
                                 ScfToSPIRVContext &scfToSPIRVContext,
                                 RewritePatternSet &patterns);
 } // namespace mlir

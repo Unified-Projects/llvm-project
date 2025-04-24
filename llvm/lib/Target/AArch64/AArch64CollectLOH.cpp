@@ -98,8 +98,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "AArch64.h"
+#include "AArch64InstrInfo.h"
 #include "AArch64MachineFunctionInfo.h"
+#include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -108,6 +113,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-collect-loh"
@@ -206,7 +212,7 @@ static bool isCandidateStore(const MachineInstr &MI, const MachineOperand &MO) {
     // In case we have str xA, [xA, #imm], this is two different uses
     // of xA and we cannot fold, otherwise the xA stored may be wrong,
     // even if #imm == 0.
-    return MO.getOperandNo() == 1 &&
+    return MI.getOperandNo(&MO) == 1 &&
            MI.getOperand(0).getReg() != MI.getOperand(1).getReg();
   }
 }
@@ -251,7 +257,7 @@ static bool supportLoadFromLiteral(const MachineInstr &MI) {
 /// Number of GPR registers traked by mapRegToGPRIndex()
 static const unsigned N_GPR_REGS = 31;
 /// Map register number to index from 0-30.
-static int mapRegToGPRIndex(MCRegister Reg) {
+static int mapRegToGPRIndex(MCPhysReg Reg) {
   static_assert(AArch64::X28 - AArch64::X0 + 3 == N_GPR_REGS, "Number of GPRs");
   static_assert(AArch64::W30 - AArch64::W0 + 1 == N_GPR_REGS, "Number of GPRs");
   if (AArch64::X0 <= Reg && Reg <= AArch64::X28)
@@ -522,8 +528,10 @@ static void handleNormalInst(const MachineInstr &MI, LOHInfo *LOHInfos) {
     // count as MultiUser or block optimization. This is especially important on
     // arm64_32, where any memory operation is likely to be an explicit use of
     // xN and an implicit use of wN (the base address register).
-    if (UsesSeen.insert(Idx).second)
+    if (!UsesSeen.count(Idx)) {
       handleUse(MI, MO, LOHInfos[Idx]);
+      UsesSeen.insert(Idx);
+    }
   }
 }
 
@@ -551,7 +559,7 @@ bool AArch64CollectLOH::runOnMachineFunction(MachineFunction &MF) {
     // Walk the basic block backwards and update the per register state machine
     // in the process.
     for (const MachineInstr &MI :
-         instructionsWithoutDebug(MBB.instr_rbegin(), MBB.instr_rend())) {
+         instructionsWithoutDebug(MBB.rbegin(), MBB.rend())) {
       unsigned Opcode = MI.getOpcode();
       switch (Opcode) {
       case AArch64::ADDXri:

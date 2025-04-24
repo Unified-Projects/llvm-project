@@ -17,12 +17,14 @@
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/IR/Module.h"
-#include "llvm/TargetParser/Triple.h"
 
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 #include "lldb/Core/Module.h"
+#include "lldb/Core/ValueObject.h"
+#include "lldb/Core/ValueObjectList.h"
 #include "lldb/Expression/IRExecutionUnit.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Symbol/Function.h"
@@ -35,11 +37,8 @@
 #include "lldb/Target/ThreadPlan.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
 #include "lldb/Utility/DataExtractor.h"
-#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/Utility/State.h"
-#include "lldb/ValueObject/ValueObject.h"
-#include "lldb/ValueObject/ValueObjectList.h"
 
 using namespace lldb_private;
 
@@ -138,7 +137,7 @@ ClangFunctionCaller::CompileFunction(lldb::ThreadSP thread_to_use_sp,
         type_name = clang_qual_type.GetTypeName().AsCString("");
       } else {
         diagnostic_manager.Printf(
-            lldb::eSeverityError,
+            eDiagnosticSeverityError,
             "Could not determine type of input value %" PRIu64 ".",
             (uint64_t)i);
         return 1;
@@ -181,7 +180,7 @@ ClangFunctionCaller::CompileFunction(lldb::ThreadSP thread_to_use_sp,
   m_wrapper_function_text.append(args_list_buffer);
   m_wrapper_function_text.append(");\n}\n");
 
-  Log *log = GetLog(LLDBLog::Expressions);
+  Log *log(lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_EXPRESSIONS));
   LLDB_LOGF(log, "Expression: \n\n%s\n\n", m_wrapper_function_text.c_str());
 
   // Okay, now compile this expression
@@ -194,7 +193,7 @@ ClangFunctionCaller::CompileFunction(lldb::ThreadSP thread_to_use_sp,
     num_errors = clang_parser->Parse(diagnostic_manager);
     m_parser.reset(clang_parser);
   } else {
-    diagnostic_manager.PutString(lldb::eSeverityError,
+    diagnostic_manager.PutString(eDiagnosticSeverityError,
                                  "no process - unable to inject function");
     num_errors = 1;
   }
@@ -206,8 +205,6 @@ ClangFunctionCaller::CompileFunction(lldb::ThreadSP thread_to_use_sp,
 
   return num_errors;
 }
-
-char ClangFunctionCaller::ClangFunctionCallerHelper::ID;
 
 clang::ASTConsumer *
 ClangFunctionCaller::ClangFunctionCallerHelper::ASTTransformer(

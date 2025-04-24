@@ -9,12 +9,14 @@
 #include "src/ctype/isblank.h"
 
 #include "src/__support/common.h"
-#include "src/__support/macros/config.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
+// TODO: Currently restricted to default locale.
+// These should be extended using locale information.
 LLVM_LIBC_FUNCTION(int, isblank, (int c)) {
-  return static_cast<int>(c == ' ' || c == '\t');
+  const unsigned char ch = static_cast<char>(c);
+  return ch == ' ' || ch == '\t';
 }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

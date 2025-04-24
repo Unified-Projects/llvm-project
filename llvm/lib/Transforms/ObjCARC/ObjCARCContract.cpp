@@ -31,15 +31,15 @@
 #include "ProvenanceAnalysis.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/EHPersonalities.h"
 #include "llvm/Analysis/ObjCARCUtil.h"
 #include "llvm/IR/Dominators.h"
-#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/ObjCARC.h"
@@ -70,9 +70,6 @@ class ObjCARCContract {
   ProvenanceAnalysis PA;
   ARCRuntimeEntryPoints EP;
   BundledRetainClaimRVs *BundledInsts = nullptr;
-
-  /// A flag indicating whether this optimization pass should run.
-  bool Run;
 
   /// The inline asm string to insert between calls and RetainRV calls to make
   /// the optimization work on targets which need it.
@@ -105,8 +102,11 @@ public:
 };
 
 class ObjCARCContractLegacyPass : public FunctionPass {
+  ObjCARCContract OCARCC;
+
 public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
+  bool doInitialization(Module &M) override;
   bool runOnFunction(Function &F) override;
 
   static char ID;
@@ -226,6 +226,13 @@ static StoreInst *findSafeStoreForStoreStrongContraction(LoadInst *Load,
     // of Inst.
     ARCInstKind Class = GetBasicARCInstKind(Inst);
 
+    // If Inst is an unrelated retain, we don't care about it.
+    //
+    // TODO: This is one area where the optimization could be made more
+    // aggressive.
+    if (IsRetain(Class))
+      continue;
+
     // If we have seen the store, but not the release...
     if (Store) {
       // We need to make sure that it is safe to move the release from its
@@ -241,18 +248,8 @@ static StoreInst *findSafeStoreForStoreStrongContraction(LoadInst *Load,
       return nullptr;
     }
 
-    // Ok, now we know we have not seen a store yet.
-
-    // If Inst is a retain, we don't care about it as it doesn't prevent moving
-    // the load to the store.
-    //
-    // TODO: This is one area where the optimization could be made more
-    // aggressive.
-    if (IsRetain(Class))
-      continue;
-
-    // See if Inst can write to our load location, if it can not, just ignore
-    // the instruction.
+    // Ok, now we know we have not seen a store yet. See if Inst can write to
+    // our load location, if it can not, just ignore the instruction.
     if (!isModSet(AA->getModRefInfo(Inst, Loc)))
       continue;
 
@@ -379,10 +376,18 @@ void ObjCARCContract::tryToContractReleaseIntoStoreStrong(
                    << "            Retain:  " << *Retain << "\n"
                    << "            Load:    " << *Load << "\n");
 
-  Value *Args[] = {Load->getPointerOperand(), New};
+  LLVMContext &C = Release->getContext();
+  Type *I8X = PointerType::getUnqual(Type::getInt8Ty(C));
+  Type *I8XX = PointerType::getUnqual(I8X);
+
+  Value *Args[] = { Load->getPointerOperand(), New };
+  if (Args[0]->getType() != I8XX)
+    Args[0] = new BitCastInst(Args[0], I8XX, "", Store);
+  if (Args[1]->getType() != I8X)
+    Args[1] = new BitCastInst(Args[1], I8X, "", Store);
   Function *Decl = EP.get(ARCRuntimeEntryPointKind::StoreStrong);
-  CallInst *StoreStrong = objcarc::createCallInstWithColors(
-      Decl, Args, "", Store->getIterator(), BlockColors);
+  CallInst *StoreStrong =
+      objcarc::createCallInstWithColors(Decl, Args, "", Store, BlockColors);
   StoreStrong->setDoesNotThrow();
   StoreStrong->setDebugLoc(Store->getDebugLoc());
 
@@ -423,22 +428,17 @@ bool ObjCARCContract::tryToPeepholeInstruction(
     if (!optimizeRetainCall(F, Inst))
       return false;
     // If we succeed in our optimization, fall through.
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case ARCInstKind::RetainRV:
-  case ARCInstKind::UnsafeClaimRV: {
-    // Return true if this is a bundled retainRV/claimRV call, which is always
-    // redundant with the attachedcall in the bundle, and is going to be erased
-    // at the end of this pass.  This avoids undoing objc-arc-expand and
-    // replacing uses of the retainRV/claimRV call's argument with its result.
-    if (BundledInsts->contains(Inst))
-      return true;
-
-    // If this isn't a bundled call, and the target doesn't need a special
-    // inline-asm marker, we're done: return now, and undo objc-arc-expand.
+  case ARCInstKind::ClaimRV: {
+    // If we're compiling for a target which needs a special inline-asm
+    // marker to do the return value optimization and the retainRV/claimRV call
+    // wasn't bundled with a call, insert the marker now.
     if (!RVInstMarker)
       return false;
 
-    // The target needs a special inline-asm marker.  Insert it.
+    if (BundledInsts->contains(Inst))
+      return false;
 
     BasicBlock::iterator BBI = Inst->getIterator();
     BasicBlock *InstParent = Inst->getParent();
@@ -467,8 +467,7 @@ bool ObjCARCContract::tryToPeepholeInstruction(
                          RVInstMarker->getString(),
                          /*Constraints=*/"", /*hasSideEffects=*/true);
 
-      objcarc::createCallInstWithColors(IA, {}, "", Inst->getIterator(),
-                                        BlockColors);
+      objcarc::createCallInstWithColors(IA, None, "", Inst, BlockColors);
     }
   decline_rv_optimization:
     return false;
@@ -479,7 +478,7 @@ bool ObjCARCContract::tryToPeepholeInstruction(
     if (IsNullOrUndef(CI->getArgOperand(1))) {
       Value *Null = ConstantPointerNull::get(cast<PointerType>(CI->getType()));
       Changed = true;
-      new StoreInst(Null, CI->getArgOperand(0), CI->getIterator());
+      new StoreInst(Null, CI->getArgOperand(0), CI);
 
       LLVM_DEBUG(dbgs() << "OBJCARCContract: Old = " << *CI << "\n"
                         << "                 New = " << *Null << "\n");
@@ -522,10 +521,6 @@ bool ObjCARCContract::tryToPeepholeInstruction(
 //===----------------------------------------------------------------------===//
 
 bool ObjCARCContract::init(Module &M) {
-  Run = ModuleHasARC(M);
-  if (!Run)
-    return false;
-
   EP.init(&M);
 
   // Initialize RVInstMarker.
@@ -535,9 +530,6 @@ bool ObjCARCContract::init(Module &M) {
 }
 
 bool ObjCARCContract::run(Function &F, AAResults *A, DominatorTree *D) {
-  if (!Run)
-    return false;
-
   if (!EnableARCOpts)
     return false;
 
@@ -545,7 +537,7 @@ bool ObjCARCContract::run(Function &F, AAResults *A, DominatorTree *D) {
   AA = A;
   DT = D;
   PA.setAA(A);
-  BundledRetainClaimRVs BRV(/*ContractPass=*/true);
+  BundledRetainClaimRVs BRV(EP, true);
   BundledInsts = &BRV;
 
   std::pair<bool, bool> R = BundledInsts->insertAfterInvokes(F, DT);
@@ -577,7 +569,7 @@ bool ObjCARCContract::run(Function &F, AAResults *A, DominatorTree *D) {
 
     if (auto *CI = dyn_cast<CallInst>(Inst))
       if (objcarc::hasAttachedCallOpBundle(CI)) {
-        BundledInsts->insertRVCallWithColors(I->getIterator(), CI, BlockColors);
+        BundledInsts->insertRVCallWithColors(&*I, CI, BlockColors);
         --I;
         Changed = true;
       }
@@ -627,14 +619,14 @@ bool ObjCARCContract::run(Function &F, AAResults *A, DominatorTree *D) {
             // block with a catchswitch has no insertion point. Keep going up
             // the dominator tree until we find a non-catchswitch.
             BasicBlock *InsertBB = IncomingBB;
-            while (isa<CatchSwitchInst>(InsertBB->getFirstNonPHIIt())) {
+            while (isa<CatchSwitchInst>(InsertBB->getFirstNonPHI())) {
               InsertBB = DT->getNode(InsertBB)->getIDom()->getBlock();
             }
 
             assert(DT->dominates(Inst, &InsertBB->back()) &&
                    "Invalid insertion point for bitcast");
-            Replacement = new BitCastInst(Replacement, UseTy, "",
-                                          InsertBB->back().getIterator());
+            Replacement =
+                new BitCastInst(Replacement, UseTy, "", &InsertBB->back());
           }
 
           // While we're here, rewrite all edges for this PHI, rather
@@ -651,9 +643,8 @@ bool ObjCARCContract::run(Function &F, AAResults *A, DominatorTree *D) {
             }
         } else {
           if (Replacement->getType() != UseTy)
-            Replacement =
-                new BitCastInst(Replacement, UseTy, "",
-                                cast<Instruction>(U.getUser())->getIterator());
+            Replacement = new BitCastInst(Replacement, UseTy, "",
+                                          cast<Instruction>(U.getUser()));
           U.set(Replacement);
         }
       }
@@ -732,18 +723,17 @@ INITIALIZE_PASS_END(ObjCARCContractLegacyPass, "objc-arc-contract",
 void ObjCARCContractLegacyPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AAResultsWrapperPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
-  AU.addPreserved<AAResultsWrapperPass>();
-  AU.addPreserved<BasicAAWrapperPass>();
-  AU.addPreserved<DominatorTreeWrapperPass>();
 }
 
 Pass *llvm::createObjCARCContractPass() {
   return new ObjCARCContractLegacyPass();
 }
 
+bool ObjCARCContractLegacyPass::doInitialization(Module &M) {
+  return OCARCC.init(M);
+}
+
 bool ObjCARCContractLegacyPass::runOnFunction(Function &F) {
-  ObjCARCContract OCARCC;
-  OCARCC.init(*F.getParent());
   auto *AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
   auto *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   return OCARCC.run(F, AA, DT);

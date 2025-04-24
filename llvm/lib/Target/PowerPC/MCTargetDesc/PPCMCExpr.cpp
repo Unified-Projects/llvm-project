@@ -99,33 +99,26 @@ PPCMCExpr::evaluateAsInt64(int64_t Value) const {
   llvm_unreachable("Invalid kind!");
 }
 
-bool PPCMCExpr::evaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
-                                          const MCFixup *Fixup) const {
+bool
+PPCMCExpr::evaluateAsRelocatableImpl(MCValue &Res,
+                                     const MCAsmLayout *Layout,
+                                     const MCFixup *Fixup) const {
   MCValue Value;
 
-  if (!getSubExpr()->evaluateAsRelocatable(Value, Asm, Fixup))
+  if (!getSubExpr()->evaluateAsRelocatable(Value, Layout, Fixup))
     return false;
 
   if (Value.isAbsolute()) {
     int64_t Result = evaluateAsInt64(Value.getConstant());
-    bool IsHalf16 = Fixup && Fixup->getTargetKind() == PPC::fixup_ppc_half16;
-    bool IsHalf16DS =
-        Fixup && Fixup->getTargetKind() == PPC::fixup_ppc_half16ds;
-    bool IsHalf16DQ =
-        Fixup && Fixup->getTargetKind() == PPC::fixup_ppc_half16dq;
-    bool IsHalf = IsHalf16 || IsHalf16DS || IsHalf16DQ;
-
-    if (!IsHalf && Result >= 0x8000)
+    if ((Fixup == nullptr || (unsigned)Fixup->getKind() != PPC::fixup_ppc_half16) &&
+        (Result >= 0x8000))
       return false;
-    if ((IsHalf16DS && (Result & 0x3)) || (IsHalf16DQ && (Result & 0xf)))
-      return false;
-
     Res = MCValue::get(Result);
   } else {
-    if (!Asm || !Asm->hasLayout())
+    if (!Layout)
       return false;
 
-    MCContext &Context = Asm->getContext();
+    MCContext &Context = Layout->getAssembler().getContext();
     const MCSymbolRefExpr *Sym = Value.getSymA();
     MCSymbolRefExpr::VariantKind Modifier = Sym->getKind();
     if (Modifier != MCSymbolRefExpr::VK_None)

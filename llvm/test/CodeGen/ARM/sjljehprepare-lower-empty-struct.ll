@@ -13,18 +13,14 @@
 ; __Unwind_SjLj_Register and actual @bar invocation
 
 
-define ptr @foo(i8 %a, {} %c) personality ptr @baz {
+define i8* @foo(i8 %a, {} %c) personality i8* bitcast (i32 (...)* @baz to i8*) {
 entry:
 ; CHECK: bl __Unwind_SjLj_Register
-; CHECK-NEXT: mov r0, #1
-; CHECK-NEXT: str r0, [sp, #{{[0-9]+}}]
 ; CHECK-NEXT: {{[A-Z][a-zA-Z0-9]*}}:
 ; CHECK-NEXT: bl _bar
 ; CHECK: bl __Unwind_SjLj_Resume
 
 ; CHECK-LINUX: bl _Unwind_SjLj_Register
-; CHECK-LINUX-NEXT: mov r0, #1
-; CHECK-LINUX-NEXT: str r0, [sp, #{{[0-9]+}}]
 ; CHECK-LINUX-NEXT: .{{[A-Z][a-zA-Z0-9]*}}:
 ; CHECK-LINUX-NEXT: bl bar
 ; CHECK-LINUX: bl _Unwind_SjLj_Resume
@@ -38,9 +34,9 @@ unreachable:
   unreachable
 
 handler:
-  %tmp = landingpad { ptr, i32 }
+  %tmp = landingpad { i8*, i32 }
   cleanup
-  resume { ptr, i32 } undef
+  resume { i8*, i32 } undef
 }
 
 declare void @bar()

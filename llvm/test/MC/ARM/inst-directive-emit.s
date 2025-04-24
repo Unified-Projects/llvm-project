@@ -9,6 +9,7 @@
 emit_asm:
 	.inst.w 0xf2400000, 0xf2c00000
 
+@ CHECK: 	.text
 @ CHECK: 	.code	16
 @ CHECK: 	.p2align	2
 @ CHECK: 	.globl	emit_asm

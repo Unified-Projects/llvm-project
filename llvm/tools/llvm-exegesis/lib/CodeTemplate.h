@@ -119,11 +119,11 @@ struct CodeTemplate {
 
   CodeTemplate(CodeTemplate &&);            // default
   CodeTemplate &operator=(CodeTemplate &&); // default
-
-  CodeTemplate clone() const;
+  CodeTemplate(const CodeTemplate &) = delete;
+  CodeTemplate &operator=(const CodeTemplate &) = delete;
 
   ExecutionMode Execution = ExecutionMode::UNKNOWN;
-  // See BenchmarkKey.::Config.
+  // See InstructionBenchmarkKey.::Config.
   std::string Config;
   // Some information about how this template has been created.
   std::string Info;
@@ -131,14 +131,7 @@ struct CodeTemplate {
   std::vector<InstructionTemplate> Instructions;
   // If the template uses the provided scratch memory, the register in which
   // the pointer to this memory is passed in to the function.
-  MCRegister ScratchSpacePointerInReg;
-
-#if defined(__GNUC__) && (defined(__clang__) || LLVM_GNUC_PREREQ(8, 0, 0))
-  // FIXME: GCC7 bug workaround. Drop #if after GCC7 no longer supported.
-private:
-#endif
-  CodeTemplate(const CodeTemplate &);            // default
-  CodeTemplate &operator=(const CodeTemplate &); // default
+  unsigned ScratchSpacePointerInReg = 0;
 };
 
 } // namespace exegesis

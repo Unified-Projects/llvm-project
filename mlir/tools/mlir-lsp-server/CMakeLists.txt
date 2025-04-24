@@ -17,47 +17,37 @@ if(MLIR_INCLUDE_TESTS)
     MLIRSPIRVTestPasses
     MLIRTestAnalysis
     MLIRTestDialect
-    MLIRTestDynDialect
     MLIRTestIR
     MLIRTestPass
     MLIRTestReducer
+    MLIRTestRewrite
+    MLIRTestTransforms
     )
-  set(test_libs
-    ${test_libs}
-    MLIRTestTransformDialect
-    MLIRTestTransforms)
-
-  if (MLIR_ENABLE_PDL_IN_PATTERNMATCH)
-    set(test_libs
-      ${test_libs}
-      MLIRTestRewrite)
-  endif()
 endif()
 
 set(LIBS
-  ${conversion_libs}
   ${dialect_libs}
-  ${extension_libs}
-
-  MLIRAffineAnalysis
+  ${conversion_libs}
+  ${test_libs}
+  MLIRLoopAnalysis
   MLIRAnalysis
   MLIRDialect
-  MLIRFuncAllExtensions
   MLIRLspServerLib
   MLIRParser
   MLIRPass
-  MLIRTensorAllExtensions
   MLIRTransforms
   MLIRTransformUtils
   MLIRSupport
   MLIRIR
   )
 
-add_mlir_tool(mlir-lsp-server
+add_llvm_tool(mlir-lsp-server
   mlir-lsp-server.cpp
+
+  DEPENDS
+  ${LIBS}
   )
-mlir_target_link_libraries(mlir-lsp-server PRIVATE ${LIBS})
-target_link_libraries(mlir-lsp-server PRIVATE ${test_libs})
+target_link_libraries(mlir-lsp-server PRIVATE ${LIBS})
 llvm_update_compile_flags(mlir-lsp-server)
 
 mlir_check_all_link_libraries(mlir-lsp-server)

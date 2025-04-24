@@ -21,7 +21,6 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -30,7 +29,6 @@ namespace llvm {
 
 /// A format-neutral container for source line information.
 struct DILineInfo {
-  static constexpr const char *const ApproxString = "(approximate)";
   // DILineInfo contains "<invalid>" for function/filename it cannot fetch.
   static constexpr const char *const BadString = "<invalid>";
   // Use "??" instead of "<invalid>" to make our output closer to addr2line.
@@ -38,20 +36,15 @@ struct DILineInfo {
   std::string FileName;
   std::string FunctionName;
   std::string StartFileName;
-  // Full source corresponding to `FileName`
-  std::optional<StringRef> Source;
-  // Source code for this particular line
-  // (in case if `Source` is not available)
-  std::optional<StringRef> LineSource;
+  Optional<StringRef> Source;
   uint32_t Line = 0;
   uint32_t Column = 0;
   uint32_t StartLine = 0;
-  std::optional<uint64_t> StartAddress;
+  Optional<uint64_t> StartAddress;
 
   // DWARF-specific.
   uint32_t Discriminator = 0;
 
-  bool IsApproximateLine = false;
   DILineInfo()
       : FileName(BadString), FunctionName(BadString), StartFileName(BadString) {
   }
@@ -97,8 +90,6 @@ class DIInliningInfo {
 public:
   DIInliningInfo() = default;
 
-  /// Returns the frame at `Index`. Frames are stored in bottom-up
-  /// (leaf-to-root) order with increasing index.
   const DILineInfo &getFrame(unsigned Index) const {
     assert(Index < Frames.size());
     return Frames[Index];
@@ -121,8 +112,6 @@ struct DIGlobal {
   std::string Name;
   uint64_t Start = 0;
   uint64_t Size = 0;
-  std::string DeclFile;
-  uint64_t DeclLine = 0;
 
   DIGlobal() : Name(DILineInfo::BadString) {}
 };
@@ -132,9 +121,9 @@ struct DILocal {
   std::string Name;
   std::string DeclFile;
   uint64_t DeclLine = 0;
-  std::optional<int64_t> FrameOffset;
-  std::optional<uint64_t> Size;
-  std::optional<uint64_t> TagOffset;
+  Optional<int64_t> FrameOffset;
+  Optional<uint64_t> Size;
+  Optional<uint64_t> TagOffset;
 };
 
 /// A DINameKind is passed to name search methods to specify a
@@ -155,18 +144,13 @@ struct DILineInfoSpecifier {
     AbsoluteFilePath
   };
   using FunctionNameKind = DINameKind;
+
   FileLineInfoKind FLIKind;
   FunctionNameKind FNKind;
-  bool ApproximateLine;
 
   DILineInfoSpecifier(FileLineInfoKind FLIKind = FileLineInfoKind::RawValue,
-                      FunctionNameKind FNKind = FunctionNameKind::None,
-                      bool ApproximateLine = false)
-      : FLIKind(FLIKind), FNKind(FNKind), ApproximateLine(ApproximateLine) {}
-
-  inline bool operator==(const DILineInfoSpecifier &RHS) const {
-    return FLIKind == RHS.FLIKind && FNKind == RHS.FNKind;
-  }
+                      FunctionNameKind FNKind = FunctionNameKind::None)
+      : FLIKind(FLIKind), FNKind(FNKind) {}
 };
 
 /// This is just a helper to programmatically construct DIDumpType.
@@ -206,12 +190,6 @@ struct DIDumpOptions {
   bool SummarizeTypes = false;
   bool Verbose = false;
   bool DisplayRawContents = false;
-  bool IsEH = false;
-  bool DumpNonSkeleton = false;
-  bool ShowAggregateErrors = false;
-  std::string JsonErrSummaryFile;
-  std::function<llvm::StringRef(uint64_t DwarfRegNum, bool IsEH)>
-      GetNameForDWARFReg;
 
   /// Return default option set for printing a single DIE without children.
   static DIDumpOptions getForSingleDIE() {
@@ -238,7 +216,7 @@ struct DIDumpOptions {
 
 class DIContext {
 public:
-  enum DIContextKind { CK_DWARF, CK_PDB, CK_BTF };
+  enum DIContextKind { CK_DWARF, CK_PDB };
 
   DIContext(DIContextKind K) : Kind(K) {}
   virtual ~DIContext() = default;
@@ -255,8 +233,6 @@ public:
   virtual DILineInfo getLineInfoForAddress(
       object::SectionedAddress Address,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) = 0;
-  virtual DILineInfo
-  getLineInfoForDataAddress(object::SectionedAddress Address) = 0;
   virtual DILineInfoTable getLineInfoForAddressRange(
       object::SectionedAddress Address, uint64_t Size,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) = 0;

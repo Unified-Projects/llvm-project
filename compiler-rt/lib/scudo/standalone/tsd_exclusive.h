@@ -11,13 +11,11 @@
 
 #include "tsd.h"
 
-#include "string_utils.h"
-
 namespace scudo {
 
 struct ThreadState {
   bool DisableMemInit : 1;
-  enum : unsigned {
+  enum {
     NotInitialized = 0,
     Initialized,
     TornDown,
@@ -27,32 +25,7 @@ struct ThreadState {
 template <class Allocator> void teardownThread(void *Ptr);
 
 template <class Allocator> struct TSDRegistryExT {
-  using ThisT = TSDRegistryExT<Allocator>;
-
-  struct ScopedTSD {
-    ALWAYS_INLINE ScopedTSD(ThisT &TSDRegistry) {
-      CurrentTSD = TSDRegistry.getTSDAndLock(&UnlockRequired);
-      DCHECK_NE(CurrentTSD, nullptr);
-    }
-
-    ~ScopedTSD() {
-      if (UNLIKELY(UnlockRequired))
-        CurrentTSD->unlock();
-    }
-
-    TSD<Allocator> &operator*() { return *CurrentTSD; }
-
-    TSD<Allocator> *operator->() {
-      CurrentTSD->assertLocked(/*BypassCheck=*/!UnlockRequired);
-      return CurrentTSD;
-    }
-
-  private:
-    TSD<Allocator> *CurrentTSD;
-    bool UnlockRequired;
-  };
-
-  void init(Allocator *Instance) REQUIRES(Mutex) {
+  void init(Allocator *Instance) {
     DCHECK(!Initialized);
     Instance->init();
     CHECK_EQ(pthread_key_create(&PThreadKey, teardownThread<Allocator>), 0);
@@ -60,14 +33,14 @@ template <class Allocator> struct TSDRegistryExT {
     Initialized = true;
   }
 
-  void initOnceMaybe(Allocator *Instance) EXCLUDES(Mutex) {
+  void initOnceMaybe(Allocator *Instance) {
     ScopedLock L(Mutex);
     if (LIKELY(Initialized))
       return;
     init(Instance); // Sets Initialized.
   }
 
-  void unmapTestOnly(Allocator *Instance) EXCLUDES(Mutex) {
+  void unmapTestOnly(Allocator *Instance) {
     DCHECK(Instance);
     if (reinterpret_cast<Allocator *>(pthread_getspecific(PThreadKey))) {
       DCHECK_EQ(reinterpret_cast<Allocator *>(pthread_getspecific(PThreadKey)),
@@ -80,17 +53,7 @@ template <class Allocator> struct TSDRegistryExT {
     FallbackTSD.commitBack(Instance);
     FallbackTSD = {};
     State = {};
-    ScopedLock L(Mutex);
     Initialized = false;
-  }
-
-  void drainCaches(Allocator *Instance) {
-    // We don't have a way to iterate all thread local `ThreadTSD`s. Simply
-    // drain the `ThreadTSD` of current thread and `FallbackTSD`.
-    Instance->drainCache(&ThreadTSD);
-    FallbackTSD.lock();
-    Instance->drainCache(&FallbackTSD);
-    FallbackTSD.unlock();
   }
 
   ALWAYS_INLINE void initThreadMaybe(Allocator *Instance, bool MinimalInit) {
@@ -99,40 +62,7 @@ template <class Allocator> struct TSDRegistryExT {
     initThread(Instance, MinimalInit);
   }
 
-  // To disable the exclusive TSD registry, we effectively lock the fallback TSD
-  // and force all threads to attempt to use it instead of their local one.
-  void disable() NO_THREAD_SAFETY_ANALYSIS {
-    Mutex.lock();
-    FallbackTSD.lock();
-    atomic_store(&Disabled, 1U, memory_order_release);
-  }
-
-  void enable() NO_THREAD_SAFETY_ANALYSIS {
-    atomic_store(&Disabled, 0U, memory_order_release);
-    FallbackTSD.unlock();
-    Mutex.unlock();
-  }
-
-  bool setOption(Option O, sptr Value) {
-    if (O == Option::ThreadDisableMemInit)
-      State.DisableMemInit = Value;
-    if (O == Option::MaxTSDsCount)
-      return false;
-    return true;
-  }
-
-  bool getDisableMemInit() { return State.DisableMemInit; }
-
-  void getStats(ScopedString *Str) {
-    // We don't have a way to iterate all thread local `ThreadTSD`s. Instead of
-    // printing only self `ThreadTSD` which may mislead the usage, we just skip
-    // it.
-    Str->append("Exclusive TSD don't support iterating each TSD\n");
-  }
-
-private:
-  ALWAYS_INLINE TSD<Allocator> *
-  getTSDAndLock(bool *UnlockRequired) NO_THREAD_SAFETY_ANALYSIS {
+  ALWAYS_INLINE TSD<Allocator> *getTSDAndLock(bool *UnlockRequired) {
     if (LIKELY(State.InitState == ThreadState::Initialized &&
                !atomic_load(&Disabled, memory_order_acquire))) {
       *UnlockRequired = false;
@@ -143,6 +73,31 @@ private:
     return &FallbackTSD;
   }
 
+  // To disable the exclusive TSD registry, we effectively lock the fallback TSD
+  // and force all threads to attempt to use it instead of their local one.
+  void disable() {
+    Mutex.lock();
+    FallbackTSD.lock();
+    atomic_store(&Disabled, 1U, memory_order_release);
+  }
+
+  void enable() {
+    atomic_store(&Disabled, 0U, memory_order_release);
+    FallbackTSD.unlock();
+    Mutex.unlock();
+  }
+
+  bool setOption(Option O, UNUSED sptr Value) {
+    if (O == Option::ThreadDisableMemInit)
+      State.DisableMemInit = Value;
+    if (O == Option::MaxTSDsCount)
+      return false;
+    return true;
+  }
+
+  bool getDisableMemInit() { return State.DisableMemInit; }
+
+private:
   // Using minimal initialization allows for global initialization while keeping
   // the thread specific structure untouched. The fallback structure will be
   // used instead.
@@ -158,7 +113,7 @@ private:
   }
 
   pthread_key_t PThreadKey = {};
-  bool Initialized GUARDED_BY(Mutex) = false;
+  bool Initialized = false;
   atomic_u8 Disabled = {};
   TSD<Allocator> FallbackTSD;
   HybridMutex Mutex;
@@ -173,8 +128,7 @@ thread_local TSD<Allocator> TSDRegistryExT<Allocator>::ThreadTSD;
 template <class Allocator>
 thread_local ThreadState TSDRegistryExT<Allocator>::State;
 
-template <class Allocator>
-void teardownThread(void *Ptr) NO_THREAD_SAFETY_ANALYSIS {
+template <class Allocator> void teardownThread(void *Ptr) {
   typedef TSDRegistryExT<Allocator> TSDRegistryT;
   Allocator *Instance = reinterpret_cast<Allocator *>(Ptr);
   // The glibc POSIX thread-local-storage deallocation routine calls user

@@ -9,7 +9,6 @@
 #include "lldb/Symbol/UnwindTable.h"
 
 #include <cstdio>
-#include <optional>
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Section.h"
@@ -30,51 +29,52 @@ using namespace lldb;
 using namespace lldb_private;
 
 UnwindTable::UnwindTable(Module &module)
-    : m_module(module), m_unwinds(), m_scanned_all_unwind_sources(false),
-      m_mutex(), m_object_file_unwind_up(), m_eh_frame_up(),
-      m_compact_unwind_up(), m_arm_unwind_up() {}
+    : m_module(module), m_unwinds(), m_initialized(false), m_mutex(),
+      m_object_file_unwind_up(), m_eh_frame_up(), m_compact_unwind_up(),
+      m_arm_unwind_up() {}
 
 // We can't do some of this initialization when the ObjectFile is running its
 // ctor; delay doing it until needed for something.
+
 void UnwindTable::Initialize() {
-  if (m_scanned_all_unwind_sources)
+  if (m_initialized)
     return;
 
   std::lock_guard<std::mutex> guard(m_mutex);
 
-  if (m_scanned_all_unwind_sources) // check again once we've acquired the lock
+  if (m_initialized) // check again once we've acquired the lock
     return;
-
+  m_initialized = true;
   ObjectFile *object_file = m_module.GetObjectFile();
   if (!object_file)
     return;
 
-  m_scanned_all_unwind_sources = true;
-
-  if (!m_object_file_unwind_up)
-    m_object_file_unwind_up = object_file->CreateCallFrameInfo();
+  m_object_file_unwind_up = object_file->CreateCallFrameInfo();
 
   SectionList *sl = m_module.GetSectionList();
   if (!sl)
     return;
 
   SectionSP sect = sl->FindSectionByType(eSectionTypeEHFrame, true);
-  if (!m_eh_frame_up && sect)
+  if (sect.get()) {
     m_eh_frame_up = std::make_unique<DWARFCallFrameInfo>(
         *object_file, sect, DWARFCallFrameInfo::EH);
+  }
 
   sect = sl->FindSectionByType(eSectionTypeDWARFDebugFrame, true);
-  if (!m_debug_frame_up && sect)
+  if (sect) {
     m_debug_frame_up = std::make_unique<DWARFCallFrameInfo>(
         *object_file, sect, DWARFCallFrameInfo::DWARF);
+  }
 
   sect = sl->FindSectionByType(eSectionTypeCompactUnwind, true);
-  if (!m_compact_unwind_up && sect)
+  if (sect) {
     m_compact_unwind_up =
         std::make_unique<CompactUnwindInfo>(*object_file, sect);
+  }
 
   sect = sl->FindSectionByType(eSectionTypeARMexidx, true);
-  if (!m_arm_unwind_up && sect) {
+  if (sect) {
     SectionSP sect_extab = sl->FindSectionByType(eSectionTypeARMextab, true);
     if (sect_extab.get()) {
       m_arm_unwind_up =
@@ -83,15 +83,10 @@ void UnwindTable::Initialize() {
   }
 }
 
-void UnwindTable::ModuleWasUpdated() {
-  std::lock_guard<std::mutex> guard(m_mutex);
-  m_scanned_all_unwind_sources = false;
-}
-
 UnwindTable::~UnwindTable() = default;
 
-std::optional<AddressRange>
-UnwindTable::GetAddressRange(const Address &addr, const SymbolContext &sc) {
+llvm::Optional<AddressRange> UnwindTable::GetAddressRange(const Address &addr,
+                                                          SymbolContext &sc) {
   AddressRange range;
 
   // First check the unwind info from the object file plugin
@@ -113,7 +108,7 @@ UnwindTable::GetAddressRange(const Address &addr, const SymbolContext &sc) {
   if (m_debug_frame_up && m_debug_frame_up->GetAddressRange(addr, range))
     return range;
 
-  return std::nullopt;
+  return llvm::None;
 }
 
 FuncUnwindersSP
@@ -154,8 +149,9 @@ UnwindTable::GetFuncUnwindersContainingAddress(const Address &addr,
 // don't add it to the UnwindTable.  This is intended for use by target modules
 // show-unwind where we want to create new UnwindPlans, not re-use existing
 // ones.
-FuncUnwindersSP UnwindTable::GetUncachedFuncUnwindersContainingAddress(
-    const Address &addr, const SymbolContext &sc) {
+FuncUnwindersSP
+UnwindTable::GetUncachedFuncUnwindersContainingAddress(const Address &addr,
+                                                       SymbolContext &sc) {
   Initialize();
 
   auto range_or = GetAddressRange(addr, sc);

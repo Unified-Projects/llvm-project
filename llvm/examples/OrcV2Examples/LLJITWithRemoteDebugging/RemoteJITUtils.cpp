@@ -8,14 +8,15 @@
 
 #include "RemoteJITUtils.h"
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ExecutionEngine/Orc/DebugObjectManagerPlugin.h"
 #include "llvm/ExecutionEngine/Orc/EPCDebugObjectRegistrar.h"
 #include "llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h"
-#include "llvm/ExecutionEngine/Orc/Shared/SimpleRemoteEPCUtils.h"
+#include "llvm/ExecutionEngine/Orc/OrcRPCExecutorProcessControl.h"
+#include "llvm/ExecutionEngine/Orc/Shared/RPCUtils.h"
 #include "llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderGDB.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/ToolOutputFile.h"
 
 #ifdef LLVM_ON_UNIX
 #include <netdb.h>
@@ -27,40 +28,168 @@
 using namespace llvm;
 using namespace llvm::orc;
 
+namespace llvm {
+namespace orc {
+
+class RemoteExecutorProcessControl
+    : public OrcRPCExecutorProcessControlBase<
+          shared::MultiThreadedRPCEndpoint<JITLinkExecutor::RPCChannel>> {
+public:
+  using RPCChannel = JITLinkExecutor::RPCChannel;
+  using RPCEndpoint = shared::MultiThreadedRPCEndpoint<RPCChannel>;
+
+private:
+  using ThisT = RemoteExecutorProcessControl;
+  using BaseT = OrcRPCExecutorProcessControlBase<RPCEndpoint>;
+  using MemoryAccess = OrcRPCEPCMemoryAccess<ThisT>;
+  using MemoryManager = OrcRPCEPCJITLinkMemoryManager<ThisT>;
+
+public:
+  using BaseT::initializeORCRPCEPCBase;
+
+  RemoteExecutorProcessControl(ExecutionSession &ES,
+                               std::unique_ptr<RPCChannel> Channel,
+                               std::unique_ptr<RPCEndpoint> Endpoint);
+
+  void initializeMemoryManagement();
+  Error disconnect() override;
+
+private:
+  std::unique_ptr<RPCChannel> Channel;
+  std::unique_ptr<RPCEndpoint> Endpoint;
+  std::unique_ptr<MemoryAccess> OwnedMemAccess;
+  std::unique_ptr<MemoryManager> OwnedMemMgr;
+  std::atomic<bool> Finished{false};
+  std::thread ListenerThread;
+};
+
+RemoteExecutorProcessControl::RemoteExecutorProcessControl(
+    ExecutionSession &ES, std::unique_ptr<RPCChannel> Channel,
+    std::unique_ptr<RPCEndpoint> Endpoint)
+    : BaseT(ES.getSymbolStringPool(), *Endpoint,
+            [&ES](Error Err) { ES.reportError(std::move(Err)); }),
+      Channel(std::move(Channel)), Endpoint(std::move(Endpoint)) {
+
+  ListenerThread = std::thread([&]() {
+    while (!Finished) {
+      if (auto Err = this->Endpoint->handleOne()) {
+        reportError(std::move(Err));
+        return;
+      }
+    }
+  });
+}
+
+void RemoteExecutorProcessControl::initializeMemoryManagement() {
+  OwnedMemAccess = std::make_unique<MemoryAccess>(*this);
+  OwnedMemMgr = std::make_unique<MemoryManager>(*this);
+
+  // Base class needs non-owning access.
+  MemAccess = OwnedMemAccess.get();
+  MemMgr = OwnedMemMgr.get();
+}
+
+Error RemoteExecutorProcessControl::disconnect() {
+  std::promise<MSVCPError> P;
+  auto F = P.get_future();
+  auto Err = closeConnection([&](Error Err) -> Error {
+    P.set_value(std::move(Err));
+    Finished = true;
+    return Error::success();
+  });
+  ListenerThread.join();
+  return joinErrors(std::move(Err), F.get());
+}
+
+} // namespace orc
+} // namespace llvm
+
+JITLinkExecutor::JITLinkExecutor() = default;
+JITLinkExecutor::~JITLinkExecutor() = default;
+
+Expected<std::unique_ptr<ObjectLayer>>
+JITLinkExecutor::operator()(ExecutionSession &ES, const Triple &TT) {
+  return std::make_unique<ObjectLinkingLayer>(ES, EPC->getMemMgr());
+}
+
+Error JITLinkExecutor::addDebugSupport(ObjectLayer &ObjLayer) {
+  auto Registrar = createJITLoaderGDBRegistrar(*EPC);
+  if (!Registrar)
+    return Registrar.takeError();
+
+  cast<ObjectLinkingLayer>(&ObjLayer)->addPlugin(
+      std::make_unique<DebugObjectManagerPlugin>(ObjLayer.getExecutionSession(),
+                                                 std::move(*Registrar)));
+
+  return Error::success();
+}
+
 Expected<std::unique_ptr<DefinitionGenerator>>
-loadDylib(ExecutionSession &ES, StringRef RemotePath) {
-  if (auto Handle = ES.getExecutorProcessControl().getDylibMgr().loadDylib(
-          RemotePath.data()))
-    return std::make_unique<EPCDynamicLibrarySearchGenerator>(ES, *Handle);
+JITLinkExecutor::loadDylib(StringRef RemotePath) {
+  if (auto Handle = EPC->loadDylib(RemotePath.data()))
+    return std::make_unique<EPCDynamicLibrarySearchGenerator>(*EPC, *Handle);
   else
     return Handle.takeError();
 }
 
-static void findLocalExecutorHelper() {}
-std::string findLocalExecutor(const char *HostArgv0) {
-  // This just needs to be some static symbol in the binary; C++ doesn't
+Expected<int> JITLinkExecutor::runAsMain(JITEvaluatedSymbol MainSym,
+                                         ArrayRef<std::string> Args) {
+  return EPC->runAsMain(MainSym.getAddress(), Args);
+}
+
+Error JITLinkExecutor::disconnect() { return EPC->disconnect(); }
+
+static std::string defaultPath(const char *HostArgv0, StringRef ExecutorName) {
+  // This just needs to be some symbol in the binary; C++ doesn't
   // allow taking the address of ::main however.
-  uintptr_t UIntPtr = reinterpret_cast<uintptr_t>(&findLocalExecutorHelper);
-  void *VoidPtr = reinterpret_cast<void *>(UIntPtr);
-  SmallString<256> FullName(sys::fs::getMainExecutable(HostArgv0, VoidPtr));
+  void *P = (void *)(intptr_t)defaultPath;
+  SmallString<256> FullName(sys::fs::getMainExecutable(HostArgv0, P));
   sys::path::remove_filename(FullName);
-  sys::path::append(FullName, "llvm-jitlink-executor");
+  sys::path::append(FullName, ExecutorName);
   return FullName.str().str();
+}
+
+Expected<std::unique_ptr<ChildProcessJITLinkExecutor>>
+JITLinkExecutor::FindLocal(const char *HostArgv) {
+  std::string BestGuess = defaultPath(HostArgv, "llvm-jitlink-executor");
+  auto Executor = CreateLocal(BestGuess);
+  if (!Executor) {
+    consumeError(Executor.takeError());
+    return make_error<StringError>(
+        formatv("Unable to find usable executor: {0}", BestGuess),
+        inconvertibleErrorCode());
+  }
+  return Executor;
+}
+
+Expected<std::unique_ptr<ChildProcessJITLinkExecutor>>
+JITLinkExecutor::CreateLocal(std::string ExecutablePath) {
+  if (!sys::fs::can_execute(ExecutablePath))
+    return make_error<StringError>(
+        formatv("Specified executor invalid: {0}", ExecutablePath),
+        inconvertibleErrorCode());
+  return std::unique_ptr<ChildProcessJITLinkExecutor>(
+      new ChildProcessJITLinkExecutor(std::move(ExecutablePath)));
+}
+
+TCPSocketJITLinkExecutor::TCPSocketJITLinkExecutor(
+    std::unique_ptr<RemoteExecutorProcessControl> EPC) {
+  this->EPC = std::move(EPC);
 }
 
 #ifndef LLVM_ON_UNIX
 
 // FIXME: Add support for Windows.
-Expected<std::pair<std::unique_ptr<SimpleRemoteEPC>, uint64_t>>
-launchLocalExecutor(StringRef ExecutablePath) {
+Error ChildProcessJITLinkExecutor::launch(ExecutionSession &ES) {
   return make_error<StringError>(
       "Remote JITing not yet supported on non-unix platforms",
       inconvertibleErrorCode());
 }
 
 // FIXME: Add support for Windows.
-Expected<std::unique_ptr<SimpleRemoteEPC>>
-connectTCPSocket(StringRef NetworkAddress) {
+Expected<std::unique_ptr<TCPSocketJITLinkExecutor>>
+JITLinkExecutor::ConnectTCPSocket(StringRef NetworkAddress,
+                                  ExecutionSession &ES) {
   return make_error<StringError>(
       "Remote JITing not yet supported on non-unix platforms",
       inconvertibleErrorCode());
@@ -68,15 +197,9 @@ connectTCPSocket(StringRef NetworkAddress) {
 
 #else
 
-Expected<std::pair<std::unique_ptr<SimpleRemoteEPC>, uint64_t>>
-launchLocalExecutor(StringRef ExecutablePath) {
+Error ChildProcessJITLinkExecutor::launch(ExecutionSession &ES) {
   constexpr int ReadEnd = 0;
   constexpr int WriteEnd = 1;
-
-  if (!sys::fs::can_execute(ExecutablePath))
-    return make_error<StringError>(
-        formatv("Specified executor invalid: {0}", ExecutablePath),
-        inconvertibleErrorCode());
 
   // Pipe FDs.
   int ToExecutor[2];
@@ -87,7 +210,7 @@ launchLocalExecutor(StringRef ExecutablePath) {
     return make_error<StringError>("Unable to create pipe for executor",
                                    inconvertibleErrorCode());
 
-  pid_t ProcessID = fork();
+  ProcessID = fork();
   if (ProcessID == 0) {
     // In the child...
 
@@ -96,14 +219,10 @@ launchLocalExecutor(StringRef ExecutablePath) {
     close(FromExecutor[ReadEnd]);
 
     // Execute the child process.
-    std::unique_ptr<char[]> ExecPath, FDSpecifier, TestOutputFlag;
+    std::unique_ptr<char[]> ExecPath, FDSpecifier;
     {
       ExecPath = std::make_unique<char[]>(ExecutablePath.size() + 1);
       strcpy(ExecPath.get(), ExecutablePath.data());
-
-      const char *TestOutputFlagStr = "test-jitloadergdb";
-      TestOutputFlag = std::make_unique<char[]>(strlen(TestOutputFlagStr) + 1);
-      strcpy(TestOutputFlag.get(), TestOutputFlagStr);
 
       std::string FDSpecifierStr("filedescs=");
       FDSpecifierStr += utostr(ToExecutor[ReadEnd]);
@@ -113,8 +232,7 @@ launchLocalExecutor(StringRef ExecutablePath) {
       strcpy(FDSpecifier.get(), FDSpecifierStr.c_str());
     }
 
-    char *const Args[] = {ExecPath.get(), TestOutputFlag.get(),
-                          FDSpecifier.get(), nullptr};
+    char *const Args[] = {ExecPath.get(), FDSpecifier.get(), nullptr};
     int RC = execvp(ExecPath.get(), Args);
     if (RC != 0)
       return make_error<StringError>(
@@ -129,14 +247,21 @@ launchLocalExecutor(StringRef ExecutablePath) {
   close(ToExecutor[ReadEnd]);
   close(FromExecutor[WriteEnd]);
 
-  auto EPC = SimpleRemoteEPC::Create<FDSimpleRemoteEPCTransport>(
-      std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
-      SimpleRemoteEPC::Setup(),
-      FromExecutor[ReadEnd], ToExecutor[WriteEnd]);
-  if (!EPC)
-    return EPC.takeError();
+  auto Channel =
+      std::make_unique<RPCChannel>(FromExecutor[ReadEnd], ToExecutor[WriteEnd]);
+  auto Endpoint = std::make_unique<RemoteExecutorProcessControl::RPCEndpoint>(
+      *Channel, true);
 
-  return std::make_pair(std::move(*EPC), static_cast<uint64_t>(ProcessID));
+  EPC = std::make_unique<RemoteExecutorProcessControl>(ES, std::move(Channel),
+                                                       std::move(Endpoint));
+
+  if (auto Err = EPC->initializeORCRPCEPCBase())
+    return joinErrors(std::move(Err), EPC->disconnect());
+
+  EPC->initializeMemoryManagement();
+
+  shared::registerStringError<RPCChannel>();
+  return Error::success();
 }
 
 static Expected<int> connectTCPSocketImpl(std::string Host,
@@ -178,8 +303,9 @@ static Expected<int> connectTCPSocketImpl(std::string Host,
   return SockFD;
 }
 
-Expected<std::unique_ptr<SimpleRemoteEPC>>
-connectTCPSocket(StringRef NetworkAddress) {
+Expected<std::unique_ptr<TCPSocketJITLinkExecutor>>
+JITLinkExecutor::ConnectTCPSocket(StringRef NetworkAddress,
+                                  ExecutionSession &ES) {
   auto CreateErr = [NetworkAddress](StringRef Details) {
     return make_error<StringError>(
         formatv("Failed to connect TCP socket '{0}': {1}", NetworkAddress,
@@ -201,9 +327,21 @@ connectTCPSocket(StringRef NetworkAddress) {
   if (!SockFD)
     return CreateErr(toString(SockFD.takeError()));
 
-  return SimpleRemoteEPC::Create<FDSimpleRemoteEPCTransport>(
-      std::make_unique<DynamicThreadPoolTaskDispatcher>(std::nullopt),
-      SimpleRemoteEPC::Setup(), *SockFD);
+  auto Channel = std::make_unique<RPCChannel>(*SockFD, *SockFD);
+  auto Endpoint = std::make_unique<RemoteExecutorProcessControl::RPCEndpoint>(
+      *Channel, true);
+
+  auto EPC = std::make_unique<RemoteExecutorProcessControl>(
+      ES, std::move(Channel), std::move(Endpoint));
+
+  if (auto Err = EPC->initializeORCRPCEPCBase())
+    return joinErrors(std::move(Err), EPC->disconnect());
+
+  EPC->initializeMemoryManagement();
+  shared::registerStringError<RPCChannel>();
+
+  return std::unique_ptr<TCPSocketJITLinkExecutor>(
+      new TCPSocketJITLinkExecutor(std::move(EPC)));
 }
 
 #endif

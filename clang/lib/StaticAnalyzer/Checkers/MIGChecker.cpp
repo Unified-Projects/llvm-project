@@ -27,10 +27,8 @@
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/CallDescription.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -46,13 +44,13 @@ class MIGChecker : public Checker<check::PostCall, check::PreStmt<ReturnStmt>,
   // additionally an argument of a MIG routine, the checker keeps track of that
   // information and issues a warning when an error is returned from the
   // respective routine.
-  CallDescriptionMap<unsigned> Deallocators = {
+  std::vector<std::pair<CallDescription, unsigned>> Deallocators = {
 #define CALL(required_args, deallocated_arg, ...)                              \
-  {{CDM::SimpleFunc, {__VA_ARGS__}, required_args}, deallocated_arg}
-      // E.g., if the checker sees a C function 'vm_deallocate' that has
-      // exactly 3 parameters, it knows that argument #1 (starting from 0, i.e.
-      // the second argument) is going to be consumed in the sense of the MIG
-      // consume-on-success convention.
+  {{{__VA_ARGS__}, required_args}, deallocated_arg}
+      // E.g., if the checker sees a C function 'vm_deallocate' that is
+      // defined on class 'IOUserClient' that has exactly 3 parameters, it knows
+      // that argument #1 (starting from 0, i.e. the second argument) is going
+      // to be consumed in the sense of the MIG consume-on-success convention.
       CALL(3, 1, "vm_deallocate"),
       CALL(3, 1, "mach_vm_deallocate"),
       CALL(2, 0, "mig_deallocate"),
@@ -78,9 +76,6 @@ class MIGChecker : public Checker<check::PostCall, check::PreStmt<ReturnStmt>,
       CALL(1, 0, "thread_inspect_deallocate"),
       CALL(1, 0, "upl_deallocate"),
       CALL(1, 0, "vm_map_deallocate"),
-#undef CALL
-#define CALL(required_args, deallocated_arg, ...)                              \
-  {{CDM::CXXMethod, {__VA_ARGS__}, required_args}, deallocated_arg}
       // E.g., if the checker sees a method 'releaseAsyncReference64()' that is
       // defined on class 'IOUserClient' that takes exactly 1 argument, it knows
       // that the argument is going to be consumed in the sense of the MIG
@@ -90,7 +85,7 @@ class MIGChecker : public Checker<check::PostCall, check::PreStmt<ReturnStmt>,
 #undef CALL
   };
 
-  CallDescription OsRefRetain{CDM::SimpleFunc, {"os_ref_retain"}, 1};
+  CallDescription OsRefRetain{"os_ref_retain", 1};
 
   void checkReturnAux(const ReturnStmt *RS, CheckerContext &C) const;
 
@@ -161,10 +156,10 @@ static bool isInMIGCall(CheckerContext &C) {
 
   const Decl *D = SFC->getDecl();
 
-  if (std::optional<AnyCall> AC = AnyCall::forDecl(D)) {
+  if (Optional<AnyCall> AC = AnyCall::forDecl(D)) {
     // Even though there's a Sema warning when the return type of an annotated
     // function is not a kern_return_t, this warning isn't an error, so we need
-    // an extra check here.
+    // an extra sanity check here.
     // FIXME: AnyCall doesn't support blocks yet, so they remain unchecked
     // for now.
     if (!AC->getReturnType(C.getASTContext())
@@ -185,7 +180,7 @@ static bool isInMIGCall(CheckerContext &C) {
 }
 
 void MIGChecker::checkPostCall(const CallEvent &Call, CheckerContext &C) const {
-  if (OsRefRetain.matches(Call)) {
+  if (Call.isCalled(OsRefRetain)) {
     // If the code is doing reference counting over the parameter,
     // it opens up an opportunity for safely calling a destructor function.
     // TODO: We should still check for over-releases.
@@ -201,12 +196,15 @@ void MIGChecker::checkPostCall(const CallEvent &Call, CheckerContext &C) const {
   if (!isInMIGCall(C))
     return;
 
-  const unsigned *ArgIdxPtr = Deallocators.lookup(Call);
-  if (!ArgIdxPtr)
+  auto I = llvm::find_if(Deallocators,
+                         [&](const std::pair<CallDescription, unsigned> &Item) {
+                           return Call.isCalled(Item.first);
+                         });
+  if (I == Deallocators.end())
     return;
 
   ProgramStateRef State = C.getState();
-  unsigned ArgIdx = *ArgIdxPtr;
+  unsigned ArgIdx = I->second;
   SVal Arg = Call.getArgSVal(ArgIdx);
   const ParmVarDecl *PVD = getOriginParam(Arg, C);
   if (!PVD || State->contains<RefCountedParameters>(PVD))

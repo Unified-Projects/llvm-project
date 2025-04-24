@@ -16,12 +16,15 @@
 #include "LanaiFrameLowering.h"
 #include "LanaiInstrInfo.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Type.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #define GET_REGINFO_TARGET_DESC
@@ -125,7 +128,7 @@ static unsigned getRRMOpcodeVariant(unsigned Opcode) {
   }
 }
 
-bool LanaiRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
+void LanaiRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                             int SPAdj, unsigned FIOperandNum,
                                             RegScavenger *RS) const {
   assert(SPAdj == 0 && "Unexpected");
@@ -162,9 +165,9 @@ bool LanaiRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   if ((isSPLSOpcode(MI.getOpcode()) && !isInt<10>(Offset)) ||
       !isInt<16>(Offset)) {
     assert(RS && "Register scavenging must be on");
-    Register Reg = RS->FindUnusedReg(&Lanai::GPRRegClass);
+    unsigned Reg = RS->FindUnusedReg(&Lanai::GPRRegClass);
     if (!Reg)
-      Reg = RS->scavengeRegisterBackwards(Lanai::GPRRegClass, II, false, SPAdj);
+      Reg = RS->scavengeRegister(&Lanai::GPRRegClass, II, SPAdj);
     assert(Reg && "Register scavenger failed");
 
     bool HasNegOffset = false;
@@ -197,7 +200,7 @@ bool LanaiRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
           .addReg(Reg)
           .addImm(LPCC::ICC_T);
       MI.eraseFromParent();
-      return true;
+      return;
     }
     if (isSPLSOpcode(MI.getOpcode()) || isRMOpcode(MI.getOpcode())) {
       MI.setDesc(TII->get(getRRMOpcodeVariant(MI.getOpcode())));
@@ -215,7 +218,7 @@ bool LanaiRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     MI.getOperand(FIOperandNum + 1)
         .ChangeToRegister(Reg, /*isDef=*/false, /*isImp=*/false,
                           /*isKill=*/true);
-    return false;
+    return;
   }
 
   // ALU arithmetic ops take unsigned immediates. If the offset is negative,
@@ -232,12 +235,10 @@ bool LanaiRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
         .addReg(FrameReg)
         .addImm(-Offset);
     MI.eraseFromParent();
-    return true;
+  } else {
+    MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
+    MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
   }
-
-  MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
-  MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
-  return false;
 }
 
 bool LanaiRegisterInfo::hasBasePointer(const MachineFunction &MF) const {

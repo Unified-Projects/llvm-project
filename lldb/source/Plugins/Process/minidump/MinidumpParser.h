@@ -19,6 +19,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Object/Minidump.h"
 
@@ -26,7 +27,6 @@
 
 // C++ includes
 #include <cstring>
-#include <optional>
 #include <unordered_map>
 
 namespace lldb_private {
@@ -47,10 +47,6 @@ struct Range {
   }
 };
 
-using FallibleMemory64Iterator = llvm::object::MinidumpFile::FallibleMemory64Iterator;
-using ExceptionStreamsIterator =
-    llvm::object::MinidumpFile::ExceptionStreamsIterator;
-
 class MinidumpParser {
 public:
   static llvm::Expected<MinidumpParser>
@@ -59,7 +55,6 @@ public:
   llvm::ArrayRef<uint8_t> GetData();
 
   llvm::ArrayRef<uint8_t> GetStream(StreamType stream_type);
-  std::optional<llvm::ArrayRef<uint8_t>> GetRawStream(StreamType stream_type);
 
   UUID GetModuleUUID(const minidump::Module *module);
 
@@ -75,9 +70,9 @@ public:
 
   const MinidumpMiscInfo *GetMiscInfo();
 
-  std::optional<LinuxProcStatus> GetLinuxProcStatus();
+  llvm::Optional<LinuxProcStatus> GetLinuxProcStatus();
 
-  std::optional<lldb::pid_t> GetPid();
+  llvm::Optional<lldb::pid_t> GetPid();
 
   llvm::ArrayRef<minidump::Module> GetModuleList();
 
@@ -87,17 +82,15 @@ public:
   // have the same name, it keeps the copy with the lowest load address.
   std::vector<const minidump::Module *> GetFilteredModuleList();
 
-  llvm::iterator_range<ExceptionStreamsIterator> GetExceptionStreams();
+  const llvm::minidump::ExceptionStream *GetExceptionStream();
 
-  std::optional<Range> FindMemoryRange(lldb::addr_t addr);
+  llvm::Optional<Range> FindMemoryRange(lldb::addr_t addr);
 
   llvm::ArrayRef<uint8_t> GetMemory(lldb::addr_t addr, size_t size);
 
   /// Returns a list of memory regions and a flag indicating whether the list is
   /// complete (includes all regions mapped into the process memory).
   std::pair<MemoryRegionInfos, bool> BuildMemoryRegions();
-
-  llvm::iterator_range<FallibleMemory64Iterator> GetMemory64Iterator(llvm::Error &err);
 
   static llvm::StringRef GetStreamTypeAsString(StreamType stream_type);
 

@@ -17,13 +17,10 @@ add_llvm_component_library(LLVMARMDesc
   LINK_COMPONENTS
   ARMInfo
   ARMUtils
-  BinaryFormat
-  CodeGenTypes
   MC
   MCDisassembler
-  Object
   Support
-  TargetParser
+  BinaryFormat
 
   ADD_TO_COMPONENT
   ARM

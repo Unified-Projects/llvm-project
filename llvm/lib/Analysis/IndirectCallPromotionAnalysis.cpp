@@ -13,10 +13,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/IndirectCallPromotionAnalysis.h"
-#include "llvm/IR/Instruction.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/IndirectCallVisitor.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstVisitor.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include <memory>
 
 using namespace llvm;
 
@@ -25,7 +31,7 @@ using namespace llvm;
 // The percent threshold for the direct-call target (this call site vs the
 // remaining call count) for it to be considered as the promotion target.
 static cl::opt<unsigned> ICPRemainingPercentThreshold(
-    "icp-remaining-percent-threshold", cl::init(30), cl::Hidden,
+    "icp-remaining-percent-threshold", cl::init(30), cl::Hidden, cl::ZeroOrMore,
     cl::desc("The percentage threshold against remaining unpromoted indirect "
              "call count for the promotion"));
 
@@ -33,20 +39,20 @@ static cl::opt<unsigned> ICPRemainingPercentThreshold(
 // total call count) for it to be considered as the promotion target.
 static cl::opt<unsigned>
     ICPTotalPercentThreshold("icp-total-percent-threshold", cl::init(5),
-                             cl::Hidden,
+                             cl::Hidden, cl::ZeroOrMore,
                              cl::desc("The percentage threshold against total "
                                       "count for the promotion"));
 
 // Set the maximum number of targets to promote for a single indirect-call
 // callsite.
 static cl::opt<unsigned>
-    MaxNumPromotions("icp-max-prom", cl::init(3), cl::Hidden,
+    MaxNumPromotions("icp-max-prom", cl::init(3), cl::Hidden, cl::ZeroOrMore,
                      cl::desc("Max number of promotions for a single indirect "
                               "call callsite"));
 
-cl::opt<unsigned> MaxNumVTableAnnotations(
-    "icp-max-num-vtables", cl::init(6), cl::Hidden,
-    cl::desc("Max number of vtables annotated for a vtable load instruction."));
+ICallPromotionAnalysis::ICallPromotionAnalysis() {
+  ValueDataArray = std::make_unique<InstrProfValueData[]>(MaxNumPromotions);
+}
 
 bool ICallPromotionAnalysis::isPromotionProfitable(uint64_t Count,
                                                    uint64_t TotalCount,
@@ -59,17 +65,19 @@ bool ICallPromotionAnalysis::isPromotionProfitable(uint64_t Count,
 // the count. Stop at the first target that is not promoted. Returns the
 // number of candidates deemed profitable.
 uint32_t ICallPromotionAnalysis::getProfitablePromotionCandidates(
-    const Instruction *Inst, uint64_t TotalCount) {
+    const Instruction *Inst, uint32_t NumVals, uint64_t TotalCount) {
+  ArrayRef<InstrProfValueData> ValueDataRef(ValueDataArray.get(), NumVals);
+
   LLVM_DEBUG(dbgs() << " \nWork on callsite " << *Inst
-                    << " Num_targets: " << ValueDataArray.size() << "\n");
+                    << " Num_targets: " << NumVals << "\n");
 
   uint32_t I = 0;
   uint64_t RemainingCount = TotalCount;
-  for (; I < MaxNumPromotions && I < ValueDataArray.size(); I++) {
-    uint64_t Count = ValueDataArray[I].Count;
+  for (; I < MaxNumPromotions && I < NumVals; I++) {
+    uint64_t Count = ValueDataRef[I].Count;
     assert(Count <= RemainingCount);
     LLVM_DEBUG(dbgs() << " Candidate " << I << " Count=" << Count
-                      << "  Target_func: " << ValueDataArray[I].Value << "\n");
+                      << "  Target_func: " << ValueDataRef[I].Value << "\n");
 
     if (!isPromotionProfitable(Count, TotalCount, RemainingCount)) {
       LLVM_DEBUG(dbgs() << " Not promote: Cold target.\n");
@@ -80,15 +88,17 @@ uint32_t ICallPromotionAnalysis::getProfitablePromotionCandidates(
   return I;
 }
 
-MutableArrayRef<InstrProfValueData>
+ArrayRef<InstrProfValueData>
 ICallPromotionAnalysis::getPromotionCandidatesForInstruction(
-    const Instruction *I, uint64_t &TotalCount, uint32_t &NumCandidates) {
-  ValueDataArray = getValueProfDataFromInst(*I, IPVK_IndirectCallTarget,
-                                            MaxNumPromotions, TotalCount);
-  if (ValueDataArray.empty()) {
+    const Instruction *I, uint32_t &NumVals, uint64_t &TotalCount,
+    uint32_t &NumCandidates) {
+  bool Res =
+      getValueProfDataFromInst(*I, IPVK_IndirectCallTarget, MaxNumPromotions,
+                               ValueDataArray.get(), NumVals, TotalCount);
+  if (!Res) {
     NumCandidates = 0;
-    return MutableArrayRef<InstrProfValueData>();
+    return ArrayRef<InstrProfValueData>();
   }
-  NumCandidates = getProfitablePromotionCandidates(I, TotalCount);
-  return ValueDataArray;
+  NumCandidates = getProfitablePromotionCandidates(I, NumVals, TotalCount);
+  return ArrayRef<InstrProfValueData>(ValueDataArray.get(), NumVals);
 }

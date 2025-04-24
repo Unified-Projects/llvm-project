@@ -65,9 +65,6 @@ def CC_Hexagon: CallingConv<[
   CCIfType<[i32],
     CCIfSplit<
       CCCustom<"CC_SkipOdd">>>,
-  CCIfType<[v2i1],  CCPromoteToType<v2i32>>,
-  CCIfType<[v4i1],  CCPromoteToType<v4i16>>,
-  CCIfType<[v8i1],  CCPromoteToType<v8i8>>,
 
   CCIfType<[i32,v2i16,v4i8],
     CCAssignToReg<[R0,R1,R2,R3,R4,R5]>>,
@@ -114,14 +111,6 @@ class CCIfHvx128<CCAction A>
 
 def CC_Hexagon_HVX: CallingConv<[
   // HVX 64-byte mode
-
-  CCIfHvx64<
-        CCIfType<[v16i1], CCPromoteToType<v16i32>>>,
-  CCIfHvx64<
-        CCIfType<[v32i1], CCPromoteToType<v32i16>>>,
-  CCIfHvx64<
-        CCIfType<[v64i1], CCPromoteToType<v64i8>>>,
-
   CCIfHvx64<
     CCIfType<[v16i32,v32i16,v64i8],
       CCAssignToReg<[V0,V1,V2,V3,V4,V5,V6,V7,V8,V9,V10,V11,V12,V13,V14,V15]>>>,
@@ -136,25 +125,17 @@ def CC_Hexagon_HVX: CallingConv<[
       CCAssignToStack<128,64>>>,
 
   // HVX 128-byte mode
-
   CCIfHvx128<
-        CCIfType<[v32i1], CCPromoteToType<v32i32>>>,
-  CCIfHvx128<
-        CCIfType<[v64i1], CCPromoteToType<v64i16>>>,
-  CCIfHvx128<
-        CCIfType<[v128i1], CCPromoteToType<v128i8>>>,
-
-  CCIfHvx128<
-    CCIfType<[v32i32,v64i16,v128i8,v32f32,v64f16],
+    CCIfType<[v32i32,v64i16,v128i8],
       CCAssignToReg<[V0,V1,V2,V3,V4,V5,V6,V7,V8,V9,V10,V11,V12,V13,V14,V15]>>>,
   CCIfHvx128<
-    CCIfType<[v64i32,v128i16,v256i8,v64f32,v128f16],
+    CCIfType<[v64i32,v128i16,v256i8],
       CCAssignToReg<[W0,W1,W2,W3,W4,W5,W6,W7]>>>,
   CCIfHvx128<
-    CCIfType<[v32i32,v64i16,v128i8,v32f32,v64f16],
+    CCIfType<[v32i32,v64i16,v128i8],
       CCAssignToStack<128,128>>>,
   CCIfHvx128<
-    CCIfType<[v64i32,v128i16,v256i8,v64f32,v128f16],
+    CCIfType<[v64i32,v128i16,v256i8],
       CCAssignToStack<256,128>>>,
 
   CCDelegateTo<CC_Hexagon>
@@ -171,10 +152,10 @@ def RetCC_Hexagon_HVX: CallingConv<[
 
   // HVX 128-byte mode
   CCIfHvx128<
-    CCIfType<[v32i32,v64i16,v128i8,v32f32,v64f16],
+    CCIfType<[v32i32,v64i16,v128i8],
       CCAssignToReg<[V0]>>>,
   CCIfHvx128<
-    CCIfType<[v64i32,v128i16,v256i8,v64f32,v128f16],
+    CCIfType<[v64i32,v128i16,v256i8],
       CCAssignToReg<[W0]>>>,
 
   CCDelegateTo<RetCC_Hexagon>

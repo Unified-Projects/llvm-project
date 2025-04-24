@@ -1,5 +1,5 @@
-// RUN: %clang   -fsanitize=pointer-overflow %s -o %t && %run %t 2>&1 | FileCheck %s --implicit-check-not="pointer-overflow"
-// RUN: %clangxx -x c++ -fsanitize=pointer-overflow %s -o %t && %run %t 2>&1 | FileCheck %s --implicit-check-not="pointer-overflow"
+// RUN: %clang   -fsanitize=pointer-overflow %s -o %t && %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,CHECK-C --implicit-check-not="pointer-overflow"
+// RUN: %clangxx -x c++ -fsanitize=pointer-overflow %s -o %t && %run %t 2>&1 | FileCheck %s --check-prefixes=CHECK,CHECK-CPP --implicit-check-not="pointer-overflow"
 
 #include <stdlib.h>
 
@@ -8,15 +8,16 @@ int main(int argc, char *argv[]) {
 
   base = (char *)0;
   result = base + 0;
-  // CHECK-NOT: pointer-overflow
+  // CHECK-C: pointer-overflow
+  // CHECK-CPP-NOT: pointer-overflow
 
   base = (char *)0;
   result = base + 1;
-  // CHECK: pointer-overflow by 0x{{[[:xdigit:]]+$}}
+  // CHECK: pointer-overflow
 
   base = (char *)1;
   result = base - 1;
-  // CHECK: pointer-overflow by 0x{{[[:xdigit:]]+$}}
+  // CHECK: pointer-overflow
 
   return 0;
 }

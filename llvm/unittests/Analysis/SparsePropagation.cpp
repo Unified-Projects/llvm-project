@@ -9,7 +9,6 @@
 #include "llvm/Analysis/SparsePropagation.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Module.h"
 #include "gtest/gtest.h"
 using namespace llvm;
 
@@ -139,8 +138,7 @@ public:
   /// Compute the lattice values that change as a result of executing the given
   /// instruction. We only handle the few instructions needed for the tests.
   void ComputeInstructionState(
-      Instruction &I,
-      SmallDenseMap<TestLatticeKey, TestLatticeVal, 16> &ChangedValues,
+      Instruction &I, DenseMap<TestLatticeKey, TestLatticeVal> &ChangedValues,
       SparseSolver<TestLatticeKey, TestLatticeVal> &SS) override {
     switch (I.getOpcode()) {
     case Instruction::Call:
@@ -160,7 +158,7 @@ private:
   /// actual argument state. The call site state is the merge of the call site
   /// state with the returned value state of the called function.
   void visitCallBase(CallBase &I,
-                     SmallDenseMap<TestLatticeKey, TestLatticeVal, 16> &ChangedValues,
+                     DenseMap<TestLatticeKey, TestLatticeVal> &ChangedValues,
                      SparseSolver<TestLatticeKey, TestLatticeVal> &SS) {
     Function *F = I.getCalledFunction();
     auto RegI = TestLatticeKey(&I, IPOGrouping::Register);
@@ -184,7 +182,7 @@ private:
   /// Handle return instructions. The function's return state is the merge of
   /// the returned value state and the function's current return state.
   void visitReturn(ReturnInst &I,
-                   SmallDenseMap<TestLatticeKey, TestLatticeVal, 16> &ChangedValues,
+                   DenseMap<TestLatticeKey, TestLatticeVal> &ChangedValues,
                    SparseSolver<TestLatticeKey, TestLatticeVal> &SS) {
     Function *F = I.getParent()->getParent();
     if (F->getReturnType()->isVoidTy())
@@ -200,7 +198,7 @@ private:
   /// is the merge of the stored value state with the current global variable
   /// state.
   void visitStore(StoreInst &I,
-                  SmallDenseMap<TestLatticeKey, TestLatticeVal, 16> &ChangedValues,
+                  DenseMap<TestLatticeKey, TestLatticeVal> &ChangedValues,
                   SparseSolver<TestLatticeKey, TestLatticeVal> &SS) {
     auto *GV = dyn_cast<GlobalVariable>(I.getPointerOperand());
     if (!GV)
@@ -214,7 +212,7 @@ private:
   /// Handle all other instructions. All other instructions are marked
   /// overdefined.
   void visitInst(Instruction &I,
-                 SmallDenseMap<TestLatticeKey, TestLatticeVal, 16> &ChangedValues,
+                 DenseMap<TestLatticeKey, TestLatticeVal> &ChangedValues,
                  SparseSolver<TestLatticeKey, TestLatticeVal> &SS) {
     auto RegI = TestLatticeKey(&I, IPOGrouping::Register);
     ChangedValues[RegI] = getOverdefinedVal();
@@ -374,7 +372,7 @@ TEST_F(SparsePropagationTest, GlobalVariableOverDefined) {
 TEST_F(SparsePropagationTest, FunctionDefined) {
   Function *F =
       Function::Create(FunctionType::get(Builder.getInt64Ty(),
-                                         {PointerType::get(Context, 0)}, false),
+                                         {Type::getInt1PtrTy(Context)}, false),
                        GlobalValue::InternalLinkage, "f", &M);
   BasicBlock *If = BasicBlock::Create(Context, "if", F);
   BasicBlock *Then = BasicBlock::Create(Context, "then", F);
@@ -414,7 +412,7 @@ TEST_F(SparsePropagationTest, FunctionDefined) {
 TEST_F(SparsePropagationTest, FunctionOverDefined) {
   Function *F =
       Function::Create(FunctionType::get(Builder.getInt64Ty(),
-                                         {PointerType::get(Context, 0)}, false),
+                                         {Type::getInt1PtrTy(Context)}, false),
                        GlobalValue::InternalLinkage, "f", &M);
   BasicBlock *If = BasicBlock::Create(Context, "if", F);
   BasicBlock *Then = BasicBlock::Create(Context, "then", F);
@@ -490,7 +488,7 @@ TEST_F(SparsePropagationTest, ComputeInstructionState) {
 ///
 /// declare internal void @g()
 ///
-/// define internal void @f() personality ptr @p {
+/// define internal void @f() personality i8* bitcast (void ()* @p to i8*) {
 /// entry:
 ///   invoke void @g()
 ///           to label %exit unwind label %catch.pad
@@ -515,7 +513,9 @@ TEST_F(SparsePropagationTest, ExceptionalTerminatorInsts) {
                                  GlobalValue::InternalLinkage, "g", &M);
   Function *F = Function::Create(FunctionType::get(Builder.getVoidTy(), false),
                                  GlobalValue::InternalLinkage, "f", &M);
-  F->setPersonalityFn(P);
+  Constant *C =
+      ConstantExpr::getCast(Instruction::BitCast, P, Builder.getInt8PtrTy());
+  F->setPersonalityFn(C);
   BasicBlock *Entry = BasicBlock::Create(Context, "entry", F);
   BasicBlock *Pad = BasicBlock::Create(Context, "catch.pad", F);
   BasicBlock *Body = BasicBlock::Create(Context, "catch.body", F);

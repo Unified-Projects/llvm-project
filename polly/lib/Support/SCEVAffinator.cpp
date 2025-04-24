@@ -15,7 +15,6 @@
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
 #include "polly/Support/SCEVValidator.h"
-#include "llvm/IR/DataLayout.h"
 #include "isl/aff.h"
 #include "isl/local_space.h"
 #include "isl/set.h"
@@ -28,7 +27,7 @@ static cl::opt<bool> IgnoreIntegerWrapping(
     "polly-ignore-integer-wrapping",
     cl::desc("Do not build run-time checks to proof absence of integer "
              "wrapping"),
-    cl::Hidden, cl::cat(PollyCategory));
+    cl::Hidden, cl::ZeroOrMore, cl::init(false), cl::cat(PollyCategory));
 
 // The maximal number of basic sets we allow during the construction of a
 // piecewise affine function. More complex ones will result in very high
@@ -83,7 +82,7 @@ static __isl_give isl_pw_aff *getWidthExpValOnDomain(unsigned Width,
 
 SCEVAffinator::SCEVAffinator(Scop *S, LoopInfo &LI)
     : S(S), Ctx(S->getIslCtx().get()), SE(*S->getSE()), LI(LI),
-      TD(S->getFunction().getDataLayout()) {}
+      TD(S->getFunction().getParent()->getDataLayout()) {}
 
 Loop *SCEVAffinator::getScope() { return BB ? LI.getLoopFor(BB) : nullptr; }
 
@@ -267,10 +266,6 @@ PWACtx SCEVAffinator::visitConstant(const SCEVConstant *Expr) {
       isl::manage(isl_pw_aff_from_aff(isl_aff_val_on_domain(ls, v))));
 }
 
-PWACtx SCEVAffinator::visitVScale(const SCEVVScale *VScale) {
-  llvm_unreachable("SCEVVScale not yet supported");
-}
-
 PWACtx SCEVAffinator::visitPtrToIntExpr(const SCEVPtrToIntExpr *Expr) {
   return visit(Expr->getOperand(0));
 }
@@ -281,7 +276,7 @@ PWACtx SCEVAffinator::visitTruncateExpr(const SCEVTruncateExpr *Expr) {
   // to fit in the new type size instead of introducing a modulo with a very
   // large constant.
 
-  const SCEV *Op = Expr->getOperand();
+  auto *Op = Expr->getOperand();
   auto OpPWAC = visit(Op);
 
   unsigned Width = TD.getTypeSizeInBits(Expr->getType());
@@ -354,7 +349,7 @@ PWACtx SCEVAffinator::visitZeroExtendExpr(const SCEVZeroExtendExpr *Expr) {
   // bit-width is bigger than MaxZextSmallBitWidth we will employ overflow
   // assumptions and assume the "former negative" piece will not exist.
 
-  const SCEV *Op = Expr->getOperand();
+  auto *Op = Expr->getOperand();
   auto OpPWAC = visit(Op);
 
   // If the width is to big we assume the negative part does not occur.
@@ -470,11 +465,6 @@ PWACtx SCEVAffinator::visitUMinExpr(const SCEVUMinExpr *Expr) {
   llvm_unreachable("SCEVUMinExpr not yet supported");
 }
 
-PWACtx
-SCEVAffinator::visitSequentialUMinExpr(const SCEVSequentialUMinExpr *Expr) {
-  llvm_unreachable("SCEVSequentialUMinExpr not yet supported");
-}
-
 PWACtx SCEVAffinator::visitUDivExpr(const SCEVUDivExpr *Expr) {
   // The handling of unsigned division is basically the same as for signed
   // division, except the interpretation of the operands. As the divisor
@@ -483,8 +473,8 @@ PWACtx SCEVAffinator::visitUDivExpr(const SCEVUDivExpr *Expr) {
   // For the dividend we could choose from the different representation
   // schemes introduced for zero-extend operations but for now we will
   // simply use an assumption.
-  const SCEV *Dividend = Expr->getLHS();
-  const SCEV *Divisor = Expr->getRHS();
+  auto *Dividend = Expr->getLHS();
+  auto *Divisor = Expr->getRHS();
   assert(isa<SCEVConstant>(Divisor) &&
          "UDiv is no parameter but has a non-constant RHS.");
 
@@ -502,7 +492,7 @@ PWACtx SCEVAffinator::visitUDivExpr(const SCEVUDivExpr *Expr) {
   }
 
   // TODO: One can represent the dividend as piece-wise function to be more
-  //       precise but therefore a heuristic is needed.
+  //       precise but therefor a heuristic is needed.
 
   // Assume a non-negative dividend.
   takeNonNegativeAssumption(DividendPWAC, RecordedAssumptions);
@@ -518,13 +508,13 @@ PWACtx SCEVAffinator::visitSDivInstruction(Instruction *SDiv) {
 
   auto *Scope = getScope();
   auto *Divisor = SDiv->getOperand(1);
-  const SCEV *DivisorSCEV = SE.getSCEVAtScope(Divisor, Scope);
+  auto *DivisorSCEV = SE.getSCEVAtScope(Divisor, Scope);
   auto DivisorPWAC = visit(DivisorSCEV);
   assert(isa<SCEVConstant>(DivisorSCEV) &&
          "SDiv is no parameter but has a non-constant RHS.");
 
   auto *Dividend = SDiv->getOperand(0);
-  const SCEV *DividendSCEV = SE.getSCEVAtScope(Dividend, Scope);
+  auto *DividendSCEV = SE.getSCEVAtScope(Dividend, Scope);
   auto DividendPWAC = visit(DividendSCEV);
   DividendPWAC = combine(DividendPWAC, DivisorPWAC, isl_pw_aff_tdiv_q);
   return DividendPWAC;
@@ -535,13 +525,13 @@ PWACtx SCEVAffinator::visitSRemInstruction(Instruction *SRem) {
 
   auto *Scope = getScope();
   auto *Divisor = SRem->getOperand(1);
-  const SCEV *DivisorSCEV = SE.getSCEVAtScope(Divisor, Scope);
+  auto *DivisorSCEV = SE.getSCEVAtScope(Divisor, Scope);
   auto DivisorPWAC = visit(DivisorSCEV);
   assert(isa<ConstantInt>(Divisor) &&
          "SRem is no parameter but has a non-constant RHS.");
 
   auto *Dividend = SRem->getOperand(0);
-  const SCEV *DividendSCEV = SE.getSCEVAtScope(Dividend, Scope);
+  auto *DividendSCEV = SE.getSCEVAtScope(Dividend, Scope);
   auto DividendPWAC = visit(DividendSCEV);
   DividendPWAC = combine(DividendPWAC, DivisorPWAC, isl_pw_aff_tdiv_r);
   return DividendPWAC;

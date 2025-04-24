@@ -41,7 +41,7 @@ static bool InNamespace(const Decl *D, StringRef NS) {
   if (!ND)
     return false;
   const IdentifierInfo *II = ND->getIdentifier();
-  if (!II || II->getName() != NS)
+  if (!II || !II->getName().equals(NS))
     return false;
   return isa<TranslationUnitDecl>(ND->getDeclContext());
 }
@@ -273,7 +273,7 @@ void ASTFieldVisitor::ReportError(QualType T) {
       os << (*I)->getName();
     }
   }
-  os << " (type " << FieldChain.back()->getType() << ")";
+  os << " (type " << FieldChain.back()->getType().getAsString() << ")";
 
   // Note that this will fire for every translation unit that uses this
   // class.  This is suboptimal, but at least scan-build will merge

@@ -118,7 +118,8 @@ void LogDiagnosticPrinter::HandleDiagnostic(DiagnosticsEngine::Level Level,
     const SourceManager &SM = Info.getSourceManager();
     FileID FID = SM.getMainFileID();
     if (FID.isValid()) {
-      if (OptionalFileEntryRef FE = SM.getFileEntryRefForID(FID))
+      const FileEntry *FE = SM.getFileEntryForID(FID);
+      if (FE && FE->isValid())
         MainFilename = std::string(FE->getName());
     }
   }
@@ -129,13 +130,12 @@ void LogDiagnosticPrinter::HandleDiagnostic(DiagnosticsEngine::Level Level,
   DE.DiagnosticLevel = Level;
 
   DE.WarningOption =
-      std::string(Info.getDiags()->getDiagnosticIDs()->getWarningOptionForDiag(
-          DE.DiagnosticID));
+      std::string(DiagnosticIDs::getWarningOptionForDiag(DE.DiagnosticID));
 
   // Format the message.
   SmallString<100> MessageStr;
   Info.FormatDiagnostic(MessageStr);
-  DE.Message = std::string(MessageStr);
+  DE.Message = std::string(MessageStr.str());
 
   // Set the location information.
   DE.Filename = "";
@@ -148,7 +148,8 @@ void LogDiagnosticPrinter::HandleDiagnostic(DiagnosticsEngine::Level Level,
       // At least print the file name if available:
       FileID FID = SM.getFileID(Info.getLocation());
       if (FID.isValid()) {
-        if (OptionalFileEntryRef FE = SM.getFileEntryRefForID(FID))
+        const FileEntry *FE = SM.getFileEntryForID(FID);
+        if (FE && FE->isValid())
           DE.Filename = std::string(FE->getName());
       }
     } else {
@@ -161,3 +162,4 @@ void LogDiagnosticPrinter::HandleDiagnostic(DiagnosticsEngine::Level Level,
   // Record the diagnostic entry.
   Entries.push_back(DE);
 }
+

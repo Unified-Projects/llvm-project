@@ -23,9 +23,9 @@
 #ifndef LLVM_SUPPORT_GENERICITERATEDDOMINANCEFRONTIER_H
 #define LLVM_SUPPORT_GENERICITERATEDDOMINANCEFRONTIER_H
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/GenericDomTree.h"
 #include <queue>
 
@@ -37,11 +37,10 @@ namespace IDFCalculatorDetail {
 /// May be specialized if, for example, one wouldn't like to return nullpointer
 /// successors.
 template <class NodeTy, bool IsPostDom> struct ChildrenGetterTy {
-  using NodeRef = typename GraphTraits<NodeTy *>::NodeRef;
-  using ChildIteratorType = typename GraphTraits<NodeTy *>::ChildIteratorType;
-  using range = iterator_range<ChildIteratorType>;
+  using NodeRef = typename GraphTraits<NodeTy>::NodeRef;
+  using ChildrenTy = SmallVector<NodeRef, 8>;
 
-  range get(const NodeRef &N);
+  ChildrenTy get(const NodeRef &N);
 };
 
 } // end of namespace IDFCalculatorDetail
@@ -117,12 +116,13 @@ private:
 namespace IDFCalculatorDetail {
 
 template <class NodeTy, bool IsPostDom>
-typename ChildrenGetterTy<NodeTy, IsPostDom>::range
+typename ChildrenGetterTy<NodeTy, IsPostDom>::ChildrenTy
 ChildrenGetterTy<NodeTy, IsPostDom>::get(const NodeRef &N) {
   using OrderedNodeTy =
       typename IDFCalculatorBase<NodeTy, IsPostDom>::OrderedNodeTy;
 
-  return children<OrderedNodeTy>(N);
+  auto Children = children<OrderedNodeTy>(N);
+  return {Children.begin(), Children.end()};
 }
 
 } // end of namespace IDFCalculatorDetail
@@ -145,12 +145,8 @@ void IDFCalculatorBase<NodeTy, IsPostDom>::calculate(
   DT.updateDFSNumbers();
 
   SmallVector<DomTreeNodeBase<NodeTy> *, 32> Worklist;
-  SmallPtrSet<DomTreeNodeBase<NodeTy> *, 16> VisitedPQ;
-  SmallPtrSet<DomTreeNodeBase<NodeTy> *, 16> VisitedWorklist;
-  if (useLiveIn) {
-    VisitedPQ.reserve(LiveInBlocks->size());
-    VisitedWorklist.reserve(LiveInBlocks->size());
-  }
+  SmallPtrSet<DomTreeNodeBase<NodeTy> *, 32> VisitedPQ;
+  SmallPtrSet<DomTreeNodeBase<NodeTy> *, 32> VisitedWorklist;
 
   for (NodeTy *BB : *DefBlocks)
     if (DomTreeNodeBase<NodeTy> *Node = DT.getNode(BB)) {
@@ -197,7 +193,7 @@ void IDFCalculatorBase<NodeTy, IsPostDom>::calculate(
               SuccNode, std::make_pair(SuccLevel, SuccNode->getDFSNumIn())));
       };
 
-      for (auto *Succ : ChildrenGetter.get(BB))
+      for (auto Succ : ChildrenGetter.get(BB))
         DoWork(Succ);
 
       for (auto DomChild : *Node) {

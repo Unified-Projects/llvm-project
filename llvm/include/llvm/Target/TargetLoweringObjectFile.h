@@ -15,12 +15,10 @@
 #define LLVM_TARGET_TARGETLOWERINGOBJECTFILE_H
 
 #include "llvm/MC/MCObjectFileInfo.h"
-#include "llvm/MC/MCRegister.h"
 #include <cstdint>
 
 namespace llvm {
 
-struct Align;
 class Constant;
 class DataLayout;
 class Function;
@@ -82,17 +80,13 @@ public:
   virtual void Initialize(MCContext &ctx, const TargetMachine &TM);
 
   virtual void emitPersonalityValue(MCStreamer &Streamer, const DataLayout &TM,
-                                    const MCSymbol *Sym,
-                                    const MachineModuleInfo *MMI) const;
+                                    const MCSymbol *Sym) const;
 
   /// Emit the module-level metadata that the platform cares about.
   virtual void emitModuleMetadata(MCStreamer &Streamer, Module &M) const {}
 
   /// Emit Call Graph Profile metadata.
   void emitCGProfileMetadata(MCStreamer &Streamer, Module &M) const;
-
-  /// Process linker options metadata and emit platform-specific bits.
-  virtual void emitLinkerDirectives(MCStreamer &Streamer, Module &M) const {}
 
   /// Get the module-level metadata that the platform cares about.
   virtual void getModuleMetadata(Module &M) {}
@@ -225,14 +219,6 @@ public:
     return SupportDebugThreadLocalLocation;
   }
 
-  /// Returns the register used as static base in RWPI variants.
-  virtual MCRegister getStaticBase() const { return MCRegister::NoRegister; }
-
-  /// Get the target specific RWPI relocation.
-  virtual const MCExpr *getIndirectSymViaRWPI(const MCSymbol *Sym) const {
-    return nullptr;
-  }
-
   /// Get the target specific PC relative GOT entry relocation
   virtual const MCExpr *getIndirectSymViaGOTPCRel(const GlobalValue *GV,
                                                   const MCSymbol *Sym,
@@ -281,7 +267,7 @@ public:
   }
 
   /// If supported, return the function entry point symbol.
-  /// Otherwise, returns nullptr.
+  /// Otherwise, returns nulltpr.
   /// Func must be a function or an alias which has a function as base object.
   virtual MCSymbol *getFunctionEntryPointSymbol(const GlobalValue *Func,
                                                 const TargetMachine &TM) const {

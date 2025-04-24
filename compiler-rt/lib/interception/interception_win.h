@@ -41,11 +41,6 @@ bool OverrideImportedFunction(const char *module_to_patch,
                               const char *function_name, uptr new_function,
                               uptr *orig_old_func);
 
-// Sets a callback to be used for reporting errors by interception_win. The
-// callback will be called with printf-like arguments. Intended to be used with
-// __sanitizer::Report. Pass nullptr to disable error reporting (default).
-void SetErrorReportCallback(void (*callback)(const char *format, ...));
-
 #if !SANITIZER_WINDOWS64
 // Exposed for unittests
 bool OverrideFunctionWithDetour(
@@ -62,9 +57,6 @@ bool OverrideFunctionWithTrampoline(
 
 // Exposed for unittests
 void TestOnlyReleaseTrampolineRegions();
-
-// Exposed for unittests
-SIZE_T TestOnlyGetInstructionSize(uptr address, SIZE_T *rel_offset);
 
 }  // namespace __interception
 

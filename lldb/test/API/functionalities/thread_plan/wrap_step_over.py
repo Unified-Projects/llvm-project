@@ -1,8 +1,7 @@
 import lldb
 
-
-class WrapStepOver:
-    def __init__(self, thread_plan, args_data):
+class WrapStepOver():
+    def __init__(self, thread_plan, args_data, dict):
         self.plan = thread_plan
         thread = thread_plan.GetThread()
         target = thread.GetProcess().GetTarget()
@@ -12,9 +11,7 @@ class WrapStepOver:
         end_addr = line_entry.end_addr
         range_size = end_addr.GetLoadAddress(target) - start_addr.GetLoadAddress(target)
         error = lldb.SBError()
-        self.sub_plan = thread_plan.QueueThreadPlanForStepOverRange(
-            start_addr, range_size
-        )
+        self.sub_plan = thread_plan.QueueThreadPlanForStepOverRange(start_addr, range_size)
 
     def should_step(self):
         return False

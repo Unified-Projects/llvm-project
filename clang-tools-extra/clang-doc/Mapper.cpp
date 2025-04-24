@@ -12,28 +12,18 @@
 #include "clang/AST/Comment.h"
 #include "clang/Index/USRGeneration.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/Support/Mutex.h"
+#include "llvm/Support/Error.h"
+
+using clang::comments::FullComment;
 
 namespace clang {
 namespace doc {
-
-static llvm::StringSet<> USRVisited;
-static llvm::sys::Mutex USRVisitedGuard;
-
-template <typename T> bool isTypedefAnonRecord(const T *D) {
-  if (const auto *C = dyn_cast<CXXRecordDecl>(D)) {
-    return C->getTypedefNameForAnonDecl();
-  }
-  return false;
-}
 
 void MapASTVisitor::HandleTranslationUnit(ASTContext &Context) {
   TraverseDecl(Context.getTranslationUnitDecl());
 }
 
-template <typename T>
-bool MapASTVisitor::mapDecl(const T *D, bool IsDefinition) {
+template <typename T> bool MapASTVisitor::mapDecl(const T *D) {
   // If we're looking a decl not in user files, skip this decl.
   if (D->getASTContext().getSourceManager().isInSystemHeader(D->getLocation()))
     return true;
@@ -46,16 +36,6 @@ bool MapASTVisitor::mapDecl(const T *D, bool IsDefinition) {
   // If there is an error generating a USR for the decl, skip this decl.
   if (index::generateUSRForDecl(D, USR))
     return true;
-  // Prevent Visiting USR twice
-  {
-    std::lock_guard<llvm::sys::Mutex> Guard(USRVisitedGuard);
-    StringRef Visited = USR.str();
-    if (USRVisited.count(Visited) && !isTypedefAnonRecord<T>(D))
-      return true;
-    // We considered a USR to be visited only when its defined
-    if (IsDefinition)
-      USRVisited.insert(Visited);
-  }
   bool IsFileInRootDir;
   llvm::SmallString<128> File =
       getFile(D, D->getASTContext(), CDCtx.SourceRoot, IsFileInRootDir);
@@ -75,34 +55,22 @@ bool MapASTVisitor::mapDecl(const T *D, bool IsDefinition) {
 }
 
 bool MapASTVisitor::VisitNamespaceDecl(const NamespaceDecl *D) {
-  return mapDecl(D, /*isDefinition=*/true);
+  return mapDecl(D);
 }
 
-bool MapASTVisitor::VisitRecordDecl(const RecordDecl *D) {
-  return mapDecl(D, D->isThisDeclarationADefinition());
-}
+bool MapASTVisitor::VisitRecordDecl(const RecordDecl *D) { return mapDecl(D); }
 
-bool MapASTVisitor::VisitEnumDecl(const EnumDecl *D) {
-  return mapDecl(D, D->isThisDeclarationADefinition());
-}
+bool MapASTVisitor::VisitEnumDecl(const EnumDecl *D) { return mapDecl(D); }
 
 bool MapASTVisitor::VisitCXXMethodDecl(const CXXMethodDecl *D) {
-  return mapDecl(D, D->isThisDeclarationADefinition());
+  return mapDecl(D);
 }
 
 bool MapASTVisitor::VisitFunctionDecl(const FunctionDecl *D) {
   // Don't visit CXXMethodDecls twice
-  if (isa<CXXMethodDecl>(D))
+  if (dyn_cast<CXXMethodDecl>(D))
     return true;
-  return mapDecl(D, D->isThisDeclarationADefinition());
-}
-
-bool MapASTVisitor::VisitTypedefDecl(const TypedefDecl *D) {
-  return mapDecl(D, /*isDefinition=*/true);
-}
-
-bool MapASTVisitor::VisitTypeAliasDecl(const TypeAliasDecl *D) {
-  return mapDecl(D, /*isDefinition=*/true);
+  return mapDecl(D);
 }
 
 comments::FullComment *
@@ -129,7 +97,7 @@ llvm::SmallString<128> MapASTVisitor::getFile(const NamedDecl *D,
                                   .getPresumedLoc(D->getBeginLoc())
                                   .getFilename());
   IsFileInRootDir = false;
-  if (RootDir.empty() || !File.starts_with(RootDir))
+  if (RootDir.empty() || !File.startswith(RootDir))
     return File;
   IsFileInRootDir = true;
   llvm::SmallString<128> Prefix(RootDir);

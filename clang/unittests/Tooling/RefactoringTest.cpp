@@ -13,7 +13,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclGroup.h"
-#include "clang/AST/DynamicRecursiveASTVisitor.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileManager.h"
@@ -29,7 +29,6 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "gtest/gtest.h"
-#include <optional>
 
 namespace clang {
 namespace tooling {
@@ -105,8 +104,8 @@ TEST_F(ReplacementTest, ReturnsInvalidPath) {
 // error code, expected new replacement, and expected existing replacement.
 static bool checkReplacementError(llvm::Error &&Error,
                                   replacement_error ExpectedErr,
-                                  std::optional<Replacement> ExpectedExisting,
-                                  std::optional<Replacement> ExpectedNew) {
+                                  llvm::Optional<Replacement> ExpectedExisting,
+                                  llvm::Optional<Replacement> ExpectedNew) {
   if (!Error) {
     llvm::errs() << "Error is a success.";
     return false;
@@ -119,22 +118,23 @@ static bool checkReplacementError(llvm::Error &&Error,
       OS << "Unexpected error code: " << int(RE.get()) << "\n";
     if (ExpectedExisting != RE.getExistingReplacement()) {
       OS << "Expected Existing != Actual Existing.\n";
-      if (ExpectedExisting)
+      if (ExpectedExisting.hasValue())
         OS << "Expected existing replacement: " << ExpectedExisting->toString()
            << "\n";
-      if (RE.getExistingReplacement())
+      if (RE.getExistingReplacement().hasValue())
         OS << "Actual existing replacement: "
            << RE.getExistingReplacement()->toString() << "\n";
     }
     if (ExpectedNew != RE.getNewReplacement()) {
       OS << "Expected New != Actual New.\n";
-      if (ExpectedNew)
+      if (ExpectedNew.hasValue())
         OS << "Expected new replacement: " << ExpectedNew->toString() << "\n";
-      if (RE.getNewReplacement())
+      if (RE.getNewReplacement().hasValue())
         OS << "Actual new replacement: " << RE.getNewReplacement()->toString()
            << "\n";
     }
   });
+  OS.flush();
   if (ErrorMessage.empty()) return true;
   llvm::errs() << ErrorMessage;
   return false;
@@ -647,7 +647,8 @@ TEST_F(FlushRewrittenFilesTest, StoresChangesOnDisk) {
 }
 
 namespace {
-class TestVisitor : public DynamicRecursiveASTVisitor {
+template <typename T>
+class TestVisitor : public clang::RecursiveASTVisitor<T> {
 public:
   bool runOver(StringRef Code) {
     return runToolOnCode(std::make_unique<TestAction>(this), Code);
@@ -697,9 +698,9 @@ void expectReplacementAt(const Replacement &Replace,
   EXPECT_EQ(Length, Replace.getLength());
 }
 
-class ClassDeclXVisitor : public TestVisitor {
+class ClassDeclXVisitor : public TestVisitor<ClassDeclXVisitor> {
 public:
-  bool VisitCXXRecordDecl(CXXRecordDecl *Record) override {
+  bool VisitCXXRecordDecl(CXXRecordDecl *Record) {
     if (Record->getName() == "X") {
       Replace = Replacement(*SM, Record, "");
     }
@@ -720,9 +721,9 @@ TEST(Replacement, ReplacesAtSpellingLocation) {
   expectReplacementAt(ClassDeclX.Replace, "input.cc", 17, 7);
 }
 
-class CallToFVisitor : public TestVisitor {
+class CallToFVisitor : public TestVisitor<CallToFVisitor> {
 public:
-  bool VisitCallExpr(CallExpr *Call) override {
+  bool VisitCallExpr(CallExpr *Call) {
     if (Call->getDirectCallee()->getName() == "F") {
       Replace = Replacement(*SM, Call, "");
     }
@@ -744,9 +745,10 @@ TEST(Replacement, TemplatedFunctionCall) {
   expectReplacementAt(CallToF.Replace, "input.cc", 43, 8);
 }
 
-class NestedNameSpecifierAVisitor : public TestVisitor {
+class NestedNameSpecifierAVisitor
+    : public TestVisitor<NestedNameSpecifierAVisitor> {
 public:
-  bool TraverseNestedNameSpecifierLoc(NestedNameSpecifierLoc NNSLoc) override {
+  bool TraverseNestedNameSpecifierLoc(NestedNameSpecifierLoc NNSLoc) {
     if (NNSLoc.getNestedNameSpecifier()) {
       if (const NamespaceDecl* NS = NNSLoc.getNestedNameSpecifier()->getAsNamespace()) {
         if (NS->getName() == "a") {
@@ -754,7 +756,8 @@ public:
         }
       }
     }
-    return TestVisitor::TraverseNestedNameSpecifierLoc(NNSLoc);
+    return TestVisitor<NestedNameSpecifierAVisitor>::TraverseNestedNameSpecifierLoc(
+        NNSLoc);
   }
   Replacement Replace;
 };
@@ -1028,17 +1031,18 @@ TEST_F(MergeReplacementsTest, OverlappingRanges) {
       toReplacements({{"", 0, 3, "cc"}, {"", 3, 3, "dd"}}));
 }
 
-static constexpr bool usesWindowsPaths() {
-  return is_style_windows(llvm::sys::path::Style::native);
-}
-
 TEST(DeduplicateByFileTest, PathsWithDots) {
   std::map<std::string, Replacements> FileToReplaces;
   llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> VFS(
       new llvm::vfs::InMemoryFileSystem());
   FileManager FileMgr(FileSystemOptions(), VFS);
-  StringRef Path1 = usesWindowsPaths() ? "a\\b\\..\\.\\c.h" : "a/b/.././c.h";
-  StringRef Path2 = usesWindowsPaths() ? "a\\c.h" : "a/c.h";
+#if !defined(_WIN32)
+  StringRef Path1 = "a/b/.././c.h";
+  StringRef Path2 = "a/c.h";
+#else
+  StringRef Path1 = "a\\b\\..\\.\\c.h";
+  StringRef Path2 = "a\\c.h";
+#endif
   EXPECT_TRUE(VFS->addFile(Path1, 0, llvm::MemoryBuffer::getMemBuffer("")));
   EXPECT_TRUE(VFS->addFile(Path2, 0, llvm::MemoryBuffer::getMemBuffer("")));
   FileToReplaces[std::string(Path1)] = Replacements();
@@ -1053,8 +1057,13 @@ TEST(DeduplicateByFileTest, PathWithDotSlash) {
   llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> VFS(
       new llvm::vfs::InMemoryFileSystem());
   FileManager FileMgr(FileSystemOptions(), VFS);
-  StringRef Path1 = usesWindowsPaths() ? ".\\a\\b\\c.h" : "./a/b/c.h";
-  StringRef Path2 = usesWindowsPaths() ? "a\\b\\c.h" : "a/b/c.h";
+#if !defined(_WIN32)
+  StringRef Path1 = "./a/b/c.h";
+  StringRef Path2 = "a/b/c.h";
+#else
+  StringRef Path1 = ".\\a\\b\\c.h";
+  StringRef Path2 = "a\\b\\c.h";
+#endif
   EXPECT_TRUE(VFS->addFile(Path1, 0, llvm::MemoryBuffer::getMemBuffer("")));
   EXPECT_TRUE(VFS->addFile(Path2, 0, llvm::MemoryBuffer::getMemBuffer("")));
   FileToReplaces[std::string(Path1)] = Replacements();
@@ -1069,8 +1078,13 @@ TEST(DeduplicateByFileTest, NonExistingFilePath) {
   llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> VFS(
       new llvm::vfs::InMemoryFileSystem());
   FileManager FileMgr(FileSystemOptions(), VFS);
-  StringRef Path1 = usesWindowsPaths() ? ".\\a\\b\\c.h" : "./a/b/c.h";
-  StringRef Path2 = usesWindowsPaths() ? "a\\b\\c.h" : "a/b/c.h";
+#if !defined(_WIN32)
+  StringRef Path1 = "./a/b/c.h";
+  StringRef Path2 = "a/b/c.h";
+#else
+  StringRef Path1 = ".\\a\\b\\c.h";
+  StringRef Path2 = "a\\b\\c.h";
+#endif
   FileToReplaces[std::string(Path1)] = Replacements();
   FileToReplaces[std::string(Path2)] = Replacements();
   FileToReplaces = groupReplacementsByFile(FileMgr, FileToReplaces);
@@ -1285,13 +1299,13 @@ TEST_F(AtomicChangeTest, InsertAfterWithInvalidLocation) {
 TEST_F(AtomicChangeTest, Metadata) {
   AtomicChange Change(Context.Sources, DefaultLoc, 17);
   const llvm::Any &Metadata = Change.getMetadata();
-  ASSERT_TRUE(llvm::any_cast<int>(&Metadata));
+  ASSERT_TRUE(llvm::any_isa<int>(Metadata));
   EXPECT_EQ(llvm::any_cast<int>(Metadata), 17);
 }
 
 TEST_F(AtomicChangeTest, NoMetadata) {
   AtomicChange Change(Context.Sources, DefaultLoc);
-  EXPECT_FALSE(Change.getMetadata().has_value());
+  EXPECT_FALSE(Change.getMetadata().hasValue());
 }
 
 class ApplyAtomicChangesTest : public ::testing::Test {

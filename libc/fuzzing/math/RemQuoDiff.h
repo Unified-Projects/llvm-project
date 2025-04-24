@@ -6,12 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_FUZZING_MATH_REMQUO_H
-#define LLVM_LIBC_FUZZING_MATH_REMQUO_H
+#include "utils/FPUtil/FPBits.h"
 
-#include "src/__support/FPUtil/FPBits.h"
-
-#include "hdr/math_macros.h"
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -31,24 +28,21 @@ void RemQuoDiff(RemQuoFunc<T> func1, RemQuoFunc<T> func2, const uint8_t *data,
   T remainder1 = func1(x, y, &q1);
   T remainder2 = func2(x, y, &q2);
 
-  LIBC_NAMESPACE::fputil::FPBits<T> bits1(remainder1);
-  LIBC_NAMESPACE::fputil::FPBits<T> bits2(remainder2);
-
-  if (bits1.is_nan()) {
-    if (!bits2.is_nan())
+  if (isnan(remainder1)) {
+    if (!isnan(remainder2))
       __builtin_trap();
     return;
   }
 
-  if (bits1.is_inf() != bits2.is_inf())
+  if (isinf(remainder2) != isinf(remainder1))
     __builtin_trap();
 
   // Compare only the 3 LS bits of the quotient.
   if ((q1 & 0x7) != (q2 & 0x7))
     __builtin_trap();
 
+  __llvm_libc::fputil::FPBits<T> bits1(remainder1);
+  __llvm_libc::fputil::FPBits<T> bits2(remainder2);
   if (bits1.uintval() != bits2.uintval())
     __builtin_trap();
 }
-
-#endif // LLVM_LIBC_FUZZING_MATH_REMQUO_H

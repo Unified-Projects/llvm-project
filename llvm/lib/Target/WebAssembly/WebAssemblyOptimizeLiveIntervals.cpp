@@ -40,18 +40,13 @@ class WebAssemblyOptimizeLiveIntervals final : public MachineFunctionPass {
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
-    AU.addRequired<LiveIntervalsWrapperPass>();
-    AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
-    AU.addPreserved<SlotIndexesWrapperPass>();
-    AU.addPreserved<LiveIntervalsWrapperPass>();
+    AU.addRequired<LiveIntervals>();
+    AU.addPreserved<MachineBlockFrequencyInfo>();
+    AU.addPreserved<SlotIndexes>();
+    AU.addPreserved<LiveIntervals>();
     AU.addPreservedID(LiveVariablesID);
     AU.addPreservedID(MachineDominatorsID);
     MachineFunctionPass::getAnalysisUsage(AU);
-  }
-
-  MachineFunctionProperties getRequiredProperties() const override {
-    return MachineFunctionProperties().set(
-        MachineFunctionProperties::Property::TracksLiveness);
   }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
@@ -77,7 +72,7 @@ bool WebAssemblyOptimizeLiveIntervals::runOnMachineFunction(
                     << MF.getName() << '\n');
 
   MachineRegisterInfo &MRI = MF.getRegInfo();
-  auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  auto &LIS = getAnalysis<LiveIntervals>();
 
   // We don't preserve SSA form.
   MRI.leaveSSA();
@@ -87,7 +82,7 @@ bool WebAssemblyOptimizeLiveIntervals::runOnMachineFunction(
   // Split multiple-VN LiveIntervals into multiple LiveIntervals.
   SmallVector<LiveInterval *, 4> SplitLIs;
   for (unsigned I = 0, E = MRI.getNumVirtRegs(); I < E; ++I) {
-    Register Reg = Register::index2VirtReg(I);
+    unsigned Reg = Register::index2VirtReg(I);
     auto &TRI = *MF.getSubtarget<WebAssemblySubtarget>().getRegisterInfo();
 
     if (MRI.reg_nodbg_empty(Reg))
@@ -107,16 +102,17 @@ bool WebAssemblyOptimizeLiveIntervals::runOnMachineFunction(
     SplitLIs.clear();
   }
 
-  // In FixIrreducibleControlFlow, we conservatively inserted IMPLICIT_DEF
+  // In PrepareForLiveIntervals, we conservatively inserted IMPLICIT_DEF
   // instructions to satisfy LiveIntervals' requirement that all uses be
   // dominated by defs. Now that LiveIntervals has computed which of these
   // defs are actually needed and which are dead, remove the dead ones.
-  for (MachineInstr &MI : llvm::make_early_inc_range(MF.front())) {
-    if (MI.isImplicitDef() && MI.getOperand(0).isDead()) {
-      LiveInterval &LI = LIS.getInterval(MI.getOperand(0).getReg());
-      LIS.removeVRegDefAt(LI, LIS.getInstructionIndex(MI).getRegSlot());
-      LIS.RemoveMachineInstrFromMaps(MI);
-      MI.eraseFromParent();
+  for (auto MII = MF.begin()->begin(), MIE = MF.begin()->end(); MII != MIE;) {
+    MachineInstr *MI = &*MII++;
+    if (MI->isImplicitDef() && MI->getOperand(0).isDead()) {
+      LiveInterval &LI = LIS.getInterval(MI->getOperand(0).getReg());
+      LIS.removeVRegDefAt(LI, LIS.getInstructionIndex(*MI).getRegSlot());
+      LIS.RemoveMachineInstrFromMaps(*MI);
+      MI->eraseFromParent();
     }
   }
 

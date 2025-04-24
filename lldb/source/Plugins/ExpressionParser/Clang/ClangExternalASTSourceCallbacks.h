@@ -10,14 +10,7 @@
 #define LLDB_SOURCE_PLUGINS_EXPRESSIONPARSER_CLANG_CLANGEXTERNALASTSOURCECALLBACKS_H
 
 #include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
-#include "clang/Basic/ASTSourceDescriptor.h"
-#include <optional>
-
-namespace clang {
-
-class Module;
-
-} // namespace clang
+#include "clang/Basic/Module.h"
 
 namespace lldb_private {
 
@@ -37,10 +30,8 @@ public:
       llvm::function_ref<bool(clang::Decl::Kind)> IsKindWeWant,
       llvm::SmallVectorImpl<clang::Decl *> &Result) override;
 
-  bool
-  FindExternalVisibleDeclsByName(const clang::DeclContext *DC,
-                                 clang::DeclarationName Name,
-                                 const clang::DeclContext *OriginalDC) override;
+  bool FindExternalVisibleDeclsByName(const clang::DeclContext *DC,
+                                      clang::DeclarationName Name) override;
 
   void CompleteType(clang::TagDecl *tag_decl) override;
 
@@ -58,7 +49,7 @@ public:
 
   /// Module-related methods.
   /// \{
-  std::optional<clang::ASTSourceDescriptor>
+  llvm::Optional<clang::ASTSourceDescriptor>
   getSourceDescriptor(unsigned ID) override;
   clang::Module *getModule(unsigned ID) override;
   OptionalClangModuleID RegisterModule(clang::Module *module);

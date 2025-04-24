@@ -11,7 +11,6 @@
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StringExtractor.h"
 #include "llvm/ADT/StringRef.h"
-#include <optional>
 
 using namespace lldb_private;
 
@@ -95,15 +94,7 @@ ParseMemoryRegionInfoFromProcMapsLine(llvm::StringRef maps_line,
     return ProcMapError("unexpected /proc/{pid}/%s exec permission char",
                         maps_kind);
 
-  // Handle sharing status (private/shared).
-  const char sharing_char = line_extractor.GetChar();
-  if (sharing_char == 's')
-    region.SetShared(MemoryRegionInfo::OptionalBool::eYes);
-  else if (sharing_char == 'p')
-    region.SetShared(MemoryRegionInfo::OptionalBool::eNo);
-  else
-    region.SetShared(MemoryRegionInfo::OptionalBool::eDontKnow);
-
+  line_extractor.GetChar();              // Read the private bit
   line_extractor.SkipSpaces();           // Skip the separator
   line_extractor.GetHexMaxU64(false, 0); // Read the offset
   line_extractor.GetHexMaxU64(false, 0); // Read the major device number
@@ -147,7 +138,7 @@ void lldb_private::ParseLinuxSMapRegions(llvm::StringRef linux_smap,
 
   llvm::StringRef lines(linux_smap);
   llvm::StringRef line;
-  std::optional<MemoryRegionInfo> region;
+  llvm::Optional<MemoryRegionInfo> region;
 
   while (lines.size()) {
     std::tie(line, lines) = lines.split('\n');
@@ -164,17 +155,12 @@ void lldb_private::ParseLinuxSMapRegions(llvm::StringRef linux_smap,
     if (!name.contains(' ')) {
       if (region) {
         if (name == "VmFlags") {
-          region->SetMemoryTagged(MemoryRegionInfo::eNo);
-          region->SetIsShadowStack(MemoryRegionInfo::eNo);
-
-          llvm::SmallVector<llvm::StringRef> flags;
-          value.split(flags, ' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
-          for (llvm::StringRef flag : flags)
-            if (flag == "mt")
-              region->SetMemoryTagged(MemoryRegionInfo::eYes);
-            else if (flag == "ss")
-              region->SetIsShadowStack(MemoryRegionInfo::eYes);
+          if (value.contains("mt"))
+            region->SetMemoryTagged(MemoryRegionInfo::eYes);
+          else
+            region->SetMemoryTagged(MemoryRegionInfo::eNo);
         }
+        // Ignore anything else
       } else {
         // Orphaned settings line
         callback(ProcMapError(

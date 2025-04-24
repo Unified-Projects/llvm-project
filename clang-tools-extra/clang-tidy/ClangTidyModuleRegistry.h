@@ -12,14 +12,12 @@
 #include "ClangTidyModule.h"
 #include "llvm/Support/Registry.h"
 
-namespace clang::tidy {
+namespace clang {
+namespace tidy {
 
-using ClangTidyModuleRegistry = llvm::Registry<ClangTidyModule>;
+typedef llvm::Registry<ClangTidyModule> ClangTidyModuleRegistry;
 
-} // namespace clang::tidy
-
-namespace llvm {
-extern template class Registry<clang::tidy::ClangTidyModule>;
-} // namespace llvm
+} // end namespace tidy
+} // end namespace clang
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_CLANGTIDYMODULEREGISTRY_H

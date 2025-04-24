@@ -3,10 +3,9 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-add_clang_library(clangTidyHICPPModule STATIC
+add_clang_library(clangTidyHICPPModule
   ExceptionBaseclassCheck.cpp
   HICPPTidyModule.cpp
-  IgnoredRemoveResultCheck.cpp
   MultiwayPathsCoveredCheck.cpp
   NoAssemblerCheck.cpp
   SignedBitwiseCheck.cpp
@@ -24,7 +23,6 @@ add_clang_library(clangTidyHICPPModule STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyHICPPModule

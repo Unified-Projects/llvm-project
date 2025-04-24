@@ -10,8 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_ASMPARSER_LLLEXER_H
-#define LLVM_ASMPARSER_LLLEXER_H
+#ifndef LLVM_LIB_ASMPARSER_LLLEXER_H
+#define LLVM_LIB_ASMPARSER_LLLEXER_H
 
 #include "LLToken.h"
 #include "llvm/ADT/APFloat.h"
@@ -28,20 +28,7 @@ namespace llvm {
   class LLLexer {
     const char *CurPtr;
     StringRef CurBuf;
-
-    enum class ErrorPriority {
-      None,   // No error message present.
-      Parser, // Errors issued by parser.
-      Lexer,  // Errors issued by lexer.
-    };
-
-    struct ErrorInfo {
-      ErrorPriority Priority = ErrorPriority::None;
-      SMDiagnostic &Error;
-
-      explicit ErrorInfo(SMDiagnostic &Error) : Error(Error) {}
-    } ErrorInfo;
-
+    SMDiagnostic &ErrorInfo;
     SourceMgr &SM;
     LLVMContext &Context;
 
@@ -49,14 +36,14 @@ namespace llvm {
     const char *TokStart;
     lltok::Kind CurKind;
     std::string StrVal;
-    unsigned UIntVal = 0;
-    Type *TyVal = nullptr;
-    APFloat APFloatVal{0.0};
-    APSInt APSIntVal{0};
+    unsigned UIntVal;
+    Type *TyVal;
+    APFloat APFloatVal;
+    APSInt  APSIntVal;
 
     // When false (default), an identifier ending in ':' is a label token.
     // When true, the ':' is treated as a separate token.
-    bool IgnoreColonInIdentifiers = false;
+    bool IgnoreColonInIdentifiers;
 
   public:
     explicit LLLexer(StringRef StartBuf, SourceMgr &SM, SMDiagnostic &,
@@ -79,13 +66,8 @@ namespace llvm {
       IgnoreColonInIdentifiers = val;
     }
 
-    // This returns true as a convenience for the parser functions that return
-    // true on error.
-    bool ParseError(LocTy ErrorLoc, const Twine &Msg) {
-      Error(ErrorLoc, Msg, ErrorPriority::Parser);
-      return true;
-    }
-    bool ParseError(const Twine &Msg) { return ParseError(getLoc(), Msg); }
+    bool Error(LocTy ErrorLoc, const Twine &Msg) const;
+    bool Error(const Twine &Msg) const { return Error(getLoc(), Msg); }
 
     void Warning(LocTy WarningLoc, const Twine &Msg) const;
     void Warning(const Twine &Msg) const { return Warning(getLoc(), Msg); }
@@ -95,7 +77,6 @@ namespace llvm {
 
     int getNextChar();
     void SkipLineComment();
-    bool SkipCComment();
     lltok::Kind ReadString(lltok::Kind kind);
     bool ReadVarName();
 
@@ -116,15 +97,7 @@ namespace llvm {
     uint64_t atoull(const char *Buffer, const char *End);
     uint64_t HexIntToVal(const char *Buffer, const char *End);
     void HexToIntPair(const char *Buffer, const char *End, uint64_t Pair[2]);
-    void FP80HexToIntPair(const char *Buffer, const char *End,
-                          uint64_t Pair[2]);
-
-    void Error(LocTy ErrorLoc, const Twine &Msg, ErrorPriority Origin);
-
-    void LexError(LocTy ErrorLoc, const Twine &Msg) {
-      Error(ErrorLoc, Msg, ErrorPriority::Lexer);
-    }
-    void LexError(const Twine &Msg) { LexError(getLoc(), Msg); }
+    void FP80HexToIntPair(const char *Buffer, const char *End, uint64_t Pair[2]);
   };
 } // end namespace llvm
 

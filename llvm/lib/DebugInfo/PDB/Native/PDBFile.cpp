@@ -8,6 +8,7 @@
 
 #include "llvm/DebugInfo/PDB/Native/PDBFile.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/DebugInfo/MSF/MSFCommon.h"
 #include "llvm/DebugInfo/MSF/MappedBlockStream.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStream.h"
@@ -86,7 +87,8 @@ uint32_t PDBFile::getNumStreams() const {
 }
 
 uint32_t PDBFile::getMaxStreamSize() const {
-  return *llvm::max_element(ContainerLayout.StreamSizes);
+  return *std::max_element(ContainerLayout.StreamSizes.begin(),
+                           ContainerLayout.StreamSizes.end());
 }
 
 uint32_t PDBFile::getStreamByteSize(uint32_t StreamIndex) const {
@@ -98,7 +100,7 @@ PDBFile::getStreamBlockList(uint32_t StreamIndex) const {
   return ContainerLayout.StreamMap[StreamIndex];
 }
 
-uint64_t PDBFile::getFileSize() const { return Buffer->getLength(); }
+uint32_t PDBFile::getFileSize() const { return Buffer->getLength(); }
 
 Expected<ArrayRef<uint8_t>> PDBFile::getBlockData(uint32_t BlockIndex,
                                                   uint32_t NumBytes) const {

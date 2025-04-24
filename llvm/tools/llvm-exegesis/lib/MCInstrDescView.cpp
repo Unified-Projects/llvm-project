@@ -9,6 +9,7 @@
 #include "MCInstrDescView.h"
 
 #include <iterator>
+#include <map>
 #include <tuple>
 
 #include "llvm/ADT/STLExtras.h"
@@ -38,7 +39,7 @@ bool Operand::isExplicit() const { return Info; }
 
 bool Operand::isImplicit() const { return !Info; }
 
-bool Operand::isImplicitReg() const { return ImplicitReg.isValid(); }
+bool Operand::isImplicitReg() const { return ImplicitReg; }
 
 bool Operand::isDef() const { return IsDef; }
 
@@ -46,9 +47,9 @@ bool Operand::isUse() const { return !IsDef; }
 
 bool Operand::isReg() const { return Tracker; }
 
-bool Operand::isTied() const { return TiedToIndex.has_value(); }
+bool Operand::isTied() const { return TiedToIndex.hasValue(); }
 
-bool Operand::isVariable() const { return VariableIndex.has_value(); }
+bool Operand::isVariable() const { return VariableIndex.hasValue(); }
 
 bool Operand::isMemory() const {
   return isExplicit() &&
@@ -64,9 +65,9 @@ unsigned Operand::getTiedToIndex() const { return *TiedToIndex; }
 
 unsigned Operand::getVariableIndex() const { return *VariableIndex; }
 
-MCRegister Operand::getImplicitReg() const {
+unsigned Operand::getImplicitReg() const {
   assert(ImplicitReg);
-  return ImplicitReg;
+  return *ImplicitReg;
 }
 
 const RegisterAliasingTracker &Operand::getRegisterAliasing() const {
@@ -95,23 +96,22 @@ Instruction::Instruction(const MCInstrDesc *Description, StringRef Name,
                          const BitVector *ImplDefRegs,
                          const BitVector *ImplUseRegs,
                          const BitVector *AllDefRegs,
-                         const BitVector *AllUseRegs,
-                         const BitVector *NonMemoryRegs)
+                         const BitVector *AllUseRegs)
     : Description(*Description), Name(Name), Operands(std::move(Operands)),
       Variables(std::move(Variables)), ImplDefRegs(*ImplDefRegs),
       ImplUseRegs(*ImplUseRegs), AllDefRegs(*AllDefRegs),
-      AllUseRegs(*AllUseRegs), NonMemoryRegs(*NonMemoryRegs) {}
+      AllUseRegs(*AllUseRegs) {}
 
 std::unique_ptr<Instruction>
 Instruction::create(const MCInstrInfo &InstrInfo,
                     const RegisterAliasingTrackerCache &RATC,
                     const BitVectorCache &BVC, unsigned Opcode) {
-  const MCInstrDesc *const Description = &InstrInfo.get(Opcode);
+  const llvm::MCInstrDesc *const Description = &InstrInfo.get(Opcode);
   unsigned OpIndex = 0;
   SmallVector<Operand, 8> Operands;
   SmallVector<Variable, 4> Variables;
   for (; OpIndex < Description->getNumOperands(); ++OpIndex) {
-    const auto &OpInfo = Description->operands()[OpIndex];
+    const auto &OpInfo = Description->opInfo_begin()[OpIndex];
     Operand Operand;
     Operand.Index = OpIndex;
     Operand.IsDef = (OpIndex < Description->getNumDefs());
@@ -128,19 +128,21 @@ Instruction::create(const MCInstrInfo &InstrInfo,
     Operand.Info = &OpInfo;
     Operands.push_back(Operand);
   }
-  for (MCPhysReg MCPhysReg : Description->implicit_defs()) {
+  for (const MCPhysReg *MCPhysReg = Description->getImplicitDefs();
+       MCPhysReg && *MCPhysReg; ++MCPhysReg, ++OpIndex) {
     Operand Operand;
-    Operand.Index = OpIndex++;
+    Operand.Index = OpIndex;
     Operand.IsDef = true;
-    Operand.Tracker = &RATC.getRegister(MCPhysReg);
+    Operand.Tracker = &RATC.getRegister(*MCPhysReg);
     Operand.ImplicitReg = MCPhysReg;
     Operands.push_back(Operand);
   }
-  for (MCPhysReg MCPhysReg : Description->implicit_uses()) {
+  for (const MCPhysReg *MCPhysReg = Description->getImplicitUses();
+       MCPhysReg && *MCPhysReg; ++MCPhysReg, ++OpIndex) {
     Operand Operand;
-    Operand.Index = OpIndex++;
+    Operand.Index = OpIndex;
     Operand.IsDef = false;
-    Operand.Tracker = &RATC.getRegister(MCPhysReg);
+    Operand.Tracker = &RATC.getRegister(*MCPhysReg);
     Operand.ImplicitReg = MCPhysReg;
     Operands.push_back(Operand);
   }
@@ -167,8 +169,6 @@ Instruction::create(const MCInstrInfo &InstrInfo,
   BitVector ImplUseRegs = RATC.emptyRegisters();
   BitVector AllDefRegs = RATC.emptyRegisters();
   BitVector AllUseRegs = RATC.emptyRegisters();
-  BitVector NonMemoryRegs = RATC.emptyRegisters();
-
   for (const auto &Op : Operands) {
     if (Op.isReg()) {
       const auto &AliasingBits = Op.getRegisterAliasing().aliasedBits();
@@ -180,8 +180,6 @@ Instruction::create(const MCInstrInfo &InstrInfo,
         ImplDefRegs |= AliasingBits;
       if (Op.isUse() && Op.isImplicit())
         ImplUseRegs |= AliasingBits;
-      if (Op.isUse() && !Op.isMemory())
-        NonMemoryRegs |= AliasingBits;
     }
   }
   // Can't use make_unique because constructor is private.
@@ -190,8 +188,7 @@ Instruction::create(const MCInstrInfo &InstrInfo,
       std::move(Variables), BVC.getUnique(std::move(ImplDefRegs)),
       BVC.getUnique(std::move(ImplUseRegs)),
       BVC.getUnique(std::move(AllDefRegs)),
-      BVC.getUnique(std::move(AllUseRegs)),
-      BVC.getUnique(std::move(NonMemoryRegs))));
+      BVC.getUnique(std::move(AllUseRegs))));
 }
 
 const Operand &Instruction::getPrimaryOperand(const Variable &Var) const {
@@ -243,12 +240,6 @@ bool Instruction::hasTiedRegisters() const {
 bool Instruction::hasAliasingRegisters(
     const BitVector &ForbiddenRegisters) const {
   return anyCommonExcludingForbidden(AllDefRegs, AllUseRegs,
-                                     ForbiddenRegisters);
-}
-
-bool Instruction::hasAliasingNotMemoryRegisters(
-    const BitVector &ForbiddenRegisters) const {
-  return anyCommonExcludingForbidden(AllDefRegs, NonMemoryRegs,
                                      ForbiddenRegisters);
 }
 
@@ -360,12 +351,10 @@ bool AliasingConfigurations::hasImplicitAliasing() const {
 }
 
 AliasingConfigurations::AliasingConfigurations(
-    const Instruction &DefInstruction, const Instruction &UseInstruction,
-    const BitVector &ForbiddenRegisters) {
-  auto CommonRegisters = UseInstruction.AllUseRegs;
-  CommonRegisters &= DefInstruction.AllDefRegs;
-  CommonRegisters.reset(ForbiddenRegisters);
-  if (!CommonRegisters.empty()) {
+    const Instruction &DefInstruction, const Instruction &UseInstruction) {
+  if (UseInstruction.AllUseRegs.anyCommon(DefInstruction.AllDefRegs)) {
+    auto CommonRegisters = UseInstruction.AllUseRegs;
+    CommonRegisters &= DefInstruction.AllDefRegs;
     for (const MCPhysReg Reg : CommonRegisters.set_bits()) {
       AliasingRegisterOperands ARO;
       addOperandIfAlias(Reg, true, DefInstruction.Operands, ARO.Defs);

@@ -9,10 +9,9 @@
 #include "src/stdlib/llabs.h"
 #include "src/__support/common.h"
 #include "src/__support/integer_operations.h"
-#include "src/__support/macros/config.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
-LLVM_LIBC_FUNCTION(long long, llabs, (long long n)) { return integer_abs(n); }
+LLVM_LIBC_FUNCTION(long long, llabs, (long long n)) { return integerAbs(n); }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

@@ -14,9 +14,7 @@
 // returns false when there's no constant evaluation support from the compiler.
 //  as well as when called not in a constexpr context
 
-// XFAIL: FROZEN-CXX03-HEADERS-FIXME
-
-#include <__type_traits/is_constant_evaluated.h>
+#include <type_traits>
 #include <cassert>
 
 #include "test_macros.h"
@@ -25,7 +23,7 @@ int main (int, char**) {
     ASSERT_SAME_TYPE(decltype(std::__libcpp_is_constant_evaluated()), bool);
     ASSERT_NOEXCEPT(std::__libcpp_is_constant_evaluated());
 
-#if !defined(_LIBCPP_CXX03_LANG)
+#if !defined(_LIBCPP_HAS_NO_BUILTIN_IS_CONSTANT_EVALUATED) && !defined(_LIBCPP_CXX03_LANG)
     static_assert(std::__libcpp_is_constant_evaluated(), "");
 #endif
 

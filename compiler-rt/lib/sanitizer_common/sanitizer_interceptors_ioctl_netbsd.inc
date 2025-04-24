@@ -1267,6 +1267,8 @@ static void ioctl_table_fill() {
   _(TIOCGFLAGS, WRITE, sizeof(int));
   _(TIOCSFLAGS, READ, sizeof(int));
   _(TIOCDCDTIMESTAMP, WRITE, struct_timeval_sz);
+  _(TIOCRCVFRAME, READ, sizeof(uptr));
+  _(TIOCXMTFRAME, READ, sizeof(uptr));
   _(TIOCPTMGET, WRITE, struct_ptmget_sz);
   _(TIOCGRANTPT, NONE, 0);
   _(TIOCPTSNAME, WRITE, struct_ptmget_sz);
@@ -1397,14 +1399,14 @@ static void ioctl_table_fill() {
   _(SNDCTL_DSP_SETRECVOL, READ, sizeof(unsigned int));
   _(SNDCTL_DSP_SKIP, NONE, 0);
   _(SNDCTL_DSP_SILENCE, NONE, 0);
-  /* Entries from file: dev/filemon/filemon.h (compat <= 9.99.26) */
-  _(FILEMON_SET_FD, READWRITE, sizeof(int));
-  _(FILEMON_SET_PID, READWRITE, sizeof(int));
+  /* Entries from file: dev/fiunified/fiunified.h (compat <= 9.99.26) */
+  _(FIUNIFIED_SET_FD, READWRITE, sizeof(int));
+  _(FIUNIFIED_SET_PID, READWRITE, sizeof(int));
   /* Entries from file: dev/usb/urio.h (compat <= 9.99.43) */
   _(URIO_SEND_COMMAND, READWRITE, struct_urio_command_sz);
   _(URIO_RECV_COMMAND, READWRITE, struct_urio_command_sz);
 #undef _
-}
+} // NOLINT
 
 static bool ioctl_initialized = false;
 

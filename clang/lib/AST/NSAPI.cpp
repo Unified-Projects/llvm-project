@@ -11,7 +11,6 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/Expr.h"
 #include "llvm/ADT/StringSwitch.h"
-#include <optional>
 
 using namespace clang;
 
@@ -56,8 +55,10 @@ Selector NSAPI::getNSStringSelector(NSStringMethodKind MK) const {
                                        &Ctx.Idents.get("initWithUTF8String"));
       break;
     case NSStr_stringWithCStringEncoding: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("stringWithCString"),
-                                           &Ctx.Idents.get("encoding")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("stringWithCString"),
+        &Ctx.Idents.get("encoding")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -91,8 +92,10 @@ Selector NSAPI::getNSArraySelector(NSArrayMethodKind MK) const {
       Sel = Ctx.Selectors.getUnarySelector(&Ctx.Idents.get("arrayWithObjects"));
       break;
     case NSArr_arrayWithObjectsCount: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("arrayWithObjects"),
-                                           &Ctx.Idents.get("count")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("arrayWithObjects"),
+        &Ctx.Idents.get("count")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -106,9 +109,10 @@ Selector NSAPI::getNSArraySelector(NSArrayMethodKind MK) const {
       Sel = Ctx.Selectors.getUnarySelector(&Ctx.Idents.get("objectAtIndex"));
       break;
     case NSMutableArr_replaceObjectAtIndex: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("replaceObjectAtIndex"),
-          &Ctx.Idents.get("withObject")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("replaceObjectAtIndex"),
+        &Ctx.Idents.get("withObject")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -116,14 +120,18 @@ Selector NSAPI::getNSArraySelector(NSArrayMethodKind MK) const {
       Sel = Ctx.Selectors.getUnarySelector(&Ctx.Idents.get("addObject"));
       break;
     case NSMutableArr_insertObjectAtIndex: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("insertObject"),
-                                           &Ctx.Idents.get("atIndex")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("insertObject"),
+        &Ctx.Idents.get("atIndex")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSMutableArr_setObjectAtIndexedSubscript: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("setObject"), &Ctx.Idents.get("atIndexedSubscript")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("setObject"),
+        &Ctx.Idents.get("atIndexedSubscript")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -134,15 +142,14 @@ Selector NSAPI::getNSArraySelector(NSArrayMethodKind MK) const {
   return NSArraySelectors[MK];
 }
 
-std::optional<NSAPI::NSArrayMethodKind>
-NSAPI::getNSArrayMethodKind(Selector Sel) {
+Optional<NSAPI::NSArrayMethodKind> NSAPI::getNSArrayMethodKind(Selector Sel) {
   for (unsigned i = 0; i != NumNSArrayMethods; ++i) {
     NSArrayMethodKind MK = NSArrayMethodKind(i);
     if (Sel == getNSArraySelector(MK))
       return MK;
   }
 
-  return std::nullopt;
+  return None;
 }
 
 Selector NSAPI::getNSDictionarySelector(
@@ -158,21 +165,27 @@ Selector NSAPI::getNSDictionarySelector(
                                    &Ctx.Idents.get("dictionaryWithDictionary"));
       break;
     case NSDict_dictionaryWithObjectForKey: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("dictionaryWithObject"), &Ctx.Idents.get("forKey")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("dictionaryWithObject"),
+        &Ctx.Idents.get("forKey")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSDict_dictionaryWithObjectsForKeys: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("dictionaryWithObjects"), &Ctx.Idents.get("forKeys")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("dictionaryWithObjects"),
+        &Ctx.Idents.get("forKeys")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSDict_dictionaryWithObjectsForKeysCount: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("dictionaryWithObjects"), &Ctx.Idents.get("forKeys"),
-          &Ctx.Idents.get("count")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("dictionaryWithObjects"),
+        &Ctx.Idents.get("forKeys"),
+        &Ctx.Idents.get("count")
+      };
       Sel = Ctx.Selectors.getSelector(3, KeyIdents);
       break;
     }
@@ -189,8 +202,10 @@ Selector NSAPI::getNSDictionarySelector(
                                      &Ctx.Idents.get("initWithObjectsAndKeys"));
       break;
     case NSDict_initWithObjectsForKeys: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("initWithObjects"),
-                                           &Ctx.Idents.get("forKeys")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("initWithObjects"),
+        &Ctx.Idents.get("forKeys")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -198,20 +213,26 @@ Selector NSAPI::getNSDictionarySelector(
       Sel = Ctx.Selectors.getUnarySelector(&Ctx.Idents.get("objectForKey"));
       break;
     case NSMutableDict_setObjectForKey: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("setObject"),
-                                           &Ctx.Idents.get("forKey")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("setObject"),
+        &Ctx.Idents.get("forKey")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSMutableDict_setObjectForKeyedSubscript: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("setObject"), &Ctx.Idents.get("forKeyedSubscript")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("setObject"),
+        &Ctx.Idents.get("forKeyedSubscript")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSMutableDict_setValueForKey: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("setValue"),
-                                           &Ctx.Idents.get("forKey")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("setValue"),
+        &Ctx.Idents.get("forKey")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -222,7 +243,7 @@ Selector NSAPI::getNSDictionarySelector(
   return NSDictionarySelectors[MK];
 }
 
-std::optional<NSAPI::NSDictionaryMethodKind>
+Optional<NSAPI::NSDictionaryMethodKind>
 NSAPI::getNSDictionaryMethodKind(Selector Sel) {
   for (unsigned i = 0; i != NumNSDictionaryMethods; ++i) {
     NSDictionaryMethodKind MK = NSDictionaryMethodKind(i);
@@ -230,7 +251,7 @@ NSAPI::getNSDictionaryMethodKind(Selector Sel) {
       return MK;
   }
 
-  return std::nullopt;
+  return None;
 }
 
 Selector NSAPI::getNSSetSelector(NSSetMethodKind MK) const {
@@ -241,27 +262,34 @@ Selector NSAPI::getNSSetSelector(NSSetMethodKind MK) const {
       Sel = Ctx.Selectors.getUnarySelector(&Ctx.Idents.get("addObject"));
       break;
     case NSOrderedSet_insertObjectAtIndex: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("insertObject"),
-                                           &Ctx.Idents.get("atIndex")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("insertObject"),
+        &Ctx.Idents.get("atIndex")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSOrderedSet_setObjectAtIndex: {
-      const IdentifierInfo *KeyIdents[] = {&Ctx.Idents.get("setObject"),
-                                           &Ctx.Idents.get("atIndex")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("setObject"),
+        &Ctx.Idents.get("atIndex")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSOrderedSet_setObjectAtIndexedSubscript: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("setObject"), &Ctx.Idents.get("atIndexedSubscript")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("setObject"),
+        &Ctx.Idents.get("atIndexedSubscript")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
     case NSOrderedSet_replaceObjectAtIndexWithObject: {
-      const IdentifierInfo *KeyIdents[] = {
-          &Ctx.Idents.get("replaceObjectAtIndex"),
-          &Ctx.Idents.get("withObject")};
+      IdentifierInfo *KeyIdents[] = {
+        &Ctx.Idents.get("replaceObjectAtIndex"),
+        &Ctx.Idents.get("withObject")
+      };
       Sel = Ctx.Selectors.getSelector(2, KeyIdents);
       break;
     }
@@ -272,14 +300,15 @@ Selector NSAPI::getNSSetSelector(NSSetMethodKind MK) const {
   return NSSetSelectors[MK];
 }
 
-std::optional<NSAPI::NSSetMethodKind> NSAPI::getNSSetMethodKind(Selector Sel) {
+Optional<NSAPI::NSSetMethodKind>
+NSAPI::getNSSetMethodKind(Selector Sel) {
   for (unsigned i = 0; i != NumNSSetMethods; ++i) {
     NSSetMethodKind MK = NSSetMethodKind(i);
     if (Sel == getNSSetSelector(MK))
       return MK;
   }
 
-  return std::nullopt;
+  return None;
 }
 
 Selector NSAPI::getNSNumberLiteralSelector(NSNumberLiteralMethodKind MK,
@@ -334,7 +363,7 @@ Selector NSAPI::getNSNumberLiteralSelector(NSNumberLiteralMethodKind MK,
   return Sels[MK];
 }
 
-std::optional<NSAPI::NSNumberLiteralMethodKind>
+Optional<NSAPI::NSNumberLiteralMethodKind>
 NSAPI::getNSNumberLiteralMethodKind(Selector Sel) const {
   for (unsigned i = 0; i != NumNSNumberLiteralMethods; ++i) {
     NSNumberLiteralMethodKind MK = NSNumberLiteralMethodKind(i);
@@ -342,14 +371,14 @@ NSAPI::getNSNumberLiteralMethodKind(Selector Sel) const {
       return MK;
   }
 
-  return std::nullopt;
+  return None;
 }
 
-std::optional<NSAPI::NSNumberLiteralMethodKind>
+Optional<NSAPI::NSNumberLiteralMethodKind>
 NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
   const BuiltinType *BT = T->getAs<BuiltinType>();
   if (!BT)
-    return std::nullopt;
+    return None;
 
   const TypedefType *TDT = T->getAs<TypedefType>();
   if (TDT) {
@@ -427,7 +456,6 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
   case BuiltinType::UInt128:
   case BuiltinType::Float16:
   case BuiltinType::Float128:
-  case BuiltinType::Ibm128:
   case BuiltinType::NullPtr:
   case BuiltinType::ObjCClass:
   case BuiltinType::ObjCId:
@@ -451,14 +479,7 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
 #include "clang/Basic/PPCTypes.def"
 #define RVV_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
 #include "clang/Basic/RISCVVTypes.def"
-#define WASM_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
-#include "clang/Basic/WebAssemblyReferenceTypes.def"
-#define AMDGPU_TYPE(Name, Id, SingletonId, Width, Align) case BuiltinType::Id:
-#include "clang/Basic/AMDGPUTypes.def"
-#define HLSL_INTANGIBLE_TYPE(Name, Id, SingletonId) case BuiltinType::Id:
-#include "clang/Basic/HLSLIntangibleTypes.def"
   case BuiltinType::BoundMember:
-  case BuiltinType::UnresolvedTemplate:
   case BuiltinType::Dependent:
   case BuiltinType::Overload:
   case BuiltinType::UnknownAny:
@@ -467,14 +488,14 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
   case BuiltinType::PseudoObject:
   case BuiltinType::BuiltinFn:
   case BuiltinType::IncompleteMatrixIdx:
-  case BuiltinType::ArraySection:
+  case BuiltinType::OMPArraySection:
   case BuiltinType::OMPArrayShaping:
   case BuiltinType::OMPIterator:
   case BuiltinType::BFloat16:
     break;
   }
 
-  return std::nullopt;
+  return None;
 }
 
 /// Returns true if \param T is a typedef of "BOOL" in objective-c.
@@ -581,7 +602,7 @@ bool NSAPI::isObjCEnumerator(const Expr *E,
 Selector NSAPI::getOrInitSelector(ArrayRef<StringRef> Ids,
                                   Selector &Sel) const {
   if (Sel.isNull()) {
-    SmallVector<const IdentifierInfo *, 4> Idents;
+    SmallVector<IdentifierInfo *, 4> Idents;
     for (ArrayRef<StringRef>::const_iterator
            I = Ids.begin(), E = Ids.end(); I != E; ++I)
       Idents.push_back(&Ctx.Idents.get(*I));
@@ -592,7 +613,7 @@ Selector NSAPI::getOrInitSelector(ArrayRef<StringRef> Ids,
 
 Selector NSAPI::getOrInitNullarySelector(StringRef Id, Selector &Sel) const {
   if (Sel.isNull()) {
-    const IdentifierInfo *Ident = &Ctx.Idents.get(Id);
+    IdentifierInfo *Ident = &Ctx.Idents.get(Id);
     Sel = Ctx.Selectors.getSelector(0, &Ident);
   }
   return Sel;

@@ -13,13 +13,15 @@
 #include "../utils/IncludeInserter.h"
 #include "clang/Analysis/Analyses/ExprMutationAnalyzer.h"
 
-namespace clang::tidy::performance {
+namespace clang {
+namespace tidy {
+namespace performance {
 
 /// A check that flags value parameters of expensive to copy types that
 /// can safely be converted to const references.
 ///
 /// For the user-facing documentation see:
-/// http://clang.llvm.org/extra/clang-tidy/checks/performance/unnecessary-value-param.html
+/// http://clang.llvm.org/extra/clang-tidy/checks/performance-unnecessary-value-param.html
 class UnnecessaryValueParamCheck : public ClangTidyCheck {
 public:
   UnnecessaryValueParamCheck(StringRef Name, ClangTidyContext *Context);
@@ -33,21 +35,18 @@ public:
   void storeOptions(ClangTidyOptions::OptionMap &Opts) override;
   void onEndOfTranslationUnit() override;
 
-protected:
-  // Create diagnostics. These are virtual so that derived classes can change
-  // behaviour.
-  virtual void handleMoveFix(const ParmVarDecl &Param,
-                             const DeclRefExpr &CopyArgument,
-                             ASTContext &Context);
-  virtual void handleConstRefFix(const FunctionDecl &Function,
-                                 const ParmVarDecl &Param, ASTContext &Context);
-
 private:
-  ExprMutationAnalyzer::Memoized MutationAnalyzerCache;
+  void handleMoveFix(const ParmVarDecl &Var, const DeclRefExpr &CopyArgument,
+                     const ASTContext &Context);
+
+  llvm::DenseMap<const FunctionDecl *, FunctionParmMutationAnalyzer>
+      MutationAnalyzers;
   utils::IncludeInserter Inserter;
-  const std::vector<StringRef> AllowedTypes;
+  const std::vector<std::string> AllowedTypes;
 };
 
-} // namespace clang::tidy::performance
+} // namespace performance
+} // namespace tidy
+} // namespace clang
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLANG_TIDY_PERFORMANCE_UNNECESSARY_VALUE_PARAM_H

@@ -12,8 +12,6 @@
 
 #include "BPF.h"
 #include "BPFCORE.h"
-#include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/DebugInfo/BTF/BTF.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instruction.h"
@@ -21,6 +19,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -56,7 +55,7 @@ static bool BPFPreserveDITypeImpl(Function &F) {
       if (!GV)
         continue;
 
-      if (GV->getName().starts_with("llvm.bpf.btf.type.id")) {
+      if (GV->getName().startswith("llvm.bpf.btf.type.id")) {
         if (!Call->getMetadata(LLVMContext::MD_preserve_access_index))
           report_fatal_error(
               "Missing metadata for llvm.bpf.btf.type.id intrinsic");
@@ -70,7 +69,7 @@ static bool BPFPreserveDITypeImpl(Function &F) {
 
   std::string BaseName = "llvm.btf_type_id.";
   static int Count = 0;
-  for (auto *Call : PreserveDITypeCalls) {
+  for (auto Call : PreserveDITypeCalls) {
     const ConstantInt *Flag = dyn_cast<ConstantInt>(Call->getArgOperand(1));
     assert(Flag);
     uint64_t FlagValue = Flag->getValue().getZExtValue();
@@ -82,41 +81,35 @@ static bool BPFPreserveDITypeImpl(Function &F) {
 
     uint32_t Reloc;
     if (FlagValue == BPFCoreSharedInfo::BTF_TYPE_ID_LOCAL_RELOC) {
-      Reloc = BTF::BTF_TYPE_ID_LOCAL;
+      Reloc = BPFCoreSharedInfo::BTF_TYPE_ID_LOCAL;
     } else {
-      Reloc = BTF::BTF_TYPE_ID_REMOTE;
-    }
-    DIType *Ty = cast<DIType>(MD);
-    while (auto *DTy = dyn_cast<DIDerivedType>(Ty)) {
-      unsigned Tag = DTy->getTag();
-      if (Tag != dwarf::DW_TAG_const_type && Tag != dwarf::DW_TAG_volatile_type)
-        break;
-      Ty = DTy->getBaseType();
-    }
-
-    if (Reloc == BTF::BTF_TYPE_ID_REMOTE) {
-      if (Ty->getName().empty()) {
-        if (isa<DISubroutineType>(Ty))
-          report_fatal_error(
-              "SubroutineType not supported for BTF_TYPE_ID_REMOTE reloc");
-        else
-          report_fatal_error("Empty type name for BTF_TYPE_ID_REMOTE reloc");
+      Reloc = BPFCoreSharedInfo::BTF_TYPE_ID_REMOTE;
+      DIType *Ty = cast<DIType>(MD);
+      while (auto *DTy = dyn_cast<DIDerivedType>(Ty)) {
+        unsigned Tag = DTy->getTag();
+        if (Tag != dwarf::DW_TAG_const_type &&
+            Tag != dwarf::DW_TAG_volatile_type)
+          break;
+        Ty = DTy->getBaseType();
       }
+
+      if (Ty->getName().empty())
+        report_fatal_error("Empty type name for BTF_TYPE_ID_REMOTE reloc");
+      MD = Ty;
     }
-    MD = Ty;
 
     BasicBlock *BB = Call->getParent();
     IntegerType *VarType = Type::getInt64Ty(BB->getContext());
-    std::string GVName =
-        BaseName + std::to_string(Count) + "$" + std::to_string(Reloc);
+    std::string GVName = BaseName + std::to_string(Count) + "$" +
+        std::to_string(Reloc);
     GlobalVariable *GV = new GlobalVariable(
-        *M, VarType, false, GlobalVariable::ExternalLinkage, nullptr, GVName);
+        *M, VarType, false, GlobalVariable::ExternalLinkage, NULL, GVName);
     GV->addAttribute(BPFCoreSharedInfo::TypeIdAttr);
     GV->setMetadata(LLVMContext::MD_preserve_access_index, MD);
 
     // Load the global variable which represents the type info.
-    auto *LDInst = new LoadInst(Type::getInt64Ty(BB->getContext()), GV, "",
-                                Call->getIterator());
+    auto *LDInst =
+        new LoadInst(Type::getInt64Ty(BB->getContext()), GV, "", Call);
     Instruction *PassThroughInst =
         BPFCoreSharedInfo::insertPassThrough(M, BB, LDInst, Call);
     Call->replaceAllUsesWith(PassThroughInst);
@@ -126,7 +119,27 @@ static bool BPFPreserveDITypeImpl(Function &F) {
 
   return true;
 }
+
+class BPFPreserveDIType final : public FunctionPass {
+  bool runOnFunction(Function &F) override;
+
+public:
+  static char ID;
+  BPFPreserveDIType() : FunctionPass(ID) {}
+};
 } // End anonymous namespace
+
+char BPFPreserveDIType::ID = 0;
+INITIALIZE_PASS(BPFPreserveDIType, DEBUG_TYPE, "BPF Preserve Debuginfo Type",
+                false, false)
+
+FunctionPass *llvm::createBPFPreserveDIType() {
+  return new BPFPreserveDIType();
+}
+
+bool BPFPreserveDIType::runOnFunction(Function &F) {
+  return BPFPreserveDITypeImpl(F);
+}
 
 PreservedAnalyses BPFPreserveDITypePass::run(Function &F,
                                              FunctionAnalysisManager &AM) {

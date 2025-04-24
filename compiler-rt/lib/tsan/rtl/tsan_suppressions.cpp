@@ -10,16 +10,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "tsan_suppressions.h"
-
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_placement_new.h"
 #include "sanitizer_common/sanitizer_suppressions.h"
+#include "tsan_suppressions.h"
+#include "tsan_rtl.h"
 #include "tsan_flags.h"
 #include "tsan_mman.h"
 #include "tsan_platform.h"
-#include "tsan_rtl.h"
 
 #if !SANITIZER_GO
 // Suppressions for true/false positives in standard libraries.
@@ -42,7 +41,7 @@ const char *__tsan_default_suppressions() {
 
 namespace __tsan {
 
-alignas(64) static char suppression_placeholder[sizeof(SuppressionContext)];
+ALIGNED(64) static char suppression_placeholder[sizeof(SuppressionContext)];
 static SuppressionContext *suppression_ctx = nullptr;
 static const char *kSuppressionTypes[] = {
     kSuppressionRace,   kSuppressionRaceTop, kSuppressionMutex,
@@ -81,7 +80,6 @@ static const char *conv(ReportType typ) {
     case ReportTypeMutexBadUnlock:
     case ReportTypeMutexBadReadLock:
     case ReportTypeMutexBadReadUnlock:
-    case ReportTypeMutexHeldWrongContext:
       return kSuppressionMutex;
     case ReportTypeSignalUnsafe:
     case ReportTypeErrnoInSignal:

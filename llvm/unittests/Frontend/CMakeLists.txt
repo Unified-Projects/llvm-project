@@ -1,11 +1,10 @@
 set(LLVM_LINK_COMPONENTS
   Analysis
   Core
-  FrontendOpenACC
   FrontendOpenMP
-  Passes
+  FrontendOpenACC
   Support
-  TargetParser
+  Passes
   TransformUtils
   )
 
@@ -14,8 +13,6 @@ add_llvm_unittest(LLVMFrontendTests
   OpenMPContextTest.cpp
   OpenMPIRBuilderTest.cpp
   OpenMPParsingTest.cpp
-  OpenMPCompositionTest.cpp
-  OpenMPDecompositionTest.cpp
 
   DEPENDS
   acc_gen

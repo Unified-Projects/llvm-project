@@ -1,4 +1,4 @@
-//===-- M68kInstrInfo.cpp - M68k Instruction Information --------*- C++ -*-===//
+//===-- M68kInstrInfo.cpp - M68k Instruction Information ----*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -23,12 +23,9 @@
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/CodeGenTypes/MachineValueType.h"
-#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/Regex.h"
+#include "llvm/Support/TargetRegistry.h"
 
 #include <functional>
 
@@ -348,93 +345,11 @@ void M68kInstrInfo::AddZExt(MachineBasicBlock &MBB,
   BuildMI(MBB, I, DL, get(And), Reg).addReg(Reg).addImm(Mask);
 }
 
-// Convert MOVI to the appropriate instruction (sequence) for setting
-// the register to an immediate value.
-bool M68kInstrInfo::ExpandMOVI(MachineInstrBuilder &MIB, MVT MVTSize) const {
-  Register Reg = MIB->getOperand(0).getReg();
-  int64_t Imm = MIB->getOperand(1).getImm();
-  bool IsAddressReg = false;
-
-  const auto *DR32 = RI.getRegClass(M68k::DR32RegClassID);
-  const auto *AR32 = RI.getRegClass(M68k::AR32RegClassID);
-  const auto *AR16 = RI.getRegClass(M68k::AR16RegClassID);
-
-  if (AR16->contains(Reg) || AR32->contains(Reg))
-    IsAddressReg = true;
-
-  // We need to assign to the full register to make IV happy
-  Register SReg =
-      MVTSize == MVT::i32
-          ? Reg
-          : Register(RI.getMatchingMegaReg(Reg, IsAddressReg ? AR32 : DR32));
-  assert(SReg && "No viable MEGA register available");
-
-  LLVM_DEBUG(dbgs() << "Expand " << *MIB.getInstr() << " to ");
-
-  // Sign extention doesn't matter if we only use the bottom 8 bits
-  if (MVTSize == MVT::i8 || (!IsAddressReg && Imm >= -128 && Imm <= 127)) {
-    LLVM_DEBUG(dbgs() << "MOVEQ\n");
-
-    MIB->setDesc(get(M68k::MOVQ));
-    MIB->getOperand(0).setReg(SReg);
-
-    // Counter the effects of sign-extension with a bitwise not.
-    // This is only faster and smaller for 32 bit values.
-  } else if (DR32->contains(Reg) && isUInt<8>(Imm)) {
-    LLVM_DEBUG(dbgs() << "MOVEQ and NOT\n");
-
-    MachineBasicBlock &MBB = *MIB->getParent();
-    DebugLoc DL = MIB->getDebugLoc();
-
-    unsigned SubReg = RI.getSubReg(Reg, M68k::MxSubRegIndex8Lo);
-    assert(SubReg && "No viable SUB register available");
-
-    BuildMI(MBB, MIB.getInstr(), DL, get(M68k::MOVQ), SReg).addImm(~Imm & 0xFF);
-    BuildMI(MBB, MIB.getInstr(), DL, get(M68k::NOT8d), SubReg).addReg(SubReg);
-
-    MIB->removeFromParent();
-
-    // Special case for setting address register to NULL (0)
-  } else if (IsAddressReg && Imm == 0) {
-    LLVM_DEBUG(dbgs() << "SUBA\n");
-
-    MachineBasicBlock &MBB = *MIB->getParent();
-    DebugLoc DL = MIB->getDebugLoc();
-
-    BuildMI(MBB, MIB.getInstr(), DL, get(M68k::SUB32ar), SReg)
-        .addReg(SReg, RegState::Undef)
-        .addReg(SReg, RegState::Undef);
-
-    MIB->removeFromParent();
-
-    // movea.w implicitly sign extends to the full register width,
-    // so exploit that if the immediate fits in the correct range.
-    //
-    // TODO: use lea imm.w, %an for further constants when 16-bit
-    // absolute addressing is implemented.
-  } else if (AR32->contains(Reg) && isUInt<16>(Imm)) {
-    LLVM_DEBUG(dbgs() << "MOVEA w/ implicit extend\n");
-
-    unsigned SubReg = RI.getSubReg(Reg, M68k::MxSubRegIndex16Lo);
-    assert(SubReg && "No viable SUB register available");
-
-    MIB->setDesc(get(M68k::MOV16ai));
-    MIB->getOperand(0).setReg(SubReg);
-
-    // Fall back to a move with immediate
-  } else {
-    LLVM_DEBUG(dbgs() << "MOVE\n");
-    MIB->setDesc(get(MVTSize == MVT::i16 ? M68k::MOV16ri : M68k::MOV32ri));
-  }
-
-  return true;
-}
-
 bool M68kInstrInfo::ExpandMOVX_RR(MachineInstrBuilder &MIB, MVT MVTDst,
                                   MVT MVTSrc) const {
   unsigned Move = MVTDst == MVT::i16 ? M68k::MOV16rr : M68k::MOV32rr;
-  Register Dst = MIB->getOperand(0).getReg();
-  Register Src = MIB->getOperand(1).getReg();
+  unsigned Dst = MIB->getOperand(0).getReg();
+  unsigned Src = MIB->getOperand(1).getReg();
 
   assert(Dst != Src && "You cannot use the same Regs with MOVX_RR");
 
@@ -445,7 +360,6 @@ bool M68kInstrInfo::ExpandMOVX_RR(MachineInstrBuilder &MIB, MVT MVTDst,
 
   assert(RCDst && RCSrc && "Wrong use of MOVX_RR");
   assert(RCDst != RCSrc && "You cannot use the same Reg Classes with MOVX_RR");
-  (void)RCSrc;
 
   // We need to find the super source register that matches the size of Dst
   unsigned SSrc = RI.getMatchingMegaReg(Src, RCDst);
@@ -480,8 +394,8 @@ bool M68kInstrInfo::ExpandMOVSZX_RR(MachineInstrBuilder &MIB, bool IsSigned,
   else // i32
     Move = M68k::MOV32rr;
 
-  Register Dst = MIB->getOperand(0).getReg();
-  Register Src = MIB->getOperand(1).getReg();
+  unsigned Dst = MIB->getOperand(0).getReg();
+  unsigned Src = MIB->getOperand(1).getReg();
 
   assert(Dst != Src && "You cannot use the same Regs with MOVSX_RR");
 
@@ -492,7 +406,6 @@ bool M68kInstrInfo::ExpandMOVSZX_RR(MachineInstrBuilder &MIB, bool IsSigned,
 
   assert(RCDst && RCSrc && "Wrong use of MOVSX_RR");
   assert(RCDst != RCSrc && "You cannot use the same Reg Classes with MOVSX_RR");
-  (void)RCSrc;
 
   // We need to find the super source register that matches the size of Dst
   unsigned SSrc = RI.getMatchingMegaReg(Src, RCDst);
@@ -524,7 +437,7 @@ bool M68kInstrInfo::ExpandMOVSZX_RM(MachineInstrBuilder &MIB, bool IsSigned,
                                     MVT MVTSrc) const {
   LLVM_DEBUG(dbgs() << "Expand " << *MIB.getInstr() << " to LOAD and ");
 
-  Register Dst = MIB->getOperand(0).getReg();
+  unsigned Dst = MIB->getOperand(0).getReg();
 
   // We need the subreg of Dst to make instruction verifier happy because the
   // real machine instruction consumes and produces values of the same size and
@@ -573,12 +486,6 @@ bool M68kInstrInfo::ExpandPUSH_POP(MachineInstrBuilder &MIB,
 }
 
 bool M68kInstrInfo::ExpandCCR(MachineInstrBuilder &MIB, bool IsToCCR) const {
-  if (MIB->getOpcode() == M68k::MOV8cd) {
-    // Promote used register to the next class
-    MachineOperand &Opd = MIB->getOperand(1);
-    Opd.setReg(getRegisterInfo().getMatchingSuperReg(
-        Opd.getReg(), M68k::MxSubRegIndex8Lo, &M68k::DR16RegClass));
-  }
 
   // Replace the pseudo instruction with the real one
   if (IsToCCR)
@@ -586,6 +493,11 @@ bool M68kInstrInfo::ExpandCCR(MachineInstrBuilder &MIB, bool IsToCCR) const {
   else
     // FIXME M68010 or later is required
     MIB->setDesc(get(M68k::MOV16dc));
+
+  // Promote used register to the next class
+  auto &Opd = MIB->getOperand(1);
+  Opd.setReg(getRegisterInfo().getMatchingSuperReg(
+      Opd.getReg(), M68k::MxSubRegIndex8Lo, &M68k::DR16RegClass));
 
   return true;
 }
@@ -647,7 +559,7 @@ bool M68kInstrInfo::ExpandMOVEM(MachineInstrBuilder &MIB,
 static bool Expand2AddrUndef(MachineInstrBuilder &MIB,
                              const MCInstrDesc &Desc) {
   assert(Desc.getNumOperands() == 3 && "Expected two-addr instruction.");
-  Register Reg = MIB->getOperand(0).getReg();
+  unsigned Reg = MIB->getOperand(0).getReg();
   MIB->setDesc(Desc);
 
   // MachineInstr::addOperand() will insert explicit operands before any
@@ -689,33 +601,46 @@ bool M68kInstrInfo::expandPostRAPseudo(MachineInstr &MI) const {
 bool M68kInstrInfo::isPCRelRegisterOperandLegal(
     const MachineOperand &MO) const {
   assert(MO.isReg());
+  const auto *MI = MO.getParent();
+  const uint8_t *Beads = M68k::getMCInstrBeads(MI->getOpcode());
+  assert(*Beads);
 
-  // Check whether this MO belongs to an instruction with addressing mode 'k',
-  // Refer to TargetInstrInfo.h for more information about this function.
+  // Only addressing mode k has (non-pc) register with PCRel
+  // So we're looking for EA Beads equal to
+  // `3Bits<011>_1Bit<1>_2Bits<11>`
+  // FIXME: There is an important caveat and two assumptions
+  // here: The caveat is that EA encoding always sit on the LSB.
+  // Where the assumptions are that if there are more than one
+  // operands, the EA encoding for the source operand always sit
+  // on the LSB. At the same time, k addressing mode can not be used
+  // on destination operand.
+  // The last assumption is kinda dirty so we need to find a way around
+  // it
+  const uint8_t EncEAk[3] = {0b011, 0b1, 0b11};
+  for (const uint8_t Pat : EncEAk) {
+    uint8_t Bead = *(Beads++);
+    if (!Bead)
+      return false;
 
-  const MachineInstr *MI = MO.getParent();
-  const unsigned NameIndices = M68kInstrNameIndices[MI->getOpcode()];
-  StringRef InstrName(&M68kInstrNameData[NameIndices]);
-  const unsigned OperandNo = MO.getOperandNo();
-
-  // If this machine operand is the 2nd operand, then check
-  // whether the instruction has destination addressing mode 'k'.
-  if (OperandNo == 1)
-    return Regex("[A-Z]+(8|16|32)k[a-z](_TC)?$").match(InstrName);
-
-  // If this machine operand is the last one, then check
-  // whether the instruction has source addressing mode 'k'.
-  if (OperandNo == MI->getNumExplicitOperands() - 1)
-    return Regex("[A-Z]+(8|16|32)[a-z]k(_TC)?$").match(InstrName);
-
-  return false;
+    switch (Bead & 0xF) {
+    default:
+      return false;
+    case M68kBeads::Bits1:
+    case M68kBeads::Bits2:
+    case M68kBeads::Bits3: {
+      uint8_t Val = (Bead & 0xF0) >> 4;
+      if (Val != Pat)
+        return false;
+    }
+    }
+  }
+  return true;
 }
 
 void M68kInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MI,
                                 const DebugLoc &DL, MCRegister DstReg,
-                                MCRegister SrcReg, bool KillSrc,
-                                bool RenamableDest, bool RenamableSrc) const {
+                                MCRegister SrcReg, bool KillSrc) const {
   unsigned Opc = 0;
 
   // First deal with the normal symmetric copies.
@@ -760,27 +685,13 @@ void M68kInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   bool ToSR = DstReg == M68k::SR;
 
   if (FromCCR) {
-    if (M68k::DR8RegClass.contains(DstReg)) {
-      Opc = M68k::MOV8dc;
-    } else if (M68k::DR16RegClass.contains(DstReg)) {
-      Opc = M68k::MOV16dc;
-    } else if (M68k::DR32RegClass.contains(DstReg)) {
-      Opc = M68k::MOV16dc;
-    } else {
-      LLVM_DEBUG(dbgs() << "Cannot copy CCR to " << RI.getName(DstReg) << '\n');
-      llvm_unreachable("Invalid register for MOVE from CCR");
-    }
+    assert(M68k::DR8RegClass.contains(DstReg) &&
+           "Need DR8 register to copy CCR");
+    Opc = M68k::MOV8dc;
   } else if (ToCCR) {
-    if (M68k::DR8RegClass.contains(SrcReg)) {
-      Opc = M68k::MOV8cd;
-    } else if (M68k::DR16RegClass.contains(SrcReg)) {
-      Opc = M68k::MOV16cd;
-    } else if (M68k::DR32RegClass.contains(SrcReg)) {
-      Opc = M68k::MOV16cd;
-    } else {
-      LLVM_DEBUG(dbgs() << "Cannot copy " << RI.getName(SrcReg) << " to CCR\n");
-      llvm_unreachable("Invalid register for MOVE to CCR");
-    }
+    assert(M68k::DR8RegClass.contains(SrcReg) &&
+           "Need DR8 register to copy CCR");
+    Opc = M68k::MOV8cd;
   } else if (FromSR || ToSR)
     llvm_unreachable("Cannot emit SR copy instruction");
 
@@ -804,7 +715,7 @@ unsigned getLoadStoreRegOpcode(unsigned Reg, const TargetRegisterClass *RC,
     llvm_unreachable("Unknown spill size");
   case 8:
     if (M68k::DR8RegClass.hasSubClassEq(RC))
-      return load ? M68k::MOV8dp : M68k::MOV8pd;
+      return load ? M68k::MOVM8mp_P : M68k::MOVM8pm_P;
     if (M68k::CCRCRegClass.hasSubClassEq(RC))
       return load ? M68k::MOV16cp : M68k::MOV16pc;
 
@@ -841,16 +752,15 @@ bool M68kInstrInfo::getStackSlotRange(const TargetRegisterClass *RC,
   return true;
 }
 
-void M68kInstrInfo::storeRegToStackSlot(
-    MachineBasicBlock &MBB, MachineBasicBlock::iterator MI, Register SrcReg,
-    bool IsKill, int FrameIndex, const TargetRegisterClass *RC,
-    const TargetRegisterInfo *TRI, Register VReg,
-    MachineInstr::MIFlag Flags) const {
-  const MachineFrameInfo &MFI = MBB.getParent()->getFrameInfo();
-  assert(MFI.getObjectSize(FrameIndex) >= TRI->getSpillSize(*RC) &&
-         "Stack slot is too small to store");
-  (void)MFI;
-
+void M68kInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
+                                        MachineBasicBlock::iterator MI,
+                                        Register SrcReg, bool IsKill,
+                                        int FrameIndex,
+                                        const TargetRegisterClass *RC,
+                                        const TargetRegisterInfo *TRI) const {
+  const MachineFunction &MF = *MBB.getParent();
+  assert(MF.getFrameInfo().getObjectSize(FrameIndex) == 4 &&
+         "Stack slot too small for store");
   unsigned Opc = getStoreRegOpcode(SrcReg, RC, TRI, Subtarget);
   DebugLoc DL = MBB.findDebugLoc(MI);
   // (0,FrameIndex) <- $reg
@@ -862,20 +772,16 @@ void M68kInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator MI,
                                          Register DstReg, int FrameIndex,
                                          const TargetRegisterClass *RC,
-                                         const TargetRegisterInfo *TRI,
-                                         Register VReg,
-                                         MachineInstr::MIFlag Flags) const {
-  const MachineFrameInfo &MFI = MBB.getParent()->getFrameInfo();
-  assert(MFI.getObjectSize(FrameIndex) >= TRI->getSpillSize(*RC) &&
-         "Stack slot is too small to load");
-  (void)MFI;
-
+                                         const TargetRegisterInfo *TRI) const {
+  const MachineFunction &MF = *MBB.getParent();
+  assert(MF.getFrameInfo().getObjectSize(FrameIndex) == 4 &&
+         "Stack slot too small for store");
   unsigned Opc = getLoadRegOpcode(DstReg, RC, TRI, Subtarget);
   DebugLoc DL = MBB.findDebugLoc(MI);
   M68k::addFrameReference(BuildMI(MBB, MI, DL, get(Opc), DstReg), FrameIndex);
 }
 
-/// Return a virtual register initialized with the global base register
+/// Return a virtual register initialized with the the global base register
 /// value. Output instructions required to initialize the register in the
 /// function entry block, if necessary.
 ///
@@ -887,7 +793,7 @@ unsigned M68kInstrInfo::getGlobalBaseReg(MachineFunction *MF) const {
     return GlobalBaseReg;
 
   // Create the register. The code to initialize it is inserted later,
-  // by the M68kGlobalBaseReg pass (below).
+  // by the CGBR pass (below).
   //
   // NOTE
   // Normally M68k uses A5 register as global base pointer but this will
@@ -915,25 +821,15 @@ M68kInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
       {MO_GOT, "m68k-got"},
       {MO_GOTOFF, "m68k-gotoff"},
       {MO_GOTPCREL, "m68k-gotpcrel"},
-      {MO_PLT, "m68k-plt"},
-      {MO_TLSGD, "m68k-tlsgd"},
-      {MO_TLSLD, "m68k-tlsld"},
-      {MO_TLSLDM, "m68k-tlsldm"},
-      {MO_TLSIE, "m68k-tlsie"},
-      {MO_TLSLE, "m68k-tlsle"}};
-  return ArrayRef(TargetFlags);
+      {MO_PLT, "m68k-plt"}};
+  return makeArrayRef(TargetFlags);
 }
 
-#undef DEBUG_TYPE
-#define DEBUG_TYPE "m68k-create-global-base-reg"
-
-#define PASS_NAME "M68k PIC Global Base Reg Initialization"
-
 namespace {
-/// This initializes the PIC global base register
-struct M68kGlobalBaseReg : public MachineFunctionPass {
+/// Create Global Base Reg pass. This initializes the PIC global base register
+struct CGBR : public MachineFunctionPass {
   static char ID;
-  M68kGlobalBaseReg() : MachineFunctionPass(ID) {}
+  CGBR() : MachineFunctionPass(ID) {}
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     const M68kSubtarget &STI = MF.getSubtarget<M68kSubtarget>();
@@ -958,16 +854,16 @@ struct M68kGlobalBaseReg : public MachineFunctionPass {
     return true;
   }
 
+  StringRef getPassName() const override {
+    return "M68k PIC Global Base Reg Initialization";
+  }
+
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 };
-char M68kGlobalBaseReg::ID = 0;
 } // namespace
 
-INITIALIZE_PASS(M68kGlobalBaseReg, DEBUG_TYPE, PASS_NAME, false, false)
-
-FunctionPass *llvm::createM68kGlobalBaseRegPass() {
-  return new M68kGlobalBaseReg();
-}
+char CGBR::ID = 0;
+FunctionPass *llvm::createM68kGlobalBaseRegPass() { return new CGBR(); }

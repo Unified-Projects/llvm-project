@@ -730,14 +730,15 @@ public:
   ~PreprocessorCallbacks() override {}
 
   // Overridden handlers.
-  void
-  InclusionDirective(clang::SourceLocation HashLoc,
-                     const clang::Token &IncludeTok, llvm::StringRef FileName,
-                     bool IsAngled, clang::CharSourceRange FilenameRange,
-                     clang::OptionalFileEntryRef File,
-                     llvm::StringRef SearchPath, llvm::StringRef RelativePath,
-                     const clang::Module *SuggestedModule, bool ModuleImported,
-                     clang::SrcMgr::CharacteristicKind FileType) override;
+  void InclusionDirective(clang::SourceLocation HashLoc,
+                          const clang::Token &IncludeTok,
+                          llvm::StringRef FileName, bool IsAngled,
+                          clang::CharSourceRange FilenameRange,
+                          const clang::FileEntry *File,
+                          llvm::StringRef SearchPath,
+                          llvm::StringRef RelativePath,
+                          const clang::Module *Imported,
+                          clang::SrcMgr::CharacteristicKind FileType) override;
   void FileChanged(clang::SourceLocation Loc,
                    clang::PPCallbacks::FileChangeReason Reason,
                    clang::SrcMgr::CharacteristicKind FileType,
@@ -882,7 +883,7 @@ public:
   // Handle entering a header source file.
   void handleHeaderEntry(clang::Preprocessor &PP, llvm::StringRef HeaderPath) {
     // Ignore <built-in> and <command-line> to reduce message clutter.
-    if (HeaderPath.starts_with("<"))
+    if (HeaderPath.startswith("<"))
       return;
     HeaderHandle H = addHeader(HeaderPath);
     if (H != getCurrentHeaderHandle())
@@ -895,7 +896,7 @@ public:
   // Handle exiting a header source file.
   void handleHeaderExit(llvm::StringRef HeaderPath) {
     // Ignore <built-in> and <command-line> to reduce message clutter.
-    if (HeaderPath.starts_with("<"))
+    if (HeaderPath.startswith("<"))
       return;
     HeaderHandle H = findHeaderHandle(HeaderPath);
     HeaderHandle TH;
@@ -986,7 +987,11 @@ public:
 
   // Check for presence of header handle in the header stack.
   bool isHeaderHandleInStack(HeaderHandle H) const {
-    return llvm::is_contained(HeaderStack, H);
+    for (auto I = HeaderStack.begin(), E = HeaderStack.end(); I != E; ++I) {
+      if (*I == H)
+        return true;
+    }
+    return false;
   }
 
   // Get the handle of a header inclusion path entry.
@@ -1272,10 +1277,9 @@ PreprocessorTracker *PreprocessorTracker::create(
 void PreprocessorCallbacks::InclusionDirective(
     clang::SourceLocation HashLoc, const clang::Token &IncludeTok,
     llvm::StringRef FileName, bool IsAngled,
-    clang::CharSourceRange FilenameRange, clang::OptionalFileEntryRef File,
+    clang::CharSourceRange FilenameRange, const clang::FileEntry *File,
     llvm::StringRef SearchPath, llvm::StringRef RelativePath,
-    const clang::Module *SuggestedModule, bool ModuleImported,
-    clang::SrcMgr::CharacteristicKind FileType) {
+    const clang::Module *Imported, clang::SrcMgr::CharacteristicKind FileType) {
   int DirectiveLine, DirectiveColumn;
   std::string HeaderPath = getSourceLocationFile(PP, HashLoc);
   getSourceLocationLineAndColumn(PP, HashLoc, DirectiveLine, DirectiveColumn);
@@ -1292,8 +1296,8 @@ void PreprocessorCallbacks::FileChanged(
     PPTracker.handleHeaderEntry(PP, getSourceLocationFile(PP, Loc));
     break;
   case ExitFile: {
-    clang::OptionalFileEntryRef F =
-        PP.getSourceManager().getFileEntryRefForID(PrevFID);
+    const clang::FileEntry *F =
+        PP.getSourceManager().getFileEntryForID(PrevFID);
     if (F)
       PPTracker.handleHeaderExit(F->getName());
   } break;

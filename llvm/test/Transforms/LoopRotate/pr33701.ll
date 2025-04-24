@@ -1,6 +1,7 @@
-; RUN: opt < %s -passes=loop-rotate -verify-dom-info -verify-loop-info -verify-memoryssa -disable-output
+; RUN: opt < %s -loop-rotate -verify-dom-info -verify-loop-info -disable-output
+; RUN: opt < %s -loop-rotate -verify-dom-info -verify-loop-info -enable-mssa-loop-dependency=true -verify-memoryssa -disable-output
 
-define void @func(i1 %arg) {
+define void @func() {
 bb0:
   br label %bb1
 
@@ -10,7 +11,7 @@ bb1:                                              ; preds = %bb4, %bb0
   br i1 %1, label %bb2, label %bb5
 
 bb2:                                              ; preds = %bb1
-  br i1 %arg, label %bb6, label %bb4
+  br i1 undef, label %bb6, label %bb4
 
 bb3:                                              ; No predecessors!
   br label %bb6

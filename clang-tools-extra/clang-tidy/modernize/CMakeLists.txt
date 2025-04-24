@@ -3,20 +3,17 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-add_clang_library(clangTidyModernizeModule STATIC
+add_clang_library(clangTidyModernizeModule
   AvoidBindCheck.cpp
   AvoidCArraysCheck.cpp
   ConcatNestedNamespacesCheck.cpp
   DeprecatedHeadersCheck.cpp
   DeprecatedIosBaseAliasesCheck.cpp
-  IntegralLiteralExpressionMatcher.cpp
   LoopConvertCheck.cpp
   LoopConvertUtils.cpp
-  MacroToEnumCheck.cpp
   MakeSharedCheck.cpp
   MakeSmartPtrCheck.cpp
   MakeUniqueCheck.cpp
-  MinMaxUseInitializerListCheck.cpp
   ModernizeTidyModule.cpp
   PassByValueCheck.cpp
   RawStringLiteralCheck.cpp
@@ -26,26 +23,17 @@ add_clang_library(clangTidyModernizeModule STATIC
   ReplaceRandomShuffleCheck.cpp
   ReturnBracedInitListCheck.cpp
   ShrinkToFitCheck.cpp
-  TypeTraitsCheck.cpp
   UnaryStaticAssertCheck.cpp
   UseAutoCheck.cpp
   UseBoolLiteralsCheck.cpp
-  UseConstraintsCheck.cpp
   UseDefaultMemberInitCheck.cpp
-  UseDesignatedInitializersCheck.cpp
   UseEmplaceCheck.cpp
   UseEqualsDefaultCheck.cpp
   UseEqualsDeleteCheck.cpp
-  UseIntegerSignComparisonCheck.cpp
   UseNodiscardCheck.cpp
   UseNoexceptCheck.cpp
   UseNullptrCheck.cpp
   UseOverrideCheck.cpp
-  UseRangesCheck.cpp
-  UseStartsEndsWithCheck.cpp
-  UseStdFormatCheck.cpp
-  UseStdNumbersCheck.cpp
-  UseStdPrintCheck.cpp
   UseTrailingReturnTypeCheck.cpp
   UseTransparentFunctorsCheck.cpp
   UseUncaughtExceptionsCheck.cpp
@@ -58,7 +46,6 @@ add_clang_library(clangTidyModernizeModule STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyModernizeModule

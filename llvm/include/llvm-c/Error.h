@@ -18,13 +18,6 @@
 
 LLVM_C_EXTERN_C_BEGIN
 
-/**
- * @defgroup LLVMCError Error Handling
- * @ingroup LLVMC
- *
- * @{
- */
-
 #define LLVMErrorSuccess 0
 
 /**
@@ -52,14 +45,6 @@ LLVMErrorTypeId LLVMGetErrorTypeId(LLVMErrorRef Err);
 void LLVMConsumeError(LLVMErrorRef Err);
 
 /**
- * Report a fatal error if Err is a failure value.
- *
- * This function can be used to wrap calls to fallible functions ONLY when it is
- * known that the Error will always be a success value.
- */
-void LLVMCantFail(LLVMErrorRef Err);
-
-/**
  * Returns the given string's error message. This operation consumes the error,
  * and the given LLVMErrorRef value is not usable once this call returns.
  * The caller is responsible for disposing of the string by calling
@@ -81,10 +66,6 @@ LLVMErrorTypeId LLVMGetStringErrorTypeId(void);
  * Create a StringError.
  */
 LLVMErrorRef LLVMCreateStringError(const char *ErrMsg);
-
-/**
- * @}
- */
 
 LLVM_C_EXTERN_C_END
 

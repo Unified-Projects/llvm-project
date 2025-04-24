@@ -120,15 +120,18 @@ public:
 #endif
   }
 
-  void run();
+  bool run();
 };
 
 /// Perform in-place global value handling on the given Module for
 /// exported local functions renamed and promoted for ThinLTO.
-void renameModuleForThinLTO(
+bool renameModuleForThinLTO(
     Module &M, const ModuleSummaryIndex &Index,
     bool ClearDSOLocalOnDeclarations,
     SetVector<GlobalValue *> *GlobalsToImport = nullptr);
+
+/// Compute synthetic function entry counts.
+void computeSyntheticCounts(ModuleSummaryIndex &Index);
 
 } // End llvm namespace
 

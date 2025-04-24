@@ -161,10 +161,10 @@ namespace {
     }
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
-      AU.addRequired<MachineDominatorTreeWrapperPass>();
-      AU.addPreserved<MachineDominatorTreeWrapperPass>();
-      AU.addRequired<MachineLoopInfoWrapperPass>();
+      AU.addRequired<MachineBranchProbabilityInfo>();
+      AU.addRequired<MachineDominatorTree>();
+      AU.addPreserved<MachineDominatorTree>();
+      AU.addRequired<MachineLoopInfo>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -364,7 +364,7 @@ bool HexagonEarlyIfConversion::isValidCandidate(const MachineBasicBlock *B)
     return true;
   if (B->isEHPad() || B->hasAddressTaken())
     return false;
-  if (B->succ_empty())
+  if (B->succ_size() == 0)
     return false;
 
   for (auto &MI : *B) {
@@ -390,8 +390,8 @@ bool HexagonEarlyIfConversion::isValidCandidate(const MachineBasicBlock *B)
         continue;
       if (!isPredicate(R))
         continue;
-      for (const MachineOperand &U : MRI->use_operands(R))
-        if (U.getParent()->isPHI())
+      for (auto U = MRI->use_begin(R); U != MRI->use_end(); ++U)
+        if (U->getParent()->isPHI())
           return false;
     }
   }
@@ -570,12 +570,12 @@ bool HexagonEarlyIfConversion::isProfitable(const FlowPattern &FP) const {
     TotalPh = computePhiCost(FP.JoinB, FP);
     PredDefs += countPredicateDefs(FP.JoinB);
   } else {
-    if (FP.TrueB && !FP.TrueB->succ_empty()) {
+    if (FP.TrueB && FP.TrueB->succ_size() > 0) {
       MachineBasicBlock *SB = *FP.TrueB->succ_begin();
       TotalPh += computePhiCost(SB, FP);
       PredDefs += countPredicateDefs(SB);
     }
-    if (FP.FalseB && !FP.FalseB->succ_empty()) {
+    if (FP.FalseB && FP.FalseB->succ_size() > 0) {
       MachineBasicBlock *SB = *FP.FalseB->succ_begin();
       TotalPh += computePhiCost(SB, FP);
       PredDefs += countPredicateDefs(SB);
@@ -601,6 +601,8 @@ bool HexagonEarlyIfConversion::visitBlock(MachineBasicBlock *B,
   // Visit all dominated blocks from the same loop first, then process B.
   MachineDomTreeNode *N = MDT->getNode(B);
 
+  using GTN = GraphTraits<MachineDomTreeNode *>;
+
   // We will change CFG/DT during this traversal, so take precautions to
   // avoid problems related to invalidated iterators. In fact, processing
   // a child C of B cannot cause another child to be removed, but it can
@@ -609,9 +611,9 @@ bool HexagonEarlyIfConversion::visitBlock(MachineBasicBlock *B,
   // prior to processing B, so there is no need to process it again.
   // Simply keep a list of children of B, and traverse that list.
   using DTNodeVectType = SmallVector<MachineDomTreeNode *, 4>;
-  DTNodeVectType Cn(llvm::children<MachineDomTreeNode *>(N));
-  for (auto &I : Cn) {
-    MachineBasicBlock *SB = I->getBlock();
+  DTNodeVectType Cn(GTN::child_begin(N), GTN::child_end(N));
+  for (DTNodeVectType::iterator I = Cn.begin(), E = Cn.end(); I != E; ++I) {
+    MachineBasicBlock *SB = (*I)->getBlock();
     if (!Deleted.count(SB))
       Changed |= visitBlock(SB, L);
   }
@@ -646,8 +648,8 @@ bool HexagonEarlyIfConversion::visitLoop(MachineLoop *L) {
              << "\n");
   bool Changed = false;
   if (L) {
-    for (MachineLoop *I : *L)
-      Changed |= visitLoop(I);
+    for (MachineLoop::iterator I = L->begin(), E = L->end(); I != E; ++I)
+      Changed |= visitLoop(*I);
   }
 
   MachineBasicBlock *EntryB = GraphTraits<MachineFunction*>::getEntryNode(MFN);
@@ -824,8 +826,8 @@ void HexagonEarlyIfConversion::updatePhiNodes(MachineBasicBlock *WhereB,
         FR = RO.getReg(), FSR = RO.getSubReg();
       else
         continue;
-      PN->removeOperand(i+1);
-      PN->removeOperand(i);
+      PN->RemoveOperand(i+1);
+      PN->RemoveOperand(i);
     }
     if (TR == 0)
       TR = SR, TSR = SSR;
@@ -875,7 +877,7 @@ void HexagonEarlyIfConversion::convert(const FlowPattern &FP) {
   // existing terminators/successors from the split block.
   MachineBasicBlock *SSB = nullptr;
   FP.SplitB->erase(OldTI, FP.SplitB->end());
-  while (!FP.SplitB->succ_empty()) {
+  while (FP.SplitB->succ_size() > 0) {
     MachineBasicBlock *T = *FP.SplitB->succ_begin();
     // It's possible that the split block had a successor that is not a pre-
     // dicated block. This could only happen if there was only one block to
@@ -962,17 +964,17 @@ void HexagonEarlyIfConversion::removeBlock(MachineBasicBlock *B) {
     using DTNodeVectType = SmallVector<MachineDomTreeNode *, 4>;
 
     DTNodeVectType Cn(GTN::child_begin(N), GTN::child_end(N));
-    for (auto &I : Cn) {
-      MachineBasicBlock *SB = I->getBlock();
+    for (DTNodeVectType::iterator I = Cn.begin(), E = Cn.end(); I != E; ++I) {
+      MachineBasicBlock *SB = (*I)->getBlock();
       MDT->changeImmediateDominator(SB, IDB);
     }
   }
 
-  while (!B->succ_empty())
+  while (B->succ_size() > 0)
     B->removeSuccessor(B->succ_begin());
 
-  for (MachineBasicBlock *Pred : B->predecessors())
-    Pred->removeSuccessor(B, true);
+  for (auto I = B->pred_begin(), E = B->pred_end(); I != E; ++I)
+    (*I)->removeSuccessor(B, true);
 
   Deleted.insert(B);
   MDT->eraseNode(B);
@@ -1054,17 +1056,16 @@ bool HexagonEarlyIfConversion::runOnMachineFunction(MachineFunction &MF) {
   TRI = ST.getRegisterInfo();
   MFN = &MF;
   MRI = &MF.getRegInfo();
-  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
-  MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
-  MBPI = EnableHexagonBP
-             ? &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI()
-             : nullptr;
+  MDT = &getAnalysis<MachineDominatorTree>();
+  MLI = &getAnalysis<MachineLoopInfo>();
+  MBPI = EnableHexagonBP ? &getAnalysis<MachineBranchProbabilityInfo>() :
+    nullptr;
 
   Deleted.clear();
   bool Changed = false;
 
-  for (MachineLoop *L : *MLI)
-    Changed |= visitLoop(L);
+  for (MachineLoopInfo::iterator I = MLI->begin(), E = MLI->end(); I != E; ++I)
+    Changed |= visitLoop(*I);
   Changed |= visitLoop(nullptr);
 
   return Changed;

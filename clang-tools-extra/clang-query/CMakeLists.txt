@@ -4,13 +4,12 @@ set(LLVM_LINK_COMPONENTS
   FrontendOpenMP
   )
 
-add_clang_library(clangQuery STATIC
+add_clang_library(clangQuery
   Query.cpp
   QueryParser.cpp
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangQuery
@@ -20,6 +19,7 @@ clang_target_link_libraries(clangQuery
   clangBasic
   clangDynamicASTMatchers
   clangFrontend
+  clangTooling
   clangSerialization
   )
 

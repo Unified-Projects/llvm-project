@@ -208,10 +208,6 @@ def FeatureUseIndirectJumpsHazard : SubtargetFeature<"use-indirect-jump-hazard",
                                                     "true", "Use indirect jump"
                         " guards to prevent certain speculation based attacks">;
 
-def FeatureStrictAlign
-    : SubtargetFeature<"strict-align", "StrictAlign", "true",
-                       "Disable unaligned load store for r6">;
-
 //===----------------------------------------------------------------------===//
 // Register File, Calling Conv, Instruction Descriptions
 //===----------------------------------------------------------------------===//
@@ -221,14 +217,12 @@ include "MipsSchedule.td"
 include "MipsInstrInfo.td"
 include "MipsCallingConv.td"
 include "MipsRegisterBanks.td"
-include "MipsCombine.td"
 
 // Avoid forward declaration issues.
 include "MipsScheduleP5600.td"
 include "MipsScheduleGeneric.td"
 
-def MipsInstrInfo : InstrInfo {
-}
+def MipsInstrInfo : InstrInfo;
 
 //===----------------------------------------------------------------------===//
 // Mips processors supported.
@@ -273,13 +267,8 @@ def MipsAsmParserVariant : AsmParserVariant {
   string RegisterPrefix = "$";
 }
 
-def MipsAsmWriter : AsmWriter {
-  int PassSubtarget = 1;
-}
-
 def Mips : Target {
   let InstructionSet = MipsInstrInfo;
-  let AssemblyWriters = [MipsAsmWriter];
   let AssemblyParsers = [MipsAsmParser];
   let AssemblyParserVariants = [MipsAsmParserVariant];
   let AllowRegisterRenaming = 1;

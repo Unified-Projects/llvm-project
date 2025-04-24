@@ -13,11 +13,11 @@
 #include "ARMRegisterBankInfo.h"
 #include "ARMSubtarget.h"
 #include "ARMTargetMachine.h"
-#include "llvm/CodeGen/GlobalISel/GIMatchTableExecutorImpl.h"
-#include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelectorImpl.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "arm-isel"
@@ -142,8 +142,6 @@ private:
                        int OpIdx = -1) const;
   void renderVFPF64Imm(MachineInstrBuilder &New, const MachineInstr &Old,
                        int OpIdx = -1) const;
-  void renderInvertedImm(MachineInstrBuilder &MIB, const MachineInstr &MI,
-                         int OpIdx = -1) const;
 
 #define GET_GLOBALISEL_PREDICATES_DECL
 #include "ARMGenGlobalISel.inc"
@@ -173,8 +171,8 @@ createARMInstructionSelector(const ARMBaseTargetMachine &TM,
 ARMInstructionSelector::ARMInstructionSelector(const ARMBaseTargetMachine &TM,
                                                const ARMSubtarget &STI,
                                                const ARMRegisterBankInfo &RBI)
-    : TII(*STI.getInstrInfo()), TRI(*STI.getRegisterInfo()), TM(TM), RBI(RBI),
-      STI(STI), Opcodes(STI),
+    : InstructionSelector(), TII(*STI.getInstrInfo()),
+      TRI(*STI.getRegisterInfo()), TM(TM), RBI(RBI), STI(STI), Opcodes(STI),
 #define GET_GLOBALISEL_PREDICATES_INIT
 #include "ARMGenGlobalISel.inc"
 #undef GET_GLOBALISEL_PREDICATES_INIT
@@ -214,7 +212,7 @@ static bool selectCopy(MachineInstr &I, const TargetInstrInfo &TII,
                        MachineRegisterInfo &MRI, const TargetRegisterInfo &TRI,
                        const RegisterBankInfo &RBI) {
   Register DstReg = I.getOperand(0).getReg();
-  if (DstReg.isPhysical())
+  if (Register::isPhysicalRegister(DstReg))
     return true;
 
   const TargetRegisterClass *RC = guessRegClass(DstReg, MRI, TRI, RBI);
@@ -626,12 +624,12 @@ bool ARMInstructionSelector::selectGlobal(MachineInstrBuilder &MIB,
 
   bool UseMovt = STI.useMovt();
 
-  LLT PtrTy = MRI.getType(MIB->getOperand(0).getReg());
+  unsigned Size = TM.getPointerSize(0);
   const Align Alignment(4);
 
-  auto addOpsForConstantPoolLoad = [&MF, Alignment, PtrTy](
-                                       MachineInstrBuilder &MIB,
-                                       const GlobalValue *GV, bool IsSBREL) {
+  auto addOpsForConstantPoolLoad = [&MF, Alignment,
+                                    Size](MachineInstrBuilder &MIB,
+                                          const GlobalValue *GV, bool IsSBREL) {
     assert((MIB->getOpcode() == ARM::LDRi12 ||
             MIB->getOpcode() == ARM::t2LDRpci) &&
            "Unsupported instruction");
@@ -646,7 +644,7 @@ bool ARMInstructionSelector::selectGlobal(MachineInstrBuilder &MIB,
     MIB.addConstantPoolIndex(CPIndex, /*Offset*/ 0, /*TargetFlags*/ 0)
         .addMemOperand(MF.getMachineMemOperand(
             MachinePointerInfo::getConstantPool(MF), MachineMemOperand::MOLoad,
-            PtrTy, Alignment));
+            Size, Alignment));
     if (MIB->getOpcode() == ARM::LDRi12)
       MIB.addImm(0);
     MIB.add(predOps(ARMCC::AL));
@@ -735,7 +733,7 @@ bool ARMInstructionSelector::selectGlobal(MachineInstrBuilder &MIB,
 
     // Add the offset to the SB register.
     MIB->setDesc(TII.get(Opcodes.ADDrr));
-    MIB->removeOperand(1);
+    MIB->RemoveOperand(1);
     MIB.addReg(ARM::R9) // FIXME: don't hardcode R9
         .addReg(Offset)
         .add(predOps(ARMCC::AL))
@@ -750,7 +748,7 @@ bool ARMInstructionSelector::selectGlobal(MachineInstrBuilder &MIB,
     } else {
       // Load the global's address from the constant pool.
       MIB->setDesc(TII.get(Opcodes.ConstPoolLoad));
-      MIB->removeOperand(1);
+      MIB->RemoveOperand(1);
       addOpsForConstantPoolLoad(MIB, GV, /*IsSBREL*/ false);
     }
   } else if (STI.isTargetMachO()) {
@@ -837,15 +835,6 @@ void ARMInstructionSelector::renderVFPF64Imm(
   NewInstBuilder.addImm(FPImmEncoding);
 }
 
-void ARMInstructionSelector::renderInvertedImm(MachineInstrBuilder &MIB,
-                                               const MachineInstr &MI,
-                                               int OpIdx) const {
-  assert(MI.getOpcode() == TargetOpcode::G_CONSTANT && OpIdx == -1 &&
-         "Expected G_CONSTANT");
-  int64_t CVal = MI.getOperand(1).getCImm()->getSExtValue();
-  MIB.addImm(~CVal);
-}
-
 bool ARMInstructionSelector::select(MachineInstr &I) {
   assert(I.getParent() && "Instruction should be in a basic block!");
   assert(I.getParent()->getParent() && "Instruction should be in a function!");
@@ -872,7 +861,7 @@ bool ARMInstructionSelector::select(MachineInstr &I) {
   switch (I.getOpcode()) {
   case G_SEXT:
     isSExt = true;
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case G_ZEXT: {
     assert(MRI.getType(I.getOperand(0).getReg()).getSizeInBits() <= 32 &&
            "Unsupported destination size for extension");
@@ -1008,7 +997,7 @@ bool ARMInstructionSelector::select(MachineInstr &I) {
     auto CPIndex =
         ConstPool->getConstantPoolIndex(I.getOperand(1).getFPImm(), Alignment);
     MIB->setDesc(TII.get(LoadOpcode));
-    MIB->removeOperand(1);
+    MIB->RemoveOperand(1);
     MIB.addConstantPoolIndex(CPIndex, /*Offset*/ 0, /*TargetFlags*/ 0)
         .addMemOperand(
             MF.getMachineMemOperand(MachinePointerInfo::getConstantPool(MF),
@@ -1088,7 +1077,7 @@ bool ARMInstructionSelector::select(MachineInstr &I) {
     return selectGlobal(MIB, MRI);
   case G_STORE:
   case G_LOAD: {
-    auto &MemOp = **I.memoperands_begin();
+    const auto &MemOp = **I.memoperands_begin();
     if (MemOp.isAtomic()) {
       LLVM_DEBUG(dbgs() << "Atomic load/store not supported yet\n");
       return false;
@@ -1102,26 +1091,6 @@ bool ARMInstructionSelector::select(MachineInstr &I) {
 
     assert((ValSize != 64 || STI.hasVFP2Base()) &&
            "Don't know how to load/store 64-bit value without VFP");
-
-    if (auto *LoadMI = dyn_cast<GLoad>(&I)) {
-      Register PtrReg = LoadMI->getPointerReg();
-      MachineInstr *Ptr = MRI.getVRegDef(PtrReg);
-      if (Ptr->getOpcode() == TargetOpcode::G_CONSTANT_POOL) {
-        const MachineOperand &Index = Ptr->getOperand(1);
-        unsigned Opcode = Subtarget->isThumb() ? ARM::tLDRpci : ARM::LDRcp;
-
-        auto Instr = BuildMI(MBB, I, I.getDebugLoc(), TII.get(Opcode))
-                         .addDef(Reg)
-                         .add(Index)
-                         .addImm(0)
-                         .add(predOps(ARMCC::AL))
-                         .addMemOperand(&MemOp);
-        if (!constrainSelectedInstRegOperands(*Instr, TII, TRI, RBI))
-          return false;
-        I.eraseFromParent();
-        return true;
-      }
-    }
 
     const auto NewOpc = selectLoadStoreOpCode(I.getOpcode(), RegBank, ValSize);
     if (NewOpc == G_LOAD || NewOpc == G_STORE)

@@ -7,14 +7,12 @@ set(LLVM_LINK_COMPONENTS
   Analysis
   AsmParser
   BitWriter
-  CFGuard
   CodeGen
   Core
   Coroutines
   Extensions
   IPO
   IRReader
-  IRPrinter
   InstCombine
   Instrumentation
   MC
@@ -23,31 +21,26 @@ set(LLVM_LINK_COMPONENTS
   ScalarOpts
   Support
   Target
-  TargetParser
   TransformUtils
   Vectorize
   Passes
   )
 
-# We don't want to link this into libLLVM
-add_llvm_library(LLVMOptDriver
-  STATIC
-  NewPMDriver.cpp
-  optdriver.cpp
-  PARTIAL_SOURCES_INTENDED
-  DEPENDS
-  intrinsics_gen
-)
-
 add_llvm_tool(opt
-  PARTIAL_SOURCES_INTENDED
+  AnalysisWrappers.cpp
+  BreakpointPrinter.cpp
+  GraphPrinters.cpp
+  NewPMDriver.cpp
+  PassPrinters.cpp
+  PrintSCC.cpp
   opt.cpp
+
   DEPENDS
   intrinsics_gen
   SUPPORT_PLUGINS
-
-  EXPORT_SYMBOLS
   )
-target_link_libraries(opt PRIVATE LLVMOptDriver)
+export_executable_symbols_for_plugins(opt)
 
-setup_host_tool(opt OPT opt_exe opt_target)
+if(LLVM_BUILD_EXAMPLES)
+    target_link_libraries(opt PRIVATE ExampleIRTransforms)
+endif(LLVM_BUILD_EXAMPLES)

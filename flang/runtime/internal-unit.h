@@ -12,7 +12,7 @@
 #define FORTRAN_RUNTIME_IO_INTERNAL_UNIT_H_
 
 #include "connection.h"
-#include "flang/Runtime/descriptor.h"
+#include "descriptor.h"
 #include <cinttypes>
 #include <type_traits>
 
@@ -26,30 +26,24 @@ template <Direction DIR> class InternalDescriptorUnit : public ConnectionState {
 public:
   using Scalar =
       std::conditional_t<DIR == Direction::Input, const char *, char *>;
-  RT_API_ATTRS InternalDescriptorUnit(Scalar, std::size_t chars, int kind);
-  RT_API_ATTRS InternalDescriptorUnit(const Descriptor &, const Terminator &);
+  InternalDescriptorUnit(Scalar, std::size_t);
+  InternalDescriptorUnit(const Descriptor &, const Terminator &);
+  void EndIoStatement();
 
-  RT_API_ATTRS bool Emit(const char *, std::size_t, IoErrorHandler &);
-  RT_API_ATTRS std::size_t GetNextInputBytes(const char *&, IoErrorHandler &);
-  RT_API_ATTRS std::size_t ViewBytesInRecord(const char *&, bool forward) const;
-  RT_API_ATTRS bool AdvanceRecord(IoErrorHandler &);
-  RT_API_ATTRS void BackspaceRecord(IoErrorHandler &);
-  RT_API_ATTRS std::int64_t InquirePos();
+  bool Emit(const char *, std::size_t, IoErrorHandler &);
+  std::optional<char32_t> GetCurrentChar(IoErrorHandler &);
+  bool AdvanceRecord(IoErrorHandler &);
+  void BackspaceRecord(IoErrorHandler &);
 
 private:
-  RT_API_ATTRS Descriptor &descriptor() {
+  Descriptor &descriptor() { return staticDescriptor_.descriptor(); }
+  const Descriptor &descriptor() const {
     return staticDescriptor_.descriptor();
   }
-  RT_API_ATTRS const Descriptor &descriptor() const {
-    return staticDescriptor_.descriptor();
-  }
-  RT_API_ATTRS Scalar CurrentRecord() const {
+  Scalar CurrentRecord() const {
     return descriptor().template ZeroBasedIndexedElement<char>(
         currentRecordNumber - 1);
   }
-  RT_API_ATTRS void BlankFill(char *, std::size_t);
-  RT_API_ATTRS void BlankFillOutputRecord();
-
   StaticDescriptor<maxRank, true /*addendum*/> staticDescriptor_;
 };
 

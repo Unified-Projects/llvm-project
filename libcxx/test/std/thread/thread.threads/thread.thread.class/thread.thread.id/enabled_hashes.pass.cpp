@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// UNSUPPORTED: no-threads
+// UNSUPPORTED: libcpp-has-no-threads
 // UNSUPPORTED: c++03
 
 // <thread>
@@ -14,7 +14,6 @@
 // Test that <thread> provides all of the arithmetic, enum, and pointer
 // hash specializations.
 
-#include <functional>
 #include <thread>
 
 #include "poisoned_hash_helper.h"
@@ -24,7 +23,7 @@
 int main(int, char**) {
   test_library_hash_specializations_available();
   {
-    test_hash_enabled<std::thread::id>();
+    test_hash_enabled_for_type<std::thread::id>();
   }
 
   return 0;

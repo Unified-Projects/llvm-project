@@ -76,13 +76,9 @@ When to merge instruction locations
 -----------------------------------
 
 A transformation should merge instruction locations if it replaces multiple
-instructions with one or more new instructions, *and* the new instruction(s)
-produce the output of more than one of the original instructions. The API to use
-is ``Instruction::applyMergedLocation``. For each new instruction I, its new
-location should be a merge of the locations of all instructions whose output is
-produced by I. Typically, this includes any instruction being RAUWed by a new
-instruction, and excludes any instruction that only produces an intermediate
-value used by the RAUWed instruction.
+instructions with a single merged instruction, *and* that merged instruction
+does not correspond to any of the original instructions' locations. The API to
+use is ``Instruction::applyMergedLocation``.
 
 The purpose of this rule is to ensure that a) the single merged instruction
 has a location with an accurate scope attached, and b) to prevent misleading
@@ -95,25 +91,16 @@ misattributed to a block containing one of the instructions-to-be-merged.
 
 Examples of transformations that should follow this rule include:
 
-* Hoisting identical instructions from all successors of a conditional branch
-  or sinking those from all paths to a postdominating block. For example,
-  merging identical loads/stores which occur on both sides of a CFG diamond
-  (see the ``MergedLoadStoreMotion`` pass). For each group of identical
-  instructions being hoisted/sunk, the merge of all their locations should be
-  applied to the merged instruction.
+* Merging identical loads/stores which occur on both sides of a CFG diamond
+  (see the ``MergedLoadStoreMotion`` pass).
 
 * Merging identical loop-invariant stores (see the LICM utility
   ``llvm::promoteLoopAccessesToScalars``).
 
-* Scalar instructions being combined into a vector instruction, like
-  ``(add A1, B1), (add A2, B2) => (add (A1, A2), (B1, B2))``. As the new vector
-  ``add`` computes the result of both original ``add`` instructions
-  simultaneously, it should use a merge of the two locations. Similarly, if
-  prior optimizations have already produced vectors ``(A1, A2)`` and
-  ``(B2, B1)``, then we might create a ``(shufflevector (1, 0), (B2, B1))``
-  instruction to produce ``(B1, B2)`` for the vector ``add``; in this case we've
-  created two instructions to replace the original ``adds``, so both new
-  instructions should use the merged location.
+* Peephole optimizations which combine multiple instructions together, like
+  ``(add (mul A B) C) => llvm.fma.f32(A, B, C)``.  Note that the location of
+  the ``fma`` does not exactly correspond to the locations of either the
+  ``mul`` or the ``add`` instructions.
 
 Examples of transformations for which this rule *does not* apply include:
 
@@ -122,22 +109,15 @@ Examples of transformations for which this rule *does not* apply include:
   ``zext`` is modified but remains in its block, so the rule for
   :ref:`preserving locations<WhenToPreserveLocation>` should apply.
 
-* Peephole optimizations which combine multiple instructions together, like
-  ``(add (mul A B) C) => llvm.fma.f32(A, B, C)``. Note that the result of the
-  ``mul`` no longer appears in the program, while the result of the ``add`` is
-  now produced by the ``fma``, so the ``add``'s location should be used.
-
 * Converting an if-then-else CFG diamond into a ``select``. Preserving the
   debug locations of speculated instructions can make it seem like a condition
   is true when it's not (or vice versa), which leads to a confusing
   single-stepping experience. The rule for
   :ref:`dropping locations<WhenToDropLocation>` should apply here.
 
-* Hoisting/sinking that would make a location reachable when it previously
-  wasn't. Consider hoisting two identical instructions with the same location
-  from first two cases of a switch that has three cases. Merging their
-  locations would make the location from the first two cases reachable when the
-  third case is taken. The rule for
+* Hoisting identical instructions which appear in several successor blocks into
+  a predecessor block (see ``BranchFolder::HoistCommonCodeInSuccs``). In this
+  case there is no single merged instruction. The rule for
   :ref:`dropping locations<WhenToDropLocation>` applies.
 
 .. _WhenToDropLocation:
@@ -171,7 +151,7 @@ Deleting an IR-level Instruction
 
 When an ``Instruction`` is deleted, its debug uses change to ``undef``. This is
 a loss of debug info: the value of one or more source variables becomes
-unavailable, starting with the ``#dbg_value(undef, ...)``. When there is no
+unavailable, starting with the ``llvm.dbg.value(undef, ...)``. When there is no
 way to reconstitute the value of the lost instruction, this is the best
 possible outcome. However, it's often possible to do better:
 
@@ -192,7 +172,7 @@ possible outcome. However, it's often possible to do better:
   define i16 @foo(i16 %a) {
     %b = sext i16 %a to i32
     %c = and i32 %b, 15
-      #dbg_value(i32 %c, ...)
+    call void @llvm.dbg.value(metadata i32 %c, ...)
     %d = trunc i32 %c to i16
     ret i16 %d
   }
@@ -203,7 +183,7 @@ replaced with a simplified instruction:
 .. code-block:: llvm
 
   define i16 @foo(i16 %a) {
-      #dbg_value(i32 undef, ...)
+    call void @llvm.dbg.value(metadata i32 undef, ...)
     %simplified = and i16 %a, 15
     ret i16 %simplified
   }
@@ -224,7 +204,7 @@ This results in better debug info because the debug use of ``%c`` is preserved:
 
   define i16 @foo(i16 %a) {
     %simplified = and i16 %a, 15
-      #dbg_value(i16 %simplified, ...)
+    call void @llvm.dbg.value(metadata i16 %simplified, ...)
     ret i16 %simplified
   }
 
@@ -236,15 +216,6 @@ Deleting a MIR-level MachineInstr
 ---------------------------------
 
 TODO
-
-Rules for updating ``DIAssignID`` Attachments
-=============================================
-
-``DIAssignID`` metadata attachments are used by Assignment Tracking, which is
-currently an experimental debug mode.
-
-See :doc:`AssignmentTracking` for how to update them and for more info on
-Assignment Tracking.
 
 How to automatically convert tests into debug info tests
 ========================================================
@@ -269,7 +240,7 @@ module, and the second checks that this DI is still available after an
 optimization has occurred, reporting any errors/warnings while doing so.
 
 The instructions are assigned sequentially increasing line locations, and are
-immediately used by debug value records everywhere possible.
+immediately used by debug value intrinsics everywhere possible.
 
 For example, here is a module before:
 
@@ -291,10 +262,10 @@ and after running ``opt -debugify``:
    define void @f(i32* %x) !dbg !6 {
    entry:
      %x.addr = alloca i32*, align 8, !dbg !12
-       #dbg_value(i32** %x.addr, !9, !DIExpression(), !12)
+     call void @llvm.dbg.value(metadata i32** %x.addr, metadata !9, metadata !DIExpression()), !dbg !12
      store i32* %x, i32** %x.addr, align 8, !dbg !13
      %0 = load i32*, i32** %x.addr, align 8, !dbg !14
-       #dbg_value(i32* %0, !11, !DIExpression(), !14)
+     call void @llvm.dbg.value(metadata i32* %0, metadata !11, metadata !DIExpression()), !dbg !14
      store i32 10, i32* %0, align 4, !dbg !15
      ret void, !dbg !16
    }
@@ -390,18 +361,6 @@ pre-existing debug info metadata. It could be run as follows:
   # Check the preservation of original Debug Info after each pass.
   $ opt -verify-each-debuginfo-preserve -O2 sample.ll
 
-Limit number of observed functions to speed up the analysis:
-
-.. code-block:: bash
-
-  # Test up to 100 functions (per compile unit) per pass.
-  $ opt -verify-each-debuginfo-preserve -O2 -debugify-func-limit=100 sample.ll
-
-Please do note that running ``-verify-each-debuginfo-preserve`` on big projects
-could be heavily time consuming. Therefore, we suggest using
-``-debugify-func-limit`` with a suitable limit number to prevent extremely long
-builds.
-
 Furthermore, there is a way to export the issues that have been found into
 a JSON file as follows:
 
@@ -429,7 +388,7 @@ as follows:
   $ clang -Xclang -fverify-debuginfo-preserve -Xclang -fverify-debuginfo-preserve-export=sample.json -g -O2 sample.c
 
 Please do note that there are some known false positives, for source locations
-and debug record checking, so that will be addressed as a future work.
+and debug intrinsic checking, so that will be addressed as a future work.
 
 Mutation testing for MIR-level transformations
 ----------------------------------------------

@@ -8,14 +8,14 @@
 
 #include "ABIMacOSX_i386.h"
 
-#include <optional>
 #include <vector>
 
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
+#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -25,7 +25,6 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
-#include "lldb/ValueObject/ValueObjectConstResult.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -165,7 +164,7 @@ bool ABIMacOSX_i386::GetArgumentValues(Thread &thread,
     // We currently only support extracting values with Clang QualTypes. Do we
     // care about others?
     CompilerType compiler_type(value->GetCompilerType());
-    std::optional<uint64_t> bit_size = compiler_type.GetBitSize(&thread);
+    llvm::Optional<uint64_t> bit_size = compiler_type.GetBitSize(&thread);
     if (bit_size) {
       bool is_signed;
       if (compiler_type.IsIntegerOrEnumerationType(is_signed))
@@ -184,13 +183,13 @@ Status ABIMacOSX_i386::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
                                             lldb::ValueObjectSP &new_value_sp) {
   Status error;
   if (!new_value_sp) {
-    error = Status::FromErrorString("Empty value object for return value.");
+    error.SetErrorString("Empty value object for return value.");
     return error;
   }
 
   CompilerType compiler_type = new_value_sp->GetCompilerType();
   if (!compiler_type) {
-    error = Status::FromErrorString("Null clang type for return value.");
+    error.SetErrorString("Null clang type for return value.");
     return error;
   }
 
@@ -209,7 +208,7 @@ Status ABIMacOSX_i386::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
     Status data_error;
     size_t num_bytes = new_value_sp->GetData(data, data_error);
     if (data_error.Fail()) {
-      error = Status::FromErrorStringWithFormat(
+      error.SetErrorStringWithFormat(
           "Couldn't convert return value to raw data: %s",
           data_error.AsCString());
       return error;
@@ -235,21 +234,20 @@ Status ABIMacOSX_i386::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
         }
       }
     } else {
-      error = Status::FromErrorString(
-          "We don't support returning longer than 64 bit "
-          "integer values at present.");
+      error.SetErrorString("We don't support returning longer than 64 bit "
+                           "integer values at present.");
     }
   } else if (compiler_type.IsFloatingPointType(count, is_complex)) {
     if (is_complex)
-      error = Status::FromErrorString(
+      error.SetErrorString(
           "We don't support returning complex values at present");
     else
-      error = Status::FromErrorString(
+      error.SetErrorString(
           "We don't support returning float values at present");
   }
 
   if (!set_it_simple)
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "We only support setting simple integer return types at present.");
 
   return error;
@@ -275,7 +273,7 @@ ABIMacOSX_i386::GetReturnValueObjectImpl(Thread &thread,
   bool is_signed;
 
   if (compiler_type.IsIntegerOrEnumerationType(is_signed)) {
-    std::optional<uint64_t> bit_width = compiler_type.GetBitSize(&thread);
+    llvm::Optional<uint64_t> bit_width = compiler_type.GetBitSize(&thread);
     if (!bit_width)
       return return_valobj_sp;
     unsigned eax_id =
@@ -462,3 +460,16 @@ void ABIMacOSX_i386::Initialize() {
 void ABIMacOSX_i386::Terminate() {
   PluginManager::UnregisterPlugin(CreateInstance);
 }
+
+lldb_private::ConstString ABIMacOSX_i386::GetPluginNameStatic() {
+  static ConstString g_short_name("abi.macosx-i386");
+  return g_short_name;
+}
+
+// PluginInterface protocol
+
+lldb_private::ConstString ABIMacOSX_i386::GetPluginName() {
+  return GetPluginNameStatic();
+}
+
+uint32_t ABIMacOSX_i386::GetPluginVersion() { return 1; }

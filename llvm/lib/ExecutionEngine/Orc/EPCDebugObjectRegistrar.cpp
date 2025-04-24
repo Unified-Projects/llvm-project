@@ -9,21 +9,19 @@
 #include "llvm/ExecutionEngine/Orc/EPCDebugObjectRegistrar.h"
 
 #include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/Shared/SimplePackedSerialization.h"
+#include "llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderGDB.h"
+#include "llvm/Support/BinaryStreamWriter.h"
 
 namespace llvm {
 namespace orc {
 
-Expected<std::unique_ptr<EPCDebugObjectRegistrar>> createJITLoaderGDBRegistrar(
-    ExecutionSession &ES,
-    std::optional<ExecutorAddr> RegistrationFunctionDylib) {
+Expected<std::unique_ptr<EPCDebugObjectRegistrar>>
+createJITLoaderGDBRegistrar(ExecutionSession &ES) {
   auto &EPC = ES.getExecutorProcessControl();
-
-  if (!RegistrationFunctionDylib) {
-    if (auto D = EPC.getDylibMgr().loadDylib(nullptr))
-      RegistrationFunctionDylib = *D;
-    else
-      return D.takeError();
-  }
+  auto ProcessHandle = EPC.loadDylib(nullptr);
+  if (!ProcessHandle)
+    return ProcessHandle.takeError();
 
   SymbolStringPtr RegisterFn =
       EPC.getTargetTriple().isOSBinFormatMachO()
@@ -33,8 +31,7 @@ Expected<std::unique_ptr<EPCDebugObjectRegistrar>> createJITLoaderGDBRegistrar(
   SymbolLookupSet RegistrationSymbols;
   RegistrationSymbols.add(RegisterFn);
 
-  auto Result = EPC.getDylibMgr().lookupSymbols(
-      {{*RegistrationFunctionDylib, RegistrationSymbols}});
+  auto Result = EPC.lookupSymbols({{*ProcessHandle, RegistrationSymbols}});
   if (!Result)
     return Result.takeError();
 
@@ -42,14 +39,13 @@ Expected<std::unique_ptr<EPCDebugObjectRegistrar>> createJITLoaderGDBRegistrar(
   assert((*Result)[0].size() == 1 &&
          "Unexpected number of addresses in result");
 
-  ExecutorAddr RegisterAddr = (*Result)[0][0].getAddress();
-  return std::make_unique<EPCDebugObjectRegistrar>(ES, RegisterAddr);
+  return std::make_unique<EPCDebugObjectRegistrar>(ES, (*Result)[0][0]);
 }
 
-Error EPCDebugObjectRegistrar::registerDebugObject(ExecutorAddrRange TargetMem,
-                                                   bool AutoRegisterCode) {
-  return ES.callSPSWrapper<void(shared::SPSExecutorAddrRange, bool)>(
-      RegisterFn, TargetMem, AutoRegisterCode);
+Error EPCDebugObjectRegistrar::registerDebugObject(sys::MemoryBlock TargetMem) {
+  return ES.callSPSWrapper<void(SPSExecutorAddress, uint64_t)>(
+      RegisterFn, ExecutorAddress::fromPtr(TargetMem.base()),
+      static_cast<uint64_t>(TargetMem.allocatedSize()));
 }
 
 } // namespace orc

@@ -1,4 +1,4 @@
-//===- llvm/IR/DiagnosticPrinter.cpp - Diagnostic Printer -------*- C++ -*-===//
+//===- llvm/Support/DiagnosticInfo.cpp - Diagnostic Definitions -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -97,12 +97,7 @@ DiagnosticPrinter &DiagnosticPrinterRawOStream::operator<<(const Twine &Str) {
 
 // IR related types.
 DiagnosticPrinter &DiagnosticPrinterRawOStream::operator<<(const Value &V) {
-  // Avoid printing '@' prefix for named functions.
-  if (V.hasName())
-    Stream << V.getName();
-  else
-    V.printAsOperand(Stream, /*PrintType=*/false);
-
+  Stream << V.getName();
   return *this;
 }
 

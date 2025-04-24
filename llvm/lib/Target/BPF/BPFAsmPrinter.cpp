@@ -14,19 +14,20 @@
 #include "BPF.h"
 #include "BPFInstrInfo.h"
 #include "BPFMCInstLower.h"
+#include "BPFTargetMachine.h"
 #include "BTFDebug.h"
 #include "MCTargetDesc/BPFInstPrinter.h"
 #include "TargetInfo/BPFTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
@@ -60,7 +61,9 @@ bool BPFAsmPrinter::doInitialization(Module &M) {
   // Only emit BTF when debuginfo available.
   if (MAI->doesSupportDebugInformation() && !M.debug_compile_units().empty()) {
     BTF = new BTFDebug(this);
-    Handlers.push_back(std::unique_ptr<BTFDebug>(BTF));
+    Handlers.push_back(HandlerInfo(std::unique_ptr<BTFDebug>(BTF), "emit",
+                                   "Debug Info Emission", "BTF",
+                                   "BTF Emission"));
   }
 
   return false;
@@ -135,9 +138,6 @@ bool BPFAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 }
 
 void BPFAsmPrinter::emitInstruction(const MachineInstr *MI) {
-  BPF_MC::verifyInstructionPredicates(MI->getOpcode(),
-                                      getSubtargetInfo().getFeatureBits());
-
   MCInst TmpInst;
 
   if (!BTF || !BTF->InstLower(MI, TmpInst)) {

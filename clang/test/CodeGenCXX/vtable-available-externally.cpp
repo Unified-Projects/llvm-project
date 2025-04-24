@@ -49,8 +49,8 @@ void g() {
 // This tests mainly that the typeinfo and typename constants have their linkage
 // updated correctly.
 
-// CHECK-TEST2: @_ZTIN5Test21AE ={{.*}} constant
 // CHECK-TEST2: @_ZTSN5Test21AE ={{.*}} constant
+// CHECK-TEST2: @_ZTIN5Test21AE ={{.*}} constant
 // CHECK-TEST2: @_ZTVN5Test21AE ={{.*}} unnamed_addr constant
 namespace Test2 {
   struct A {
@@ -250,39 +250,28 @@ struct C : A {
   virtual void car();
 };
 
-// Inline definition outside body, so we can't emit vtable available_externally
-// (see previous).
-// CHECK-TEST10-DAG: @_ZTVN6Test101FE = external unnamed_addr constant
-struct F : A {
-  void foo();
-  virtual void cat();         // inline outside body
-};
-inline void F::cat() {}
-
 // no key function, vtable will be generated everywhere it will be used
 // CHECK-TEST10-DAG: @_ZTVN6Test101EE = linkonce_odr unnamed_addr constant
 // CHECK-FORCE-EMIT-DAG: @_ZTVN6Test101EE = linkonce_odr unnamed_addr constant
 
 struct E : A {};
 
-void h(A& a) {
+void g(A& a) {
   a.foo();
   a.bar();
 }
 
-void g() {
+void f() {
   A a;
-  h(a);
+  g(a);
   B b;
-  h(b);
+  g(b);
   C c;
-  h(c);
+  g(c);
   D d;
-  h(d);
+  g(d);
   E e;
-  h(e);
-  F f;
-  h(f);
+  g(e);
 }
 
 }  // Test10
@@ -453,10 +442,10 @@ void testcaseB() {
 namespace Test18 {
 // Here vtable will be only emitted because it is referenced by assume-load
 // after the Derived construction.
-// CHECK-FORCE-EMIT-DAG: @_ZTVN6Test187DerivedE = linkonce_odr unnamed_addr constant {{.*}} @_ZTIN6Test187DerivedE, {{.*}} @_ZN6Test184Base3funEv, {{.*}} @_ZN6Test184BaseD2Ev, {{.*}} @_ZN6Test187DerivedD0Ev
+// CHECK-FORCE-EMIT-DAG: @_ZTVN6Test187DerivedE = linkonce_odr unnamed_addr constant {{.*}} @_ZTIN6Test187DerivedE {{.*}} @_ZN6Test184Base3funEv {{.*}} @_ZN6Test184BaseD2Ev {{.*}} @_ZN6Test187DerivedD0Ev
 // CHECK-FORCE-EMIT-DAG: define linkonce_odr void @_ZN6Test187DerivedD0Ev
 // CHECK-FORCE-EMIT-DAG: define linkonce_odr void @_ZN6Test184BaseD2Ev
-// CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN6Test184Base3funEv
+// CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN6Test184Base3funEv
 // CHECK-FORCE-EMIT-DAG: @_ZTIN6Test187DerivedE = linkonce_odr constant
 
 struct Base {
@@ -476,14 +465,14 @@ int foo() {
 
 namespace TestTemplates {
 
-// CHECK-FORCE-EMIT-DAG: @_ZTVN13TestTemplates8TemplateIiEE = linkonce_odr unnamed_addr constant {{.*}} @_ZTIN13TestTemplates8TemplateIiEE, {{.*}} @_ZN13TestTemplates8TemplateIiE3fooEi, {{.*}}@_ZN13TestTemplates8TemplateIiE22thisShouldBeEmittedTooEi, {{.*}}@_ZN13TestTemplates8TemplateIiED1Ev, {{.*}}@_ZN13TestTemplates8TemplateIiED0Ev
-// CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates8TemplateIiE22thisShouldBeEmittedTooEi
+// CHECK-FORCE-EMIT-DAG: @_ZTVN13TestTemplates8TemplateIiEE = linkonce_odr unnamed_addr constant {{.*}} @_ZTIN13TestTemplates8TemplateIiEE {{.*}} @_ZN13TestTemplates8TemplateIiE3fooEi {{.*}}@_ZN13TestTemplates8TemplateIiE22thisShouldBeEmittedTooEi {{.*}}@_ZN13TestTemplates8TemplateIiED1Ev {{.*}}@_ZN13TestTemplates8TemplateIiED0Ev
+// CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates8TemplateIiE22thisShouldBeEmittedTooEi
 
 template<class T>
 struct Template {
   Template();
   virtual T foo(T val);
-  // CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates8TemplateIiE22thisShouldBeEmittedTooEi
+  // CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates8TemplateIiE22thisShouldBeEmittedTooEi
   virtual T thisShouldBeEmittedToo(T val) { return val; }
   virtual ~Template();
 };
@@ -493,19 +482,19 @@ struct NonTemplate {
   typedef int T;
   NonTemplate();
   virtual T foo(T val);
-  // CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates11NonTemplate22thisShouldBeEmittedTooEi
+  // CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates11NonTemplate22thisShouldBeEmittedTooEi
   virtual T thisShouldBeEmittedToo(T val) { return val; }
   virtual ~NonTemplate();
 };
 
-// CHECK-FORCE-EMIT-DAG: @_ZTVN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiEE = linkonce_odr {{.*}} @_ZTIN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiEE, {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiE3fooEi, {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiE22thisShouldBeEmittedTooEi, {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiED1Ev, {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiED0Ev
+// CHECK-FORCE-EMIT-DAG: @_ZTVN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiEE = linkonce_odr {{.*}} @_ZTIN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiEE {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiE3fooEi {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiE22thisShouldBeEmittedTooEi {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiED1Ev {{.*}} @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiED0Ev
 
 struct OuterNonTemplate {
   template<class T>
   struct NestedTemplateInNonTemplate {
     NestedTemplateInNonTemplate();
     virtual T foo(T val);
-    // CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiE22thisShouldBeEmittedTooEi
+    // CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates16OuterNonTemplate27NestedTemplateInNonTemplateIiE22thisShouldBeEmittedTooEi
     virtual T thisShouldBeEmittedToo(T val) { return val; }
     virtual ~NestedTemplateInNonTemplate();
   };
@@ -514,7 +503,7 @@ struct OuterNonTemplate {
     typedef int T;
     NestedNonTemplateInNonTemplate();
     virtual T foo(T val);
-    // CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates16OuterNonTemplate30NestedNonTemplateInNonTemplate22thisShouldBeEmittedTooEi
+    // CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates16OuterNonTemplate30NestedNonTemplateInNonTemplate22thisShouldBeEmittedTooEi
     virtual T thisShouldBeEmittedToo(T val) { return val; }
     virtual ~NestedNonTemplateInNonTemplate();
   };
@@ -526,7 +515,7 @@ struct OuterTemplate {
   struct NestedTemplateInTemplate {
     NestedTemplateInTemplate();
     virtual T foo(T val);
-    // CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates13OuterTemplateIlE24NestedTemplateInTemplateIiE22thisShouldBeEmittedTooEi
+    // CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates13OuterTemplateIlE24NestedTemplateInTemplateIiE22thisShouldBeEmittedTooEi
     virtual T thisShouldBeEmittedToo(T val) { return val; }
     virtual ~NestedTemplateInTemplate();
   };
@@ -535,7 +524,7 @@ struct OuterTemplate {
     typedef int T;
     NestedNonTemplateInTemplate();
     virtual T foo(T val);
-    // CHECK-FORCE-EMIT-DAG: define linkonce_odr noundef i32 @_ZN13TestTemplates13OuterTemplateIlE27NestedNonTemplateInTemplate22thisShouldBeEmittedTooEi
+    // CHECK-FORCE-EMIT-DAG: define linkonce_odr i32 @_ZN13TestTemplates13OuterTemplateIlE27NestedNonTemplateInTemplate22thisShouldBeEmittedTooEi
     virtual T thisShouldBeEmittedToo(T val) { return val; }
     virtual ~NestedNonTemplateInTemplate();
   };

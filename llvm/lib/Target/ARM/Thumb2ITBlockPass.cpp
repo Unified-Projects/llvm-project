@@ -9,6 +9,7 @@
 #include "ARM.h"
 #include "ARMMachineFunctionInfo.h"
 #include "ARMSubtarget.h"
+#include "MCTargetDesc/ARMBaseInfo.h"
 #include "Thumb2InstrInfo.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -23,6 +24,7 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include <cassert>
 #include <new>
 
@@ -96,8 +98,9 @@ static void TrackDefUses(MachineInstr *MI, RegisterSet &Defs, RegisterSet &Uses,
 
   auto InsertUsesDefs = [&](RegList &Regs, RegisterSet &UsesDefs) {
     for (unsigned Reg : Regs)
-      for (MCPhysReg Subreg : TRI->subregs_inclusive(Reg))
-        UsesDefs.insert(Subreg);
+      for (MCSubRegIterator Subreg(Reg, TRI, /*IncludeSelf=*/true);
+           Subreg.isValid(); ++Subreg)
+        UsesDefs.insert(*Subreg);
   };
 
   InsertUsesDefs(LocalDefs, Defs);
@@ -223,10 +226,9 @@ bool Thumb2ITBlock::InsertITInstructions(MachineBasicBlock &MBB) {
     ARMCC::CondCodes OCC = ARMCC::getOppositeCondition(CC);
     unsigned Mask = 0, Pos = 3;
 
-    // IT blocks are limited to one conditional op if -arm-restrict-it
+    // v8 IT blocks are limited to one conditional op unless -arm-no-restrict-it
     // is set: skip the loop
     if (!restrictIT) {
-      LLVM_DEBUG(dbgs() << "Allowing complex IT block\n");
       // Branches, including tricky ones like LDM_RET, need to end an IT
       // block so check the instruction we just put in the block.
       for (; MBBI != E && Pos &&
@@ -267,8 +269,7 @@ bool Thumb2ITBlock::InsertITInstructions(MachineBasicBlock &MBB) {
     MIB.addImm(Mask);
 
     // Last instruction in IT block kills ITSTATE.
-    LastITMI->findRegisterUseOperand(ARM::ITSTATE, /*TRI=*/nullptr)
-        ->setIsKill();
+    LastITMI->findRegisterUseOperand(ARM::ITSTATE)->setIsKill();
 
     // Finalize the bundle.
     finalizeBundle(MBB, InsertPos.getInstrIterator(),
@@ -282,7 +283,8 @@ bool Thumb2ITBlock::InsertITInstructions(MachineBasicBlock &MBB) {
 }
 
 bool Thumb2ITBlock::runOnMachineFunction(MachineFunction &Fn) {
-  const ARMSubtarget &STI = Fn.getSubtarget<ARMSubtarget>();
+  const ARMSubtarget &STI =
+      static_cast<const ARMSubtarget &>(Fn.getSubtarget());
   if (!STI.isThumb2())
     return false;
   AFI = Fn.getInfo<ARMFunctionInfo>();

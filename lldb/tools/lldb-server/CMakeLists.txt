@@ -1,6 +1,7 @@
 set(LLVM_TARGET_DEFINITIONS LLGSOptions.td)
 tablegen(LLVM LLGSOptions.inc -gen-opt-parser-defs)
 add_public_tablegen_target(LLGSOptionsTableGen)
+set_target_properties(LLGSOptionsTableGen PROPERTIES FOLDER "lldb misc")
 
 set(LLDB_PLUGINS)
 
@@ -20,8 +21,6 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   list(APPEND LLDB_PLUGINS lldbPluginObjectFileMachO)
 elseif(CMAKE_SYSTEM_NAME MATCHES "Windows")
   list(APPEND LLDB_PLUGINS lldbPluginObjectFilePECOFF)
-elseif(CMAKE_SYSTEM_NAME MATCHES "AIX")
-  list(APPEND LLDB_PLUGINS lldbPluginObjectFileXCOFF)
 else()
   list(APPEND LLDB_PLUGINS lldbPluginObjectFileELF)
 endif()
@@ -39,6 +38,7 @@ if(APPLE_EMBEDDED)
 endif()
 
 add_lldb_tool(lldb-server
+    Acceptor.cpp
     lldb-gdbserver.cpp
     lldb-platform.cpp
     lldb-server.cpp
@@ -46,15 +46,13 @@ add_lldb_tool(lldb-server
     SystemInitializerLLGS.cpp
 
     LINK_LIBS
+      lldbBase
       lldbHost
       lldbInitialization
-      lldbVersion
       ${LLDB_PLUGINS}
       lldbPluginInstructionARM
-      lldbPluginInstructionLoongArch
       lldbPluginInstructionMIPS
       lldbPluginInstructionMIPS64
-      lldbPluginInstructionRISCV
       ${LLDB_SYSTEM_LIBS}
 
     LINK_COMPONENTS

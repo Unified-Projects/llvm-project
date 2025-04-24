@@ -13,7 +13,6 @@
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/CallDescription.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 
@@ -28,8 +27,7 @@ namespace {
 class DebugContainerModeling
   : public Checker<eval::Call> {
 
-  const BugType DebugMsgBugType{this, "Checking analyzer assumptions", "debug",
-                                /*SuppressOnSink=*/true};
+  std::unique_ptr<BugType> DebugMsgBugType;
 
   template <typename Getter>
   void analyzerContainerDataField(const CallExpr *CE, CheckerContext &C,
@@ -42,17 +40,25 @@ class DebugContainerModeling
                                                  CheckerContext &) const;
 
   CallDescriptionMap<FnCheck> Callbacks = {
-      {{CDM::SimpleFunc, {"clang_analyzer_container_begin"}, 1},
-       &DebugContainerModeling::analyzerContainerBegin},
-      {{CDM::SimpleFunc, {"clang_analyzer_container_end"}, 1},
-       &DebugContainerModeling::analyzerContainerEnd},
+    {{0, "clang_analyzer_container_begin", 1},
+     &DebugContainerModeling::analyzerContainerBegin},
+    {{0, "clang_analyzer_container_end", 1},
+     &DebugContainerModeling::analyzerContainerEnd},
   };
 
 public:
+  DebugContainerModeling();
+
   bool evalCall(const CallEvent &Call, CheckerContext &C) const;
 };
 
-} // namespace
+} //namespace
+
+DebugContainerModeling::DebugContainerModeling() {
+  DebugMsgBugType.reset(
+      new BugType(this, "Checking analyzer assumptions", "debug",
+                  /*SuppressOnSink=*/true));
+}
 
 bool DebugContainerModeling::evalCall(const CallEvent &Call,
                                       CheckerContext &C) const {
@@ -130,8 +136,8 @@ ExplodedNode *DebugContainerModeling::reportDebugMsg(llvm::StringRef Msg,
     return nullptr;
 
   auto &BR = C.getBugReporter();
-  BR.emitReport(
-      std::make_unique<PathSensitiveBugReport>(DebugMsgBugType, Msg, N));
+  BR.emitReport(std::make_unique<PathSensitiveBugReport>(*DebugMsgBugType,
+                                                         Msg, N));
   return N;
 }
 

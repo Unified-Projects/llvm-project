@@ -134,12 +134,7 @@ public:
   DataExtractor(const DataExtractor &data, lldb::offset_t offset,
                 lldb::offset_t length, uint32_t target_byte_size = 1);
 
-  /// Copy constructor.
-  ///
-  /// The copy constructor is explicit as otherwise it is easy to make
-  /// unintended modification of a local copy instead of a caller's instance.
-  /// Also a needless copy of the \a m_data_sp shared pointer is/ expensive.
-  explicit DataExtractor(const DataExtractor &rhs);
+  DataExtractor(const DataExtractor &rhs);
 
   /// Assignment operator.
   ///
@@ -153,12 +148,6 @@ public:
   /// \return
   ///     A const reference to this object.
   const DataExtractor &operator=(const DataExtractor &rhs);
-
-  /// Move constructor and move assignment operators to complete the rule of 5.
-  ///
-  /// They would get deleted as we already defined those of rule of 3.
-  DataExtractor(DataExtractor &&rhs) = default;
-  DataExtractor &operator=(DataExtractor &&rhs) = default;
 
   /// Destructor
   ///
@@ -843,7 +832,9 @@ public:
   /// \param[in] addr_size
   ///     The size in bytes to use when extracting addresses.
   void SetAddressByteSize(uint32_t addr_size) {
-    assert(addr_size == 2 || addr_size == 4 || addr_size == 8);
+#ifdef LLDB_CONFIGURATION_DEBUG
+    assert(addr_size == 4 || addr_size == 8);
+#endif
     m_addr_size = addr_size;
   }
 
@@ -1014,8 +1005,7 @@ protected:
   uint32_t m_addr_size; ///< The address size to use when extracting addresses.
   /// The shared pointer to data that can be shared among multiple instances
   lldb::DataBufferSP m_data_sp;
-  /// Making it const would require implementation of move assignment operator.
-  uint32_t m_target_byte_size = 1;
+  const uint32_t m_target_byte_size = 1;
 };
 
 } // namespace lldb_private

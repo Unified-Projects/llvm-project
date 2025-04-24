@@ -9,15 +9,12 @@ add_mlir_conversion_library(MLIRSCFToSPIRV
   MLIRConversionPassIncGen
 
   LINK_LIBS PUBLIC
-  MLIRArithToSPIRV
-  MLIRFuncToSPIRV
-  MLIRIndexToSPIRV
-  MLIRMemRefToSPIRV
-  MLIRSPIRVDialect
+  MLIRSPIRV
   MLIRSPIRVConversion
+  MLIRStandardToSPIRV
   MLIRIR
   MLIRPass
-  MLIRSCFDialect
+  MLIRStandard
   MLIRSupport
   MLIRTransforms
   )

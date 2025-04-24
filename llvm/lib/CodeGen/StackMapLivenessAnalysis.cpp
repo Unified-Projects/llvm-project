@@ -17,9 +17,9 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -48,7 +48,7 @@ namespace {
 /// information provided by this pass is optional and not required by the
 /// aformentioned intrinsic to function.
 class StackMapLiveness : public MachineFunctionPass {
-  const TargetRegisterInfo *TRI = nullptr;
+  const TargetRegisterInfo *TRI;
   LivePhysRegs LiveRegs;
 
 public:
@@ -106,6 +106,8 @@ bool StackMapLiveness::runOnMachineFunction(MachineFunction &MF) {
   if (!EnablePatchPointLiveness)
     return false;
 
+  LLVM_DEBUG(dbgs() << "********** COMPUTING STACKMAP LIVENESS: "
+                    << MF.getName() << " **********\n");
   TRI = MF.getSubtarget().getRegisterInfo();
   ++NumStackMapFuncVisited;
 
@@ -119,26 +121,25 @@ bool StackMapLiveness::runOnMachineFunction(MachineFunction &MF) {
 
 /// Performs the actual liveness calculation for the function.
 bool StackMapLiveness::calculateLiveness(MachineFunction &MF) {
-  LLVM_DEBUG(dbgs() << "********** COMPUTING STACKMAP LIVENESS: "
-                    << MF.getName() << " **********\n");
   bool HasChanged = false;
   // For all basic blocks in the function.
   for (auto &MBB : MF) {
     LLVM_DEBUG(dbgs() << "****** BB " << MBB.getName() << " ******\n");
     LiveRegs.init(*TRI);
-    LiveRegs.addLiveOuts(MBB);
+    // FIXME: This should probably be addLiveOuts().
+    LiveRegs.addLiveOutsNoPristines(MBB);
     bool HasStackMap = false;
     // Reverse iterate over all instructions and add the current live register
     // set to an instruction if we encounter a patchpoint instruction.
-    for (MachineInstr &MI : llvm::reverse(MBB)) {
-      if (MI.getOpcode() == TargetOpcode::PATCHPOINT) {
-        addLiveOutSetToMI(MF, MI);
+    for (auto I = MBB.rbegin(), E = MBB.rend(); I != E; ++I) {
+      if (I->getOpcode() == TargetOpcode::PATCHPOINT) {
+        addLiveOutSetToMI(MF, *I);
         HasChanged = true;
         HasStackMap = true;
         ++NumStackMaps;
       }
-      LLVM_DEBUG(dbgs() << "   " << LiveRegs << "   " << MI);
-      LiveRegs.stepBackward(MI);
+      LLVM_DEBUG(dbgs() << "   " << LiveRegs << "   " << *I);
+      LiveRegs.stepBackward(*I);
     }
     ++NumBBsVisited;
     if (!HasStackMap)

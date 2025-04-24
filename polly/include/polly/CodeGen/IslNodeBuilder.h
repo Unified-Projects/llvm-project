@@ -58,7 +58,7 @@ struct SubtreeReferences {
 ///                         SubtreeReferences structure.
 /// @param CreateScalarRefs Should the result include allocas of scalar
 ///                         references?
-void addReferencesFromStmt(ScopStmt *Stmt, void *UserPtr,
+void addReferencesFromStmt(const ScopStmt *Stmt, void *UserPtr,
                            bool CreateScalarRefs = true);
 
 class IslNodeBuilder {
@@ -72,11 +72,18 @@ public:
         BlockGen(Builder, LI, SE, DT, ScalarMap, EscapeMap, ValueMap,
                  &ExprBuilder, StartBlock),
         RegionGen(BlockGen), DL(DL), LI(LI), SE(SE), DT(DT),
-        StartBlock(StartBlock), GenDT(&DT), GenLI(&LI), GenSE(&SE) {}
+        StartBlock(StartBlock) {}
 
   virtual ~IslNodeBuilder() = default;
 
   void addParameters(__isl_take isl_set *Context);
+
+  /// Create Values which hold the sizes of the outermost dimension of all
+  /// Fortran arrays in the current scop.
+  ///
+  /// @returns False, if a problem occurred and a Fortran array was not
+  /// materialized. True otherwise.
+  bool materializeFortranArrayOutermostDimension();
 
   /// Generate code that evaluates @p Condition at run-time.
   ///
@@ -147,13 +154,6 @@ protected:
   DominatorTree &DT;
   BasicBlock *StartBlock;
 
-  /// Relates to the region where the code is emitted into.
-  /// @{
-  DominatorTree *GenDT;
-  LoopInfo *GenLI;
-  ScalarEvolution *GenSE;
-  /// @}
-
   /// The current iteration of out-of-scop loops
   ///
   /// This map provides for a given loop a llvm::Value that contains the current
@@ -217,8 +217,7 @@ protected:
   //    of loop iterations.
   //
   // 3. With the existing code, upper bounds have been easier to implement.
-  isl::ast_expr getUpperBound(isl::ast_node_for For,
-                              CmpInst::Predicate &Predicate);
+  isl::ast_expr getUpperBound(isl::ast_node For, CmpInst::Predicate &Predicate);
 
   /// Return non-negative number of iterations in case of the following form
   /// of a loop and -1 otherwise.
@@ -229,7 +228,7 @@ protected:
   ///
   /// NumIter is a non-negative integer value. Condition can have
   /// isl_ast_op_lt type.
-  int getNumberOfIterations(isl::ast_node_for For);
+  int getNumberOfIterations(isl::ast_node For);
 
   /// Compute the values and loops referenced in this subtree.
   ///
@@ -252,6 +251,18 @@ protected:
   void getReferencesInSubtree(const isl::ast_node &For,
                               SetVector<Value *> &Values,
                               SetVector<const Loop *> &Loops);
+
+  /// Change the llvm::Value(s) used for code generation.
+  ///
+  /// When generating code certain values (e.g., references to induction
+  /// variables or array base pointers) in the original code may be replaced by
+  /// new values. This function allows to (partially) update the set of values
+  /// used. A typical use case for this function is the case when we continue
+  /// code generation in a subfunction/kernel function and need to explicitly
+  /// pass down certain values.
+  ///
+  /// @param NewValues A map that maps certain llvm::Values to new llvm::Values.
+  void updateValues(ValueMapT &NewValues);
 
   /// Return the most up-to-date version of the llvm::Value for code generation.
   /// @param Original The Value to check for an up to date version.
@@ -305,7 +316,8 @@ protected:
   /// @returns False, iff a problem occurred and the load was not preloaded.
   bool preloadInvariantEquivClass(InvariantEquivClassTy &IAClass);
 
-  void createForSequential(isl::ast_node_for For, bool MarkParallel);
+  void createForVector(__isl_take isl_ast_node *For, int VectorWidth);
+  void createForSequential(isl::ast_node For, bool MarkParallel);
 
   /// Create LLVM-IR that executes a for node thread parallel.
   ///
@@ -369,6 +381,10 @@ protected:
                                  std::vector<Value *> &IVS,
                                  __isl_take isl_id *IteratorID);
   virtual void createIf(__isl_take isl_ast_node *If);
+  void createUserVector(__isl_take isl_ast_node *User,
+                        std::vector<Value *> &IVS,
+                        __isl_take isl_id *IteratorID,
+                        __isl_take isl_union_map *Schedule);
   virtual void createUser(__isl_take isl_ast_node *User);
   virtual void createBlock(__isl_take isl_ast_node *Block);
 

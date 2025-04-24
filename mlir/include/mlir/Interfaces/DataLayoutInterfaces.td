@@ -20,29 +20,6 @@ include "mlir/IR/OpBase.td"
 // Attribute interfaces
 //===----------------------------------------------------------------------===//
 
-def DLTIQueryInterface : AttrInterface<"DLTIQueryInterface"> {
-  let cppNamespace = "::mlir";
-
-  let description = [{
-    Attribute interface exposing querying-mechanism for key-value associations.
-
-    The central feature of DLTI attributes is to allow looking up values at
-    keys. This interface represent the core functionality to do so - as such
-    most DLTI attributes should be implementing this interface.
-
-    Note that as the `query` method returns an attribute, this attribute can
-    be recursively queried when it also implements this interface.
-  }];
-  let methods = [
-    InterfaceMethod<
-      /*description=*/"Returns the attribute associated with the key.",
-      /*retTy=*/"::mlir::FailureOr<::mlir::Attribute>",
-      /*methodName=*/"query",
-      /*args=*/(ins "::mlir::DataLayoutEntryKey":$key)
-    >
-  ];
-}
-
 def DataLayoutEntryInterface : AttrInterface<"DataLayoutEntryInterface"> {
   let cppNamespace = "::mlir";
 
@@ -75,7 +52,7 @@ def DataLayoutEntryInterface : AttrInterface<"DataLayoutEntryInterface"> {
     InterfaceMethod<
       /*description=*/"Checks that the entry is well-formed, reports errors "
                       "at the provided location.",
-      /*retTy=*/"::llvm::LogicalResult",
+      /*retTy=*/"::mlir::LogicalResult",
       /*methodName=*/"verifyEntry",
       /*args=*/(ins "::mlir::Location":$loc),
       /*methodBody=*/"",
@@ -86,12 +63,12 @@ def DataLayoutEntryInterface : AttrInterface<"DataLayoutEntryInterface"> {
   let extraClassDeclaration = [{
     /// Returns `true` if the key of this entry is a type.
     bool isTypeEntry() {
-      return llvm::isa<::mlir::Type>(getKey());
+      return getKey().is<::mlir::Type>();
     }
   }];
 }
 
-def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface", [DLTIQueryInterface]> {
+def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface"> {
   let cppNamespace = "::mlir";
 
   let description = [{
@@ -107,7 +84,7 @@ def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface", [DLTIQuer
 
     Data layout specifications may need to be combined in case they appear on
     nested operations subject to layout, or to ensure the validity of layout
-    modification. Concrete specification attributes must implement the
+    modification. Concerete specification attributes must implement the
     corresponding hook.
   }];
   // The underlying storage being contiguous may be revised in the future, but
@@ -129,36 +106,6 @@ def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface", [DLTIQuer
       /*methodName=*/"getEntries",
       /*args=*/(ins)
     >,
-    InterfaceMethod<
-      /*description=*/"Returns the endianness identifier.",
-      /*retTy=*/"::mlir::StringAttr",
-      /*methodName=*/"getEndiannessIdentifier",
-      /*args=*/(ins "::mlir::MLIRContext *":$context)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the alloca memory space identifier.",
-      /*retTy=*/"::mlir::StringAttr",
-      /*methodName=*/"getAllocaMemorySpaceIdentifier",
-      /*args=*/(ins "::mlir::MLIRContext *":$context)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the program memory space identifier.",
-      /*retTy=*/"::mlir::StringAttr",
-      /*methodName=*/"getProgramMemorySpaceIdentifier",
-      /*args=*/(ins "::mlir::MLIRContext *":$context)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the global memory space identifier.",
-      /*retTy=*/"::mlir::StringAttr",
-      /*methodName=*/"getGlobalMemorySpaceIdentifier",
-      /*args=*/(ins "::mlir::MLIRContext *":$context)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the stack alignment identifier.",
-      /*retTy=*/"::mlir::StringAttr",
-      /*methodName=*/"getStackAlignmentIdentifier",
-      /*args=*/(ins "::mlir::MLIRContext *":$context)
-    >,
     // Implementations may override this if they have an efficient lookup
     // mechanism.
     InterfaceMethod<
@@ -179,7 +126,7 @@ def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface", [DLTIQuer
                       "present.",
       /*retTy=*/"::mlir::DataLayoutEntryInterface",
       /*methodName=*/"getSpecForIdentifier",
-      /*args=*/(ins "::mlir::StringAttr":$identifier),
+      /*args=*/(ins "::mlir::Identifier":$identifier),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
         return ::mlir::detail::filterEntryForIdentifier($_attr.getEntries(),
@@ -189,14 +136,14 @@ def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface", [DLTIQuer
     InterfaceMethod<
       /*description=*/"Verifies the validity of the specification and reports "
                       "any errors at the given location.",
-      /*retTy=*/"::llvm::LogicalResult",
+      /*retTy=*/"::mlir::LogicalResult",
       /*methodName=*/"verifySpec",
       /*args=*/(ins "::mlir::Location":$loc),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
         return ::mlir::detail::verifyDataLayoutSpec($_attr, loc);
       }]
-    >
+    >,
   ];
 
   let extraClassDeclaration = [{
@@ -207,138 +154,13 @@ def DataLayoutSpecInterface : AttrInterface<"DataLayoutSpecInterface", [DLTIQuer
       return getSpecForType(TypeID::get<Ty>());
     }
 
-    /// Helper for default implementation of `DLTIQueryInterface`'s `query`.
-    inline ::mlir::FailureOr<::mlir::Attribute>
-    queryHelper(::mlir::DataLayoutEntryKey key) const {
-      for (DataLayoutEntryInterface entry : getEntries())
-        if (entry.getKey() == key)
-            return entry.getValue();
-      return ::mlir::failure();
-    }
-
     /// Populates the given maps with lists of entries grouped by the type or
     /// identifier they are associated with. Users are not expected to call this
     /// method directly.
     void bucketEntriesByType(
         ::llvm::DenseMap<::mlir::TypeID, ::mlir::DataLayoutEntryList> &types,
-        ::llvm::DenseMap<::mlir::StringAttr,
+        ::llvm::DenseMap<::mlir::Identifier,
                          ::mlir::DataLayoutEntryInterface> &ids);
-  }];
-}
-
-def TargetDeviceSpecInterface : AttrInterface<"TargetDeviceSpecInterface", [DLTIQueryInterface]> {
-  let cppNamespace = "::mlir";
-
-  let description = [{
-    Attribute interface describing a target device description specification.
-
-    A target device description specification is a list of device properties (key)
-    and their values for a specific device. The device is identified using "device_id"
-    (as a key and ui32 value) and "device_type" key which must have a string value.
-    Both "device_id" and "device_type" are mandatory keys. As an example, L1 cache
-    size could be a device property, and its value would be a device specific size.
-
-    A target device description specification is attached to a module as a module level
-    attribute.
-  }];
-
-  let methods = [
-    InterfaceMethod<
-      /*description=*/"Returns the list of layout entries.",
-      /*retTy=*/"::mlir::DataLayoutEntryListRef",
-      /*methodName=*/"getEntries",
-      /*args=*/(ins)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the entry related to the given identifier, if "
-                      "present.",
-      /*retTy=*/"::mlir::DataLayoutEntryInterface",
-      /*methodName=*/"getSpecForIdentifier",
-      /*args=*/(ins "::mlir::StringAttr":$identifier),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::filterEntryForIdentifier($_attr.getEntries(),
-                                                        identifier);
-      }]
-    >,
-    InterfaceMethod<
-      /*description=*/"Checks that the entry is well-formed, reports errors "
-                      "at the provided location.",
-      /*retTy=*/"::llvm::LogicalResult",
-      /*methodName=*/"verifyEntry",
-      /*args=*/(ins "::mlir::Location":$loc),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{ return ::mlir::success(); }]
-    >
-  ];
-
-  let extraClassDeclaration = [{
-    /// Helper for default implementation of `DLTIQueryInterface`'s `query`.
-    ::mlir::FailureOr<::mlir::Attribute>
-    queryHelper(::mlir::DataLayoutEntryKey key) const {
-      if (auto strKey = ::llvm::dyn_cast<StringAttr>(key))
-        if (DataLayoutEntryInterface spec = getSpecForIdentifier(strKey))
-          return spec.getValue();
-      return ::mlir::failure();
-    }
-  }];
-}
-
-def TargetSystemSpecInterface : AttrInterface<"TargetSystemSpecInterface", [DLTIQueryInterface]> {
-  let cppNamespace = "::mlir";
-
-  let description = [{
-    Attribute interface describing a target system description specification.
-
-    A target system description specification is a list of target device
-    specifications, with one device specification for a device in the system. As
-    such, a target system description specification allows specifying a heterogenous
-    system, with devices of different types (e.g., CPU, GPU, etc.)
-
-    The only requirement on a valid target system description specification is that
-    the "device_id" in every target device description specification needs to be
-    unique. This is because, ultimately, this "device_id" is used by the user to
-    query a value of a device property.
-  }];
-
-  let methods = [
-    InterfaceMethod<
-      /*description=*/"Returns the list of layout entries.",
-      /*retTy=*/"::llvm::ArrayRef<DataLayoutEntryInterface>",
-      /*methodName=*/"getEntries",
-      /*args=*/(ins)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the device description spec for given device "
-                      "ID",
-      /*retTy=*/"std::optional<::mlir::TargetDeviceSpecInterface>",
-      /*methodName=*/"getDeviceSpecForDeviceID",
-      /*args=*/(ins "StringAttr":$deviceID)
-    >,
-    InterfaceMethod<
-      /*description=*/"Verifies the validity of the specification and "
-                      "reports any errors at the given location.",
-      /*retTy=*/"::llvm::LogicalResult",
-      /*methodName=*/"verifySpec",
-      /*args=*/(ins "::mlir::Location":$loc),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::verifyTargetSystemSpec($_attr, loc);
-      }]
-    >
-  ];
-
-  let extraClassDeclaration = [{
-    using DeviceID = StringAttr;
-
-    /// Helper for default implementation of `DLTIQueryInterface`'s `query`.
-    ::mlir::FailureOr<::mlir::Attribute>
-    queryHelper(::mlir::DataLayoutEntryKey key) const {
-      if (auto strKey = ::llvm::dyn_cast<::mlir::StringAttr>(key))
-        if (auto deviceSpec = getDeviceSpecForDeviceID(strKey))
-          return *deviceSpec;
-      return ::mlir::failure();
-    }
   }];
 }
 
@@ -375,33 +197,26 @@ def DataLayoutOpInterface : OpInterface<"DataLayoutOpInterface"> {
       /*methodName=*/"getDataLayoutSpec",
       /*args=*/(ins)
     >,
-    InterfaceMethod<
-      /*description=*/"Returns the target system desc specification for this "
-                      "op, or null if it does not exist.",
-      /*retTy=*/"::mlir::TargetSystemSpecInterface",
-      /*methodName=*/"getTargetSystemSpec",
-      /*args=*/(ins)
-    >,
     StaticInterfaceMethod<
       /*description=*/"Returns the size of the given type computed using the "
                       "relevant entries. The data layout object can be used "
                       "for recursive queries.",
-      /*retTy=*/"::llvm::TypeSize",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getTypeSize",
       /*args=*/(ins "::mlir::Type":$type,
                     "const ::mlir::DataLayout &":$dataLayout,
                     "::mlir::DataLayoutEntryListRef":$params),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        ::llvm::TypeSize bits = ConcreteOp::getTypeSizeInBits(type, dataLayout, params);
-        return ::mlir::detail::divideCeil(bits, 8u);
+        unsigned bits = ConcreteOp::getTypeSizeInBits(type, dataLayout, params);
+        return ::llvm::divideCeil(bits, 8);
       }]
     >,
     StaticInterfaceMethod<
       /*description=*/"Returns the size of the given type in bits computed "
                       "using the relevant entries. The data layout object can "
                       "be used for recursive queries.",
-      /*retTy=*/"::llvm::TypeSize",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getTypeSizeInBits",
       /*args=*/(ins "::mlir::Type":$type,
                     "const ::mlir::DataLayout &":$dataLayout,
@@ -416,7 +231,7 @@ def DataLayoutOpInterface : OpInterface<"DataLayoutOpInterface"> {
       /*description=*/"Returns the alignment required by the ABI for the given "
                       "type computed using the relevant entries. The data "
                       "layout object can be used for recursive queries.",
-      /*retTy=*/"uint64_t",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getTypeABIAlignment",
       /*args=*/(ins "::mlir::Type":$type,
                     "const ::mlir::DataLayout &":$dataLayout,
@@ -430,7 +245,7 @@ def DataLayoutOpInterface : OpInterface<"DataLayoutOpInterface"> {
       /*description=*/"Returns the alignment preferred by the given type "
                       "computed using the relevant entries. The data layout"
                       "object can be used for recursive queries.",
-      /*retTy=*/"uint64_t",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getTypePreferredAlignment",
       /*args=*/(ins "::mlir::Type":$type,
                     "const ::mlir::DataLayout &":$dataLayout,
@@ -441,93 +256,6 @@ def DataLayoutOpInterface : OpInterface<"DataLayoutOpInterface"> {
                                                             params);
       }]
     >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the bitwidth that should be used when "
-                      "performing index computations for the type computed "
-                      "using the relevant entries. The data layout object can "
-                      "be used for recursive queries.",
-      /*retTy=*/"std::optional<uint64_t>",
-      /*methodName=*/"getIndexBitwidth",
-      /*args=*/(ins "::mlir::Type":$type,
-                    "const ::mlir::DataLayout &":$dataLayout,
-                    "::mlir::DataLayoutEntryListRef":$params),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDefaultIndexBitwidth(type, dataLayout,
-                                                       params);
-      }]
-    >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the endianness used by the ABI computed "
-                      "using the relevant entries. The data layout object "
-                      "can be used for recursive queries.",
-      /*retTy=*/"::mlir::Attribute",
-      /*methodName=*/"getEndianness",
-      /*args=*/(ins "::mlir::DataLayoutEntryInterface":$entry),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDefaultEndianness(entry);
-      }]
-    >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the memory space used by the ABI computed "
-                      "using the relevant entries. The data layout object "
-                      "can be used for recursive queries.",
-      /*retTy=*/"::mlir::Attribute",
-      /*methodName=*/"getAllocaMemorySpace",
-      /*args=*/(ins "::mlir::DataLayoutEntryInterface":$entry),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDefaultAllocaMemorySpace(entry);
-      }]
-    >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the memory space used by the ABI computed "
-                      "using the relevant entries. The data layout object "
-                      "can be used for recursive queries.",
-      /*retTy=*/"::mlir::Attribute",
-      /*methodName=*/"getProgramMemorySpace",
-      /*args=*/(ins "::mlir::DataLayoutEntryInterface":$entry),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDefaultProgramMemorySpace(entry);
-      }]
-    >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the memory space used by the ABI computed "
-                      "using the relevant entries. The data layout object "
-                      "can be used for recursive queries.",
-      /*retTy=*/"::mlir::Attribute",
-      /*methodName=*/"getGlobalMemorySpace",
-      /*args=*/(ins "::mlir::DataLayoutEntryInterface":$entry),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDefaultGlobalMemorySpace(entry);
-      }]
-    >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the natural stack alignment in bits computed "
-                      "using the relevant entries. The data layout object "
-                      "can be used for recursive queries.",
-      /*retTy=*/"uint64_t",
-      /*methodName=*/"getStackAlignment",
-      /*args=*/(ins "::mlir::DataLayoutEntryInterface":$entry),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDefaultStackAlignment(entry);
-      }]
-    >,
-    StaticInterfaceMethod<
-      /*description=*/"Returns the value of the property, if the property is "
-                      "defined. Otherwise, it returns std::nullopt.",
-      /*retTy=*/"std::optional<Attribute>",
-      /*methodName=*/"getDevicePropertyValue",
-      /*args=*/(ins "::mlir::DataLayoutEntryInterface":$entry),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return ::mlir::detail::getDevicePropertyValue(entry);
-      }]
-    >
   ];
 
   let verify = [{ return ::mlir::detail::verifyDataLayoutOp($_op); }];
@@ -557,7 +285,7 @@ def DataLayoutTypeInterface : TypeInterface<"DataLayoutTypeInterface"> {
 
     The list of entries may be empty, in which case the type must provide a
     reasonable default value. The entries in the list are known to have passed
-    the spec and the entry verifiers, as well as the type-specified verifier if
+    the spec and the entry verifiers, as well as the type-specifid verifier if
     provided.
 
     In case of nested layout specs or spec changes, the type can override a hook
@@ -567,19 +295,19 @@ def DataLayoutTypeInterface : TypeInterface<"DataLayoutTypeInterface"> {
   let methods = [
     InterfaceMethod<
       /*description=*/"Returns the size of this type in bytes.",
-      /*retTy=*/"::llvm::TypeSize",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getTypeSize",
       /*args=*/(ins "const ::mlir::DataLayout &":$dataLayout,
                     "::mlir::DataLayoutEntryListRef":$params),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        ::llvm::TypeSize bits = $_type.getTypeSizeInBits(dataLayout, params);
-        return ::mlir::detail::divideCeil(bits, 8u);
+        unsigned bits = $_type.getTypeSizeInBits(dataLayout, params);
+        return ::llvm::divideCeil(bits, 8);
       }]
     >,
     InterfaceMethod<
       /*description=*/"Returns the size of this type in bits.",
-      /*retTy=*/"::llvm::TypeSize",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getTypeSizeInBits",
       /*args=*/(ins "const ::mlir::DataLayout &":$dataLayout,
                     "::mlir::DataLayoutEntryListRef":$params)
@@ -587,30 +315,18 @@ def DataLayoutTypeInterface : TypeInterface<"DataLayoutTypeInterface"> {
     InterfaceMethod<
       /*description=*/"Returns the ABI-required alignment for this type, "
                       "in bytes",
-      /*retTy=*/"uint64_t",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getABIAlignment",
       /*args=*/(ins "const ::mlir::DataLayout &":$dataLayout,
                     "::mlir::DataLayoutEntryListRef":$params)
     >,
     InterfaceMethod<
-      /*description=*/"Returns the preferred alignment for this type, "
+      /*description=*/"Returns the preferred alignemnt for this type, "
                       "in bytes.",
-      /*retTy=*/"uint64_t",
+      /*retTy=*/"unsigned",
       /*methodName=*/"getPreferredAlignment",
       /*args=*/(ins "const ::mlir::DataLayout &":$dataLayout,
                     "::mlir::DataLayoutEntryListRef":$params)
-    >,
-    InterfaceMethod<
-      /*description=*/"Returns the bitwidth that should be used when "
-                      "performing index computations for the given "
-                      "pointer-like type. If the type is not a pointer-like "
-                      "type, returns std::nullopt.",
-      /*retTy=*/"std::optional<uint64_t>",
-      /*methodName=*/"getIndexBitwidth",
-      /*args=*/(ins "const ::mlir::DataLayout &":$dataLayout,
-                    "::mlir::DataLayoutEntryListRef":$params),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{ return std::nullopt; }]
     >,
     InterfaceMethod<
       /*desc=*/"Returns true if the two lists of entries are compatible, that "
@@ -626,7 +342,7 @@ def DataLayoutTypeInterface : TypeInterface<"DataLayoutTypeInterface"> {
     InterfaceMethod<
       /*description=*/"Verifies that the given list of entries is valid for "
                       "this type.",
-      /*retTy=*/"::llvm::LogicalResult",
+      /*retTy=*/"::mlir::LogicalResult",
       /*methodName=*/"verifyEntries",
       /*args=*/(ins "::mlir::DataLayoutEntryListRef":$entries,
                     "::mlir::Location":$loc),

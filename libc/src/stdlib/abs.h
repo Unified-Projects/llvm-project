@@ -9,12 +9,10 @@
 #ifndef LLVM_LIBC_SRC_STDLIB_ABS_H
 #define LLVM_LIBC_SRC_STDLIB_ABS_H
 
-#include "src/__support/macros/config.h"
-
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 int abs(int n);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_STDLIB_ABS_H

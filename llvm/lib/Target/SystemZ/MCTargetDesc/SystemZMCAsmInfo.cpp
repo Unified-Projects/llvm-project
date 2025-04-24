@@ -8,38 +8,41 @@
 
 #include "SystemZMCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCSectionELF.h"
 
 using namespace llvm;
 
-SystemZMCAsmInfoELF::SystemZMCAsmInfoELF(const Triple &TT) {
-  AssemblerDialect = AD_GNU;
-  CalleeSaveStackSlotSize = 8;
+SystemZMCAsmInfo::SystemZMCAsmInfo(const Triple &TT) {
   CodePointerSize = 8;
-  Data64bitsDirective = "\t.quad\t";
-  ExceptionsType = ExceptionHandling::DwarfCFI;
+  CalleeSaveStackSlotSize = 8;
   IsLittleEndian = false;
+
+  AssemblerDialect = TT.isOSzOS() ? AD_HLASM : AD_ATT;
+
   MaxInstLength = 6;
-  SupportsDebugInformation = true;
-  UsesELFSectionDirectiveForBSS = true;
+
+  CommentString = AssemblerDialect == AD_HLASM ? "*" : "#";
+  RestrictCommentStringToStartOfStatement = (AssemblerDialect == AD_HLASM);
+  AllowAdditionalComments = (AssemblerDialect == AD_ATT);
+  AllowAtAtStartOfIdentifier = (AssemblerDialect == AD_HLASM);
+  AllowDollarAtStartOfIdentifier = (AssemblerDialect == AD_HLASM);
+  AllowHashAtStartOfIdentifier = (AssemblerDialect == AD_HLASM);
+  DotIsPC = (AssemblerDialect == AD_ATT);
+  StarIsPC = (AssemblerDialect == AD_HLASM);
+  EmitGNUAsmStartIndentationMarker = (AssemblerDialect == AD_ATT);
+  AllowAtInName = (AssemblerDialect == AD_HLASM);
+  EmitLabelsInUpperCase = (AssemblerDialect == AD_HLASM);
+
   ZeroDirective = "\t.space\t";
-}
-
-SystemZMCAsmInfoGOFF::SystemZMCAsmInfoGOFF(const Triple &TT) {
-  AllowAdditionalComments = false;
-  AllowAtInName = true;
-  AllowAtAtStartOfIdentifier = true;
-  AllowDollarAtStartOfIdentifier = true;
-  AssemblerDialect = AD_HLASM;
-  CalleeSaveStackSlotSize = 8;
-  CodePointerSize = 8;
-  CommentString = "*";
-  ExceptionsType = ExceptionHandling::ZOS;
-  IsHLASM = true;
-  IsLittleEndian = false;
-  MaxInstLength = 6;
+  Data64bitsDirective = "\t.quad\t";
+  UsesELFSectionDirectiveForBSS = true;
   SupportsDebugInformation = true;
+  ExceptionsType = ExceptionHandling::DwarfCFI;
 }
 
-bool SystemZMCAsmInfoGOFF::isAcceptableChar(char C) const {
+bool SystemZMCAsmInfo::isAcceptableChar(char C) const {
+  if (AssemblerDialect == AD_ATT)
+    return MCAsmInfo::isAcceptableChar(C);
+
   return MCAsmInfo::isAcceptableChar(C) || C == '#';
 }

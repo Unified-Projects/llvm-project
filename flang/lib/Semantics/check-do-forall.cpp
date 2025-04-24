@@ -7,12 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "check-do-forall.h"
-#include "definable.h"
 #include "flang/Common/template.h"
 #include "flang/Evaluate/call.h"
 #include "flang/Evaluate/expression.h"
 #include "flang/Evaluate/tools.h"
-#include "flang/Evaluate/traverse.h"
 #include "flang/Parser/message.h"
 #include "flang/Parser/parse-tree-visitor.h"
 #include "flang/Parser/tools.h"
@@ -88,19 +86,12 @@ class DoConcurrentBodyEnforce {
 public:
   DoConcurrentBodyEnforce(
       SemanticsContext &context, parser::CharBlock doConcurrentSourcePosition)
-      : context_{context},
-        doConcurrentSourcePosition_{doConcurrentSourcePosition} {}
+      : context_{context}, doConcurrentSourcePosition_{
+                               doConcurrentSourcePosition} {}
   std::set<parser::Label> labels() { return labels_; }
-  template <typename T> bool Pre(const T &x) {
-    if (const auto *expr{GetExpr(context_, x)}) {
-      if (auto bad{FindImpureCall(context_.foldingContext(), *expr)}) {
-        context_.Say(currentStatementSourcePosition_,
-            "Impure procedure '%s' may not be referenced in DO CONCURRENT"_err_en_US,
-            *bad);
-      }
-    }
-    return true;
-  }
+  template <typename T> bool Pre(const T &) { return true; }
+  template <typename T> void Post(const T &) {}
+
   template <typename T> bool Pre(const parser::Statement<T> &statement) {
     currentStatementSourcePosition_ = statement.source;
     if (statement.label.has_value()) {
@@ -108,25 +99,11 @@ public:
     }
     return true;
   }
+
   template <typename T> bool Pre(const parser::UnlabeledStatement<T> &stmt) {
     currentStatementSourcePosition_ = stmt.source;
     return true;
   }
-  bool Pre(const parser::CallStmt &x) {
-    if (x.typedCall.get()) {
-      if (auto bad{FindImpureCall(context_.foldingContext(), *x.typedCall)}) {
-        context_.Say(currentStatementSourcePosition_,
-            "Impure procedure '%s' may not be referenced in DO CONCURRENT"_err_en_US,
-            *bad);
-      }
-    }
-    return true;
-  }
-  bool Pre(const parser::ConcurrentHeader &) {
-    // handled in CheckConcurrentHeader
-    return false;
-  }
-  template <typename T> void Post(const T &) {}
 
   // C1140 -- Can't deallocate a polymorphic entity in a DO CONCURRENT.
   // Deallocation can be caused by exiting a block that declares an allocatable
@@ -137,12 +114,25 @@ public:
   // invocation of an IMPURE final subroutine. (C1139)
   //
 
+  // Only to be called for symbols with ObjectEntityDetails
+  static bool HasImpureFinal(const Symbol &original) {
+    const Symbol &symbol{ResolveAssociations(original)};
+    if (symbol.has<ObjectEntityDetails>()) {
+      if (const DeclTypeSpec * symType{symbol.GetType()}) {
+        if (const DerivedTypeSpec * derived{symType->AsDerived()}) {
+          return semantics::HasImpureFinal(*derived);
+        }
+      }
+    }
+    return false;
+  }
+
   // Predicate for deallocations caused by block exit and direct deallocation
   static bool DeallocateAll(const Symbol &) { return true; }
 
   // Predicate for deallocations caused by intrinsic assignment
   static bool DeallocateNonCoarray(const Symbol &component) {
-    return !evaluate::IsCoarray(component);
+    return !IsCoarray(component);
   }
 
   static bool WillDeallocatePolymorphic(const Symbol &entity,
@@ -175,11 +165,11 @@ public:
     return false;
   }
 
-  void SayDeallocateWithImpureFinal(
-      const Symbol &entity, const char *reason, const Symbol &impure) {
+  void SayDeallocateWithImpureFinal(const Symbol &entity, const char *reason) {
     context_.SayWithDecl(entity, currentStatementSourcePosition_,
-        "Deallocation of an entity with an IMPURE FINAL procedure '%s' caused by %s not allowed in DO CONCURRENT"_err_en_US,
-        impure.name(), reason);
+        "Deallocation of an entity with an IMPURE FINAL procedure"
+        " caused by %s not allowed in DO CONCURRENT"_err_en_US,
+        reason);
   }
 
   void SayDeallocateOfPolymorph(
@@ -208,8 +198,8 @@ public:
             MightDeallocatePolymorphic(entity, DeallocateAll)) {
           SayDeallocateOfPolymorph(endBlockStmt.source, entity, reason);
         }
-        if (const Symbol * impure{HasImpureFinal(entity)}) {
-          SayDeallocateWithImpureFinal(entity, reason, *impure);
+        if (HasImpureFinal(entity)) {
+          SayDeallocateWithImpureFinal(entity, reason);
         }
       }
     }
@@ -224,21 +214,8 @@ public:
       if (MightDeallocatePolymorphic(*entity, DeallocateNonCoarray)) {
         SayDeallocateOfPolymorph(variable.GetSource(), *entity, reason);
       }
-      if (const auto *assignment{GetAssignment(stmt)}) {
-        const auto &lhs{assignment->lhs};
-        if (const Symbol * impure{HasImpureFinal(*entity, lhs.Rank())}) {
-          SayDeallocateWithImpureFinal(*entity, reason, *impure);
-        }
-      }
-    }
-    if (const auto *assignment{GetAssignment(stmt)}) {
-      if (const auto *call{
-              std::get_if<evaluate::ProcedureRef>(&assignment->u)}) {
-        if (auto bad{FindImpureCall(context_.foldingContext(), *call)}) {
-          context_.Say(currentStatementSourcePosition_,
-              "The defined assignment subroutine '%s' is not pure"_err_en_US,
-              *bad);
-        }
+      if (HasImpureFinal(*entity)) {
+        SayDeallocateWithImpureFinal(*entity, reason);
       }
     }
   }
@@ -260,8 +237,8 @@ public:
           SayDeallocateOfPolymorph(
               currentStatementSourcePosition_, entity, reason);
         }
-        if (const Symbol * impure{HasImpureFinal(entity)}) {
-          SayDeallocateWithImpureFinal(entity, reason, *impure);
+        if (HasImpureFinal(entity)) {
+          SayDeallocateWithImpureFinal(entity, reason);
         }
       }
     }
@@ -273,7 +250,8 @@ public:
       const parser::CharBlock statementLocation{
           GetImageControlStmtLocation(construct)};
       auto &msg{context_.Say(statementLocation,
-          "An image control statement is not allowed in DO CONCURRENT"_err_en_US)};
+          "An image control statement is not allowed in DO"
+          " CONCURRENT"_err_en_US)};
       if (auto coarrayMsg{GetImageControlStmtCoarrayMsg(construct)}) {
         msg.Attach(statementLocation, *coarrayMsg);
       }
@@ -289,33 +267,35 @@ public:
         .Attach(doConcurrentSourcePosition_, GetEnclosingDoMsg());
   }
 
-  // C1145, C1146: cannot call ieee_[gs]et_flag, ieee_[gs]et_halting_mode,
-  // ieee_[gs]et_status, ieee_set_rounding_mode, or ieee_set_underflow_mode
+  // C1139: call to impure procedure and ...
+  // C1141: cannot call ieee_get_flag, ieee_[gs]et_halting_mode
+  // It's not necessary to check the ieee_get* procedures because they're
+  // not pure, and impure procedures are caught by checks for constraint C1139
   void Post(const parser::ProcedureDesignator &procedureDesignator) {
     if (auto *name{std::get_if<parser::Name>(&procedureDesignator.u)}) {
-      if (name->symbol) {
-        const Symbol &ultimate{name->symbol->GetUltimate()};
-        const Scope &scope{ultimate.owner()};
-        if (const Symbol * module{scope.IsModule() ? scope.symbol() : nullptr};
-            module &&
-            (module->name() == "__fortran_ieee_arithmetic" ||
-                module->name() == "__fortran_ieee_exceptions")) {
-          std::string s{ultimate.name().ToString()};
-          static constexpr const char *badName[]{"ieee_get_flag",
-              "ieee_set_flag", "ieee_get_halting_mode", "ieee_set_halting_mode",
-              "ieee_get_status", "ieee_set_status", "ieee_set_rounding_mode",
-              "ieee_set_underflow_mode", nullptr};
-          for (std::size_t j{0}; badName[j]; ++j) {
-            if (s.find(badName[j]) != s.npos) {
-              context_
-                  .Say(name->source,
-                      "'%s' may not be called in DO CONCURRENT"_err_en_US,
-                      badName[j])
-                  .Attach(doConcurrentSourcePosition_, GetEnclosingDoMsg());
-              break;
-            }
-          }
+      if (name->symbol && !IsPureProcedure(*name->symbol)) {
+        SayWithDo(context_, currentStatementSourcePosition_,
+            "Call to an impure procedure is not allowed in DO"
+            " CONCURRENT"_err_en_US,
+            doConcurrentSourcePosition_);
+      }
+      if (name->symbol && fromScope(*name->symbol, "ieee_exceptions"s)) {
+        if (name->source == "ieee_set_halting_mode") {
+          SayWithDo(context_, currentStatementSourcePosition_,
+              "IEEE_SET_HALTING_MODE is not allowed in DO "
+              "CONCURRENT"_err_en_US,
+              doConcurrentSourcePosition_);
         }
+      }
+    } else {
+      // C1139: this a procedure component
+      auto &component{std::get<parser::ProcComponentRef>(procedureDesignator.u)
+                          .v.thing.component};
+      if (component.symbol && !IsPureProcedure(*component.symbol)) {
+        SayWithDo(context_, currentStatementSourcePosition_,
+            "Call to an impure procedure component is not allowed"
+            " in DO CONCURRENT"_err_en_US,
+            doConcurrentSourcePosition_);
       }
     }
   }
@@ -335,6 +315,15 @@ public:
   }
 
 private:
+  bool fromScope(const Symbol &symbol, const std::string &moduleName) {
+    if (symbol.GetUltimate().owner().IsModule() &&
+        symbol.GetUltimate().owner().GetName().value().ToString() ==
+            moduleName) {
+      return true;
+    }
+    return false;
+  }
+
   std::set<parser::Label> labels_;
   parser::CharBlock currentStatementSourcePosition_;
   SemanticsContext &context_;
@@ -379,13 +368,8 @@ private:
 // Find a DO or FORALL and enforce semantics checks on its body
 class DoContext {
 public:
-  DoContext(SemanticsContext &context, IndexVarKind kind,
-      const std::list<IndexVarKind> nesting)
-      : context_{context}, kind_{kind} {
-    if (!nesting.empty()) {
-      concurrentNesting_ = nesting.back();
-    }
-  }
+  DoContext(SemanticsContext &context, IndexVarKind kind)
+      : context_{context}, kind_{kind} {}
 
   // Mark this DO construct as a point of definition for the DO variables
   // or index-names it contains.  If they're already defined, emit an error
@@ -428,11 +412,13 @@ public:
   void Check(const parser::DoConstruct &doConstruct) {
     if (doConstruct.IsDoConcurrent()) {
       CheckDoConcurrent(doConstruct);
-    } else if (doConstruct.IsDoNormal()) {
-      CheckDoNormal(doConstruct);
-    } else {
-      // TODO: handle the other cases
+      return;
     }
+    if (doConstruct.IsDoNormal()) {
+      CheckDoNormal(doConstruct);
+      return;
+    }
+    // TODO: handle the other cases
   }
 
   void Check(const parser::ForallStmt &stmt) {
@@ -443,47 +429,34 @@ public:
   }
 
   void Check(const parser::ForallAssignmentStmt &stmt) {
-    if (const evaluate::Assignment *
-        assignment{common::visit(
-            common::visitors{[&](const auto &x) { return GetAssignment(x); }},
-            stmt.u)}) {
+    const evaluate::Assignment *assignment{std::visit(
+        common::visitors{[&](const auto &x) { return GetAssignment(x); }},
+        stmt.u)};
+    if (assignment) {
       CheckForallIndexesUsed(*assignment);
-      CheckForImpureCall(assignment->lhs, kind_);
-      CheckForImpureCall(assignment->rhs, kind_);
-
-      if (IsVariable(assignment->lhs)) {
-        if (const Symbol * symbol{GetLastSymbol(assignment->lhs)}) {
-          if (auto impureFinal{
-                  HasImpureFinal(*symbol, assignment->lhs.Rank())}) {
-            context_.SayWithDecl(*symbol, parser::FindSourceLocation(stmt),
-                "Impure procedure '%s' is referenced by finalization in a %s"_err_en_US,
-                impureFinal->name(), LoopKindName());
-          }
-        }
-      }
-
+      CheckForImpureCall(assignment->lhs);
+      CheckForImpureCall(assignment->rhs);
       if (const auto *proc{
               std::get_if<evaluate::ProcedureRef>(&assignment->u)}) {
-        CheckForImpureCall(*proc, kind_);
+        CheckForImpureCall(*proc);
       }
-      common::visit(
-          common::visitors{
-              [](const evaluate::Assignment::Intrinsic &) {},
-              [&](const evaluate::ProcedureRef &proc) {
-                CheckForImpureCall(proc, kind_);
-              },
-              [&](const evaluate::Assignment::BoundsSpec &bounds) {
-                for (const auto &bound : bounds) {
-                  CheckForImpureCall(SomeExpr{bound}, kind_);
-                }
-              },
-              [&](const evaluate::Assignment::BoundsRemapping &bounds) {
-                for (const auto &bound : bounds) {
-                  CheckForImpureCall(SomeExpr{bound.first}, kind_);
-                  CheckForImpureCall(SomeExpr{bound.second}, kind_);
-                }
-              },
-          },
+      std::visit(common::visitors{
+                     [](const evaluate::Assignment::Intrinsic &) {},
+                     [&](const evaluate::ProcedureRef &proc) {
+                       CheckForImpureCall(proc);
+                     },
+                     [&](const evaluate::Assignment::BoundsSpec &bounds) {
+                       for (const auto &bound : bounds) {
+                         CheckForImpureCall(SomeExpr{bound});
+                       }
+                     },
+                     [&](const evaluate::Assignment::BoundsRemapping &bounds) {
+                       for (const auto &bound : bounds) {
+                         CheckForImpureCall(SomeExpr{bound.first});
+                         CheckForImpureCall(SomeExpr{bound.second});
+                       }
+                     },
+                 },
           assignment->u);
     }
   }
@@ -494,9 +467,12 @@ private:
   }
 
   void CheckDoControl(const parser::CharBlock &sourceLocation, bool isReal) {
-    if (isReal) {
-      context_.Warn(common::LanguageFeature::RealDoControls, sourceLocation,
-          "DO controls should be INTEGER"_port_en_US);
+    const bool warn{context_.warnOnNonstandardUsage() ||
+        context_.ShouldWarn(common::LanguageFeature::RealDoControls)};
+    if (isReal && !warn) {
+      // No messages for the default case
+    } else if (isReal && warn) {
+      context_.Say(sourceLocation, "DO controls should be INTEGER"_en_US);
     } else {
       SayBadDoControl(sourceLocation);
     }
@@ -508,14 +484,6 @@ private:
       if (!IsVariableName(*symbol)) {
         context_.Say(
             sourceLocation, "DO control must be an INTEGER variable"_err_en_US);
-      } else if (auto why{WhyNotDefinable(sourceLocation,
-                     context_.FindScope(sourceLocation), DefinabilityFlags{},
-                     *symbol)}) {
-        context_
-            .Say(sourceLocation,
-                "'%s' may not be used as a DO variable"_err_en_US,
-                symbol->name())
-            .Attach(std::move(why->set_severity(parser::Severity::Because)));
       } else {
         const DeclTypeSpec *symType{symbol->GetType()};
         if (!symType) {
@@ -532,7 +500,7 @@ private:
 
   // Semantic checks for the limit and step expressions
   void CheckDoExpression(const parser::ScalarExpr &scalarExpression) {
-    if (const SomeExpr * expr{GetExpr(context_, scalarExpression)}) {
+    if (const SomeExpr * expr{GetExpr(scalarExpression)}) {
       if (!ExprHasTypeCategory(*expr, TypeCategory::Integer)) {
         // No warnings or errors for type INTEGER
         const parser::CharBlock &loc{scalarExpression.thing.value().source};
@@ -551,9 +519,8 @@ private:
     if (bounds.step) {
       CheckDoExpression(*bounds.step);
       if (IsZero(*bounds.step)) {
-        context_.Warn(common::UsageWarning::ZeroDoStep,
-            bounds.step->thing.value().source,
-            "DO step expression should not be zero"_warn_en_US);
+        context_.Say(bounds.step->thing.value().source,
+            "DO step expression should not be zero"_en_US);
       }
     }
   }
@@ -601,10 +568,10 @@ private:
     return symbols;
   }
 
-  UnorderedSymbolSet GatherSymbolsFromExpression(
-      const parser::Expr &expression) const {
+  static UnorderedSymbolSet GatherSymbolsFromExpression(
+      const parser::Expr &expression) {
     UnorderedSymbolSet result;
-    if (const auto *expr{GetExpr(context_, expression)}) {
+    if (const auto *expr{GetExpr(expression)}) {
       for (const Symbol &symbol : evaluate::CollectSymbols(*expr)) {
         result.insert(ResolveAssociations(symbol));
       }
@@ -676,10 +643,9 @@ private:
     for (auto &ls : localitySpecs) {
       if (std::holds_alternative<parser::LocalitySpec::DefaultNone>(ls.u)) {
         if (hasDefaultNone) {
-          // F'2023 C1129, you can only have one DEFAULT(NONE)
-          context_.Warn(common::LanguageFeature::BenignRedundancy,
-              currentStatementSourcePosition_,
-              "Only one DEFAULT(NONE) may appear"_port_en_US);
+          // C1127, you can only have one DEFAULT(NONE)
+          context_.Say(currentStatementSourcePosition_,
+              "Only one DEFAULT(NONE) may appear"_en_US);
           break;
         }
         hasDefaultNone = true;
@@ -692,78 +658,18 @@ private:
     }
   }
 
-  void CheckReduce(const parser::LocalitySpec::Reduce &reduce) const {
-    const parser::ReductionOperator &reductionOperator{
-        std::get<parser::ReductionOperator>(reduce.t)};
-    // F'2023 C1132, reduction variables should have suitable intrinsic type
-    for (const parser::Name &x : std::get<std::list<parser::Name>>(reduce.t)) {
-      bool supportedIdentifier{false};
-      if (x.symbol && x.symbol->GetType()) {
-        const auto *type{x.symbol->GetType()};
-        auto typeMismatch{[&](const char *suitable_types) {
-          context_.Say(currentStatementSourcePosition_,
-              "Reduction variable '%s' ('%s') does not have a suitable type ('%s')."_err_en_US,
-              x.symbol->name(), type->AsFortran(), suitable_types);
-        }};
-        supportedIdentifier = true;
-        switch (reductionOperator.v) {
-        case parser::ReductionOperator::Operator::Plus:
-        case parser::ReductionOperator::Operator::Multiply:
-          if (!(type->IsNumeric(TypeCategory::Complex) ||
-                  type->IsNumeric(TypeCategory::Integer) ||
-                  type->IsNumeric(TypeCategory::Real))) {
-            typeMismatch("COMPLEX', 'INTEGER', or 'REAL");
-          }
-          break;
-        case parser::ReductionOperator::Operator::And:
-        case parser::ReductionOperator::Operator::Or:
-        case parser::ReductionOperator::Operator::Eqv:
-        case parser::ReductionOperator::Operator::Neqv:
-          if (type->category() != DeclTypeSpec::Category::Logical) {
-            typeMismatch("LOGICAL");
-          }
-          break;
-        case parser::ReductionOperator::Operator::Max:
-        case parser::ReductionOperator::Operator::Min:
-          if (!(type->IsNumeric(TypeCategory::Integer) ||
-                  type->IsNumeric(TypeCategory::Real))) {
-            typeMismatch("INTEGER', or 'REAL");
-          }
-          break;
-        case parser::ReductionOperator::Operator::Iand:
-        case parser::ReductionOperator::Operator::Ior:
-        case parser::ReductionOperator::Operator::Ieor:
-          if (!type->IsNumeric(TypeCategory::Integer)) {
-            typeMismatch("INTEGER");
-          }
-          break;
-        }
-      }
-      if (!supportedIdentifier) {
-        context_.Say(currentStatementSourcePosition_,
-            "Invalid identifier in REDUCE clause."_err_en_US);
-      }
-    }
-  }
-
   // C1123, concurrent limit or step expressions can't reference index-names
   void CheckConcurrentHeader(const parser::ConcurrentHeader &header) const {
     if (const auto &mask{
             std::get<std::optional<parser::ScalarLogicalExpr>>(header.t)}) {
       CheckMaskIsPure(*mask);
     }
-    const auto &controls{
-        std::get<std::list<parser::ConcurrentControl>>(header.t)};
+    auto &controls{std::get<std::list<parser::ConcurrentControl>>(header.t)};
     UnorderedSymbolSet indexNames;
     for (const parser::ConcurrentControl &control : controls) {
       const auto &indexName{std::get<parser::Name>(control.t)};
       if (indexName.symbol) {
         indexNames.insert(*indexName.symbol);
-      }
-      CheckForImpureCall(std::get<1>(control.t), concurrentNesting_);
-      CheckForImpureCall(std::get<2>(control.t), concurrentNesting_);
-      if (const auto &stride{std::get<3>(control.t)}) {
-        CheckForImpureCall(*stride, concurrentNesting_);
       }
     }
     if (!indexNames.empty()) {
@@ -806,12 +712,6 @@ private:
               std::get<std::optional<parser::ScalarLogicalExpr>>(header.t)}) {
         CheckMaskDoesNotReferenceLocal(*mask, localVars);
       }
-      for (auto &ls : localitySpecs) {
-        if (const auto *reduce{
-                std::get_if<parser::LocalitySpec::Reduce>(&ls.u)}) {
-          CheckReduce(*reduce);
-        }
-      }
       CheckDefaultNoneImpliesExplicitLocality(localitySpecs, block);
     }
   }
@@ -823,32 +723,12 @@ private:
     CheckConcurrentHeader(std::get<parser::ConcurrentHeader>(concurrent.t));
   }
 
-  template <typename T>
-  void CheckForImpureCall(
-      const T &x, std::optional<IndexVarKind> nesting) const {
+  template <typename T> void CheckForImpureCall(const T &x) {
     if (auto bad{FindImpureCall(context_.foldingContext(), x)}) {
-      if (nesting) {
-        context_.Say(
-            "Impure procedure '%s' may not be referenced in a %s"_err_en_US,
-            *bad, LoopKindName(*nesting));
-      } else {
-        context_.Say(
-            "Impure procedure '%s' should not be referenced in a %s header"_warn_en_US,
-            *bad, LoopKindName(kind_));
-      }
+      context_.Say(
+          "Impure procedure '%s' may not be referenced in a %s"_err_en_US, *bad,
+          LoopKindName());
     }
-  }
-  void CheckForImpureCall(const parser::ScalarIntExpr &x,
-      std::optional<IndexVarKind> nesting) const {
-    const auto &parsedExpr{x.thing.thing.value()};
-    auto oldLocation{context_.location()};
-    context_.set_location(parsedExpr.source);
-    if (const auto &typedExpr{parsedExpr.typedExpr}) {
-      if (const auto &expr{typedExpr->v}) {
-        CheckForImpureCall(*expr, nesting);
-      }
-    }
-    context_.set_location(oldLocation);
   }
 
   // Each index should be used on the LHS of each assignment in a FORALL
@@ -856,7 +736,7 @@ private:
     SymbolVector indexVars{context_.GetIndexVars(IndexVarKind::FORALL)};
     if (!indexVars.empty()) {
       UnorderedSymbolSet symbols{evaluate::CollectSymbols(assignment.lhs)};
-      common::visit(
+      std::visit(
           common::visitors{
               [&](const evaluate::Assignment::BoundsSpec &spec) {
                 for (const auto &bound : spec) {
@@ -888,8 +768,9 @@ private:
           assignment.u);
       for (const Symbol &index : indexVars) {
         if (symbols.count(index) == 0) {
-          context_.Warn(common::UsageWarning::UnusedForallIndex,
-              "FORALL index variable '%s' not used on left-hand side of assignment"_warn_en_US,
+          context_.Say(
+              "Warning: FORALL index variable '%s' not used on left-hand side"
+              " of assignment"_en_US,
               index.name());
         }
       }
@@ -897,59 +778,47 @@ private:
   }
 
   // For messages where the DO loop must be DO CONCURRENT, make that explicit.
-  const char *LoopKindName(IndexVarKind kind) const {
-    return kind == IndexVarKind::DO ? "DO CONCURRENT" : "FORALL";
+  const char *LoopKindName() const {
+    return kind_ == IndexVarKind::DO ? "DO CONCURRENT" : "FORALL";
   }
-  const char *LoopKindName() const { return LoopKindName(kind_); }
 
   SemanticsContext &context_;
   const IndexVarKind kind_;
   parser::CharBlock currentStatementSourcePosition_;
-  std::optional<IndexVarKind> concurrentNesting_;
 }; // class DoContext
 
 void DoForallChecker::Enter(const parser::DoConstruct &doConstruct) {
-  DoContext doContext{context_, IndexVarKind::DO, nestedWithinConcurrent_};
-  if (doConstruct.IsDoConcurrent()) {
-    nestedWithinConcurrent_.push_back(IndexVarKind::DO);
-  }
+  DoContext doContext{context_, IndexVarKind::DO};
   doContext.DefineDoVariables(doConstruct);
-  doContext.Check(doConstruct);
 }
 
 void DoForallChecker::Leave(const parser::DoConstruct &doConstruct) {
-  DoContext doContext{context_, IndexVarKind::DO, nestedWithinConcurrent_};
+  DoContext doContext{context_, IndexVarKind::DO};
+  doContext.Check(doConstruct);
   doContext.ResetDoVariables(doConstruct);
-  if (doConstruct.IsDoConcurrent()) {
-    nestedWithinConcurrent_.pop_back();
-  }
 }
 
 void DoForallChecker::Enter(const parser::ForallConstruct &construct) {
-  DoContext doContext{context_, IndexVarKind::FORALL, nestedWithinConcurrent_};
+  DoContext doContext{context_, IndexVarKind::FORALL};
   doContext.ActivateIndexVars(GetControls(construct));
-  nestedWithinConcurrent_.push_back(IndexVarKind::FORALL);
-  doContext.Check(construct);
 }
 void DoForallChecker::Leave(const parser::ForallConstruct &construct) {
-  DoContext doContext{context_, IndexVarKind::FORALL, nestedWithinConcurrent_};
+  DoContext doContext{context_, IndexVarKind::FORALL};
+  doContext.Check(construct);
   doContext.DeactivateIndexVars(GetControls(construct));
-  nestedWithinConcurrent_.pop_back();
 }
 
 void DoForallChecker::Enter(const parser::ForallStmt &stmt) {
-  DoContext doContext{context_, IndexVarKind::FORALL, nestedWithinConcurrent_};
-  nestedWithinConcurrent_.push_back(IndexVarKind::FORALL);
-  doContext.Check(stmt);
+  DoContext doContext{context_, IndexVarKind::FORALL};
   doContext.ActivateIndexVars(GetControls(stmt));
 }
 void DoForallChecker::Leave(const parser::ForallStmt &stmt) {
-  DoContext doContext{context_, IndexVarKind::FORALL, nestedWithinConcurrent_};
+  DoContext doContext{context_, IndexVarKind::FORALL};
+  doContext.Check(stmt);
   doContext.DeactivateIndexVars(GetControls(stmt));
-  nestedWithinConcurrent_.pop_back();
 }
 void DoForallChecker::Leave(const parser::ForallAssignmentStmt &stmt) {
-  DoContext doContext{context_, IndexVarKind::FORALL, nestedWithinConcurrent_};
+  DoContext doContext{context_, IndexVarKind::FORALL};
   doContext.Check(stmt);
 }
 
@@ -959,7 +828,7 @@ static parser::CharBlock GetConstructPosition(const A &a) {
 }
 
 static parser::CharBlock GetNodePosition(const ConstructNode &construct) {
-  return common::visit(
+  return std::visit(
       [&](const auto &x) { return GetConstructPosition(*x); }, construct);
 }
 
@@ -990,24 +859,24 @@ static bool ConstructIsDoConcurrent(const ConstructNode &construct) {
 // leave DO CONCURRENT, CRITICAL, or CHANGE TEAM constructs.
 void DoForallChecker::CheckForBadLeave(
     StmtType stmtType, const ConstructNode &construct) const {
-  common::visit(common::visitors{
-                    [&](const parser::DoConstruct *doConstructPtr) {
-                      if (doConstructPtr->IsDoConcurrent()) {
-                        // C1135 and C1167 -- CYCLE and EXIT statements can't
-                        // leave a DO CONCURRENT
-                        SayBadLeave(stmtType, "DO CONCURRENT", construct);
-                      }
-                    },
-                    [&](const parser::CriticalConstruct *) {
-                      // C1135 and C1168 -- similarly, for CRITICAL
-                      SayBadLeave(stmtType, "CRITICAL", construct);
-                    },
-                    [&](const parser::ChangeTeamConstruct *) {
-                      // C1135 and C1168 -- similarly, for CHANGE TEAM
-                      SayBadLeave(stmtType, "CHANGE TEAM", construct);
-                    },
-                    [](const auto *) {},
-                },
+  std::visit(common::visitors{
+                 [&](const parser::DoConstruct *doConstructPtr) {
+                   if (doConstructPtr->IsDoConcurrent()) {
+                     // C1135 and C1167 -- CYCLE and EXIT statements can't leave
+                     // a DO CONCURRENT
+                     SayBadLeave(stmtType, "DO CONCURRENT", construct);
+                   }
+                 },
+                 [&](const parser::CriticalConstruct *) {
+                   // C1135 and C1168 -- similarly, for CRITICAL
+                   SayBadLeave(stmtType, "CRITICAL", construct);
+                 },
+                 [&](const parser::ChangeTeamConstruct *) {
+                   // C1135 and C1168 -- similarly, for CHANGE TEAM
+                   SayBadLeave(stmtType, "CHANGE TEAM", construct);
+                 },
+                 [](const auto *) {},
+             },
       construct);
 }
 
@@ -1100,7 +969,7 @@ static void CheckIfArgIsDoVar(const evaluate::ActualArgument &arg,
 void DoForallChecker::Leave(const parser::CallStmt &callStmt) {
   if (const auto &typedCall{callStmt.typedCall}) {
     const auto &parsedArgs{
-        std::get<std::list<parser::ActualArgSpec>>(callStmt.call.t)};
+        std::get<std::list<parser::ActualArgSpec>>(callStmt.v.t)};
     auto parsedArgIter{parsedArgs.begin()};
     const evaluate::ActualArguments &checkedArgs{typedCall->arguments()};
     for (const auto &checkedOptionalArg : checkedArgs) {
@@ -1153,7 +1022,7 @@ void DoForallChecker::Enter(const parser::Expr &parsedExpr) { ++exprDepth_; }
 void DoForallChecker::Leave(const parser::Expr &parsedExpr) {
   CHECK(exprDepth_ > 0);
   if (--exprDepth_ == 0) { // Only check top level expressions
-    if (const SomeExpr * expr{GetExpr(context_, parsedExpr)}) {
+    if (const SomeExpr * expr{GetExpr(parsedExpr)}) {
       ActualArgumentSet argSet{CollectActualArguments(*expr)};
       for (const evaluate::ActualArgumentRef &argRef : argSet) {
         CheckIfArgIsDoVar(*argRef, parsedExpr.source, context_);

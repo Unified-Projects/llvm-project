@@ -19,7 +19,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporterVisitors.h"
-#include "clang/StaticAnalyzer/Core/BugReporter/BugSuppression.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExplodedGraph.h"
@@ -27,8 +26,10 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/SVals.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SymExpr.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/ImmutableSet.h"
+#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -38,7 +39,6 @@
 #include "llvm/ADT/iterator_range.h"
 #include <cassert>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +48,7 @@ namespace clang {
 class AnalyzerOptions;
 class ASTContext;
 class Decl;
+class DiagnosticsEngine;
 class LocationContext;
 class SourceManager;
 class Stmt;
@@ -60,6 +61,7 @@ class ExplodedGraph;
 class ExplodedNode;
 class ExprEngine;
 class MemRegion;
+class SValBuilder;
 
 //===----------------------------------------------------------------------===//
 // Interface for individual bug reports.
@@ -453,13 +455,13 @@ public:
   bool isInteresting(SVal V) const;
   bool isInteresting(const LocationContext *LC) const;
 
-  std::optional<bugreporter::TrackingKind>
+  Optional<bugreporter::TrackingKind>
   getInterestingnessKind(SymbolRef sym) const;
 
-  std::optional<bugreporter::TrackingKind>
+  Optional<bugreporter::TrackingKind>
   getInterestingnessKind(const MemRegion *R) const;
 
-  std::optional<bugreporter::TrackingKind> getInterestingnessKind(SVal V) const;
+  Optional<bugreporter::TrackingKind> getInterestingnessKind(SVal V) const;
 
   /// Returns whether or not this report should be considered valid.
   ///
@@ -586,9 +588,6 @@ class BugReporter {
 private:
   BugReporterData& D;
 
-  /// The top-level entry point for the issue to be reported.
-  const Decl *AnalysisEntryPoint = nullptr;
-
   /// Generate and flush the diagnostics for the given bug report.
   void FlushReport(BugReportEquivClass& EQ);
 
@@ -597,9 +596,6 @@ private:
 
   /// A vector of BugReports for tracking the allocated pointers and cleanup.
   std::vector<BugReportEquivClass *> EQClassesVector;
-
-  /// User-provided in-code suppressions.
-  BugSuppression UserSuppressions;
 
 public:
   BugReporter(BugReporterData &d);
@@ -614,9 +610,8 @@ public:
 
   /// Iterator over the set of BugReports tracked by the BugReporter.
   using EQClasses_iterator = llvm::FoldingSet<BugReportEquivClass>::iterator;
-  llvm::iterator_range<EQClasses_iterator> equivalenceClasses() {
-    return EQClasses;
-  }
+  EQClasses_iterator EQClasses_begin() { return EQClasses.begin(); }
+  EQClasses_iterator EQClasses_end() { return EQClasses.end(); }
 
   ASTContext &getContext() { return D.getASTContext(); }
 
@@ -625,14 +620,6 @@ public:
   const AnalyzerOptions &getAnalyzerOptions() { return D.getAnalyzerOptions(); }
 
   Preprocessor &getPreprocessor() { return D.getPreprocessor(); }
-
-  /// Get the top-level entry point for the issue to be reported.
-  const Decl *getAnalysisEntryPoint() const { return AnalysisEntryPoint; }
-
-  void setAnalysisEntryPoint(const Decl *EntryPoint) {
-    assert(EntryPoint);
-    AnalysisEntryPoint = EntryPoint;
-  }
 
   /// Add the given report to the set of reports tracked by BugReporter.
   ///
@@ -644,14 +631,14 @@ public:
   void EmitBasicReport(const Decl *DeclWithIssue, const CheckerBase *Checker,
                        StringRef BugName, StringRef BugCategory,
                        StringRef BugStr, PathDiagnosticLocation Loc,
-                       ArrayRef<SourceRange> Ranges = {},
-                       ArrayRef<FixItHint> Fixits = {});
+                       ArrayRef<SourceRange> Ranges = None,
+                       ArrayRef<FixItHint> Fixits = None);
 
   void EmitBasicReport(const Decl *DeclWithIssue, CheckerNameRef CheckerName,
                        StringRef BugName, StringRef BugCategory,
                        StringRef BugStr, PathDiagnosticLocation Loc,
-                       ArrayRef<SourceRange> Ranges = {},
-                       ArrayRef<FixItHint> Fixits = {});
+                       ArrayRef<SourceRange> Ranges = None,
+                       ArrayRef<FixItHint> Fixits = None);
 
 private:
   llvm::StringMap<std::unique_ptr<BugType>> StrBugTypes;
@@ -724,7 +711,6 @@ public:
   virtual ~BugReporterContext() = default;
 
   PathSensitiveBugReporter& getBugReporter() { return BR; }
-  const PathSensitiveBugReporter &getBugReporter() const { return BR; }
 
   ProgramStateManager& getStateManager() const {
     return BR.getStateManager();
@@ -795,11 +781,11 @@ public:
     return T->getTagKind() == &Kind;
   }
 
-  std::optional<std::string> generateMessage(BugReporterContext &BRC,
-                                             PathSensitiveBugReport &R) const {
+  Optional<std::string> generateMessage(BugReporterContext &BRC,
+                                        PathSensitiveBugReport &R) const {
     std::string Msg = Cb(BRC, R);
     if (Msg.empty())
-      return std::nullopt;
+      return None;
 
     return std::move(Msg);
   }

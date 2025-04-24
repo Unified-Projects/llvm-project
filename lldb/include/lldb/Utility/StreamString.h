@@ -20,11 +20,9 @@
 
 namespace lldb_private {
 
-class ScriptInterpreter;
-
 class StreamString : public Stream {
 public:
-  StreamString(bool colors = false);
+  StreamString();
 
   StreamString(uint32_t flags, uint32_t addr_size, lldb::ByteOrder byte_order);
 
@@ -47,8 +45,6 @@ public:
   void FillLastLineToColumn(uint32_t column, char fill_char);
 
 protected:
-  friend class ScriptInterpreter;
-
   std::string m_packet;
   size_t WriteImpl(const void *s, size_t length) override;
 };

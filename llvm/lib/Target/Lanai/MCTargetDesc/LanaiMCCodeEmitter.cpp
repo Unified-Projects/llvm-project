@@ -21,9 +21,10 @@
 #include "llvm/MC/MCFixup.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/EndianStream.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
 
@@ -73,7 +74,7 @@ public:
                                   SmallVectorImpl<MCFixup> &Fixups,
                                   const MCSubtargetInfo &SubtargetInfo) const;
 
-  void encodeInstruction(const MCInst &Inst, SmallVectorImpl<char> &CB,
+  void encodeInstruction(const MCInst &Inst, raw_ostream &Ostream,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &SubtargetInfo) const override;
 
@@ -169,14 +170,15 @@ LanaiMCCodeEmitter::adjustPqBitsSpls(const MCInst &Inst, unsigned Value,
 }
 
 void LanaiMCCodeEmitter::encodeInstruction(
-    const MCInst &Inst, SmallVectorImpl<char> &CB,
-    SmallVectorImpl<MCFixup> &Fixups,
+    const MCInst &Inst, raw_ostream &Ostream, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &SubtargetInfo) const {
   // Get instruction encoding and emit it
   unsigned Value = getBinaryCodeForInstr(Inst, Fixups, SubtargetInfo);
   ++MCNumEmitted; // Keep track of the number of emitted insns.
 
-  support::endian::write<uint32_t>(CB, Value, llvm::endianness::big);
+  // Emit bytes in big-endian
+  for (int i = (4 - 1) * 8; i >= 0; i -= 8)
+    Ostream << static_cast<char>((Value >> i) & 0xff);
 }
 
 // Encode Lanai Memory Operand
@@ -302,6 +304,7 @@ unsigned LanaiMCCodeEmitter::getBranchTargetOpValue(
 
 llvm::MCCodeEmitter *
 llvm::createLanaiMCCodeEmitter(const MCInstrInfo &InstrInfo,
+                               const MCRegisterInfo & /*MRI*/,
                                MCContext &context) {
   return new LanaiMCCodeEmitter(InstrInfo, context);
 }

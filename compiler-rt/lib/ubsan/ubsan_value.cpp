@@ -18,7 +18,9 @@
 #include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_mutex.h"
 
-#if SANITIZER_APPLE
+// TODO(dliew): Prefer '__APPLE__' here over 'SANITIZER_MAC', as the latter is
+// unclear. rdar://58124919 tracks using a more obviously portable guard.
+#if defined(__APPLE__)
 #include <dlfcn.h>
 #endif
 
@@ -27,7 +29,7 @@ using namespace __ubsan;
 typedef const char *(*ObjCGetClassNameTy)(void *);
 
 const char *__ubsan::getObjCClassName(ValueHandle Pointer) {
-#if SANITIZER_APPLE
+#if defined(__APPLE__)
   // We need to query the ObjC runtime for some information, but do not want
   // to introduce a static dependency from the ubsan runtime onto ObjC. Try to
   // grab a handle to the ObjC runtime used by the process.
@@ -67,21 +69,18 @@ const char *__ubsan::getObjCClassName(ValueHandle Pointer) {
 
 SIntMax Value::getSIntValue() const {
   CHECK(getType().isSignedIntegerTy());
-  // Val was zero-extended to ValueHandle. Sign-extend from original width
-  // to SIntMax.
-  const unsigned ExtraBits =
-      sizeof(SIntMax) * 8 - getType().getIntegerBitCount();
   if (isInlineInt()) {
+    // Val was zero-extended to ValueHandle. Sign-extend from original width
+    // to SIntMax.
+    const unsigned ExtraBits =
+      sizeof(SIntMax) * 8 - getType().getIntegerBitWidth();
     return SIntMax(UIntMax(Val) << ExtraBits) >> ExtraBits;
   }
-  if (getType().getIntegerBitWidth() == 64) {
-    return SIntMax(UIntMax(*reinterpret_cast<s64 *>(Val)) << ExtraBits) >>
-           ExtraBits;
-  }
+  if (getType().getIntegerBitWidth() == 64)
+    return *reinterpret_cast<s64*>(Val);
 #if HAVE_INT128_T
   if (getType().getIntegerBitWidth() == 128)
-    return SIntMax(UIntMax(*reinterpret_cast<s128 *>(Val)) << ExtraBits) >>
-           ExtraBits;
+    return *reinterpret_cast<s128*>(Val);
 #else
   if (getType().getIntegerBitWidth() == 128)
     UNREACHABLE("libclang_rt.ubsan was built without __int128 support");

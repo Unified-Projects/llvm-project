@@ -9,14 +9,14 @@
 #ifndef LLVM_LIBC_SRC_SIGNAL_SIGACTION_H
 #define LLVM_LIBC_SRC_SIGNAL_SIGACTION_H
 
-#include "hdr/types/struct_sigaction.h"
-#include "src/__support/macros/config.h"
+#define __LLVM_LIBC_INTERNAL_SIGACTION
+#include "include/signal.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
-int sigaction(int signal, const struct sigaction *__restrict libc_new,
-              struct sigaction *__restrict libc_old);
+int sigaction(int signal, const struct __sigaction *__restrict libc_new,
+              struct __sigaction *__restrict libc_old);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_SIGNAL_SIGACTION_H

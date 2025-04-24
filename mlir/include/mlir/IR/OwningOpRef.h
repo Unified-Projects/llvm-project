@@ -13,11 +13,9 @@
 #ifndef MLIR_IR_OWNINGOPREF_H
 #define MLIR_IR_OWNINGOPREF_H
 
-#include <type_traits>
 #include <utility>
 
 namespace mlir {
-class Operation;
 
 /// This class acts as an owning reference to an op, and will automatically
 /// destroy the held op on destruction if the held op is valid.
@@ -31,7 +29,7 @@ public:
   /// The underlying operation type stored in this reference.
   using OperationT = OpTy;
 
-  OwningOpRef(std::nullptr_t = nullptr) : op(nullptr) {}
+  OwningOpRef(std::nullptr_t = nullptr) {}
   OwningOpRef(OpTy op) : op(op) {}
   OwningOpRef(OwningOpRef &&other) : op(other.release()) {}
   ~OwningOpRef() {
@@ -50,22 +48,12 @@ public:
   /// Allow accessing the internal op.
   OpTy get() const { return op; }
   OpTy operator*() const { return op; }
-  auto operator->() {
-    // Specialize for the case where OpTy is a pointer, to allow using
-    // OwningOpRef<Operation*>.
-    if constexpr (std::is_pointer<OpTy>::value)
-      return op;
-    else
-      return &op;
-  }
+  OpTy *operator->() { return &op; }
   explicit operator bool() const { return op; }
-
-  /// Downcast to generic operation.
-  operator OwningOpRef<Operation *>() && { return release().getOperation(); }
 
   /// Release the referenced op.
   OpTy release() {
-    OpTy released(nullptr);
+    OpTy released;
     std::swap(released, op);
     return released;
   }
@@ -74,6 +62,6 @@ private:
   OpTy op;
 };
 
-} // namespace mlir
+} // end namespace mlir
 
 #endif // MLIR_IR_OWNINGOPREF_H

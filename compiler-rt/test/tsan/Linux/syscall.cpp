@@ -6,7 +6,7 @@
 #include <sys/wait.h>
 
 int pipefd[2];
-unsigned long long buf[2];
+char buf[10];
 
 static void *thr(void *p) {
   barrier_wait(&barrier);

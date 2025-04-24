@@ -1,41 +1,44 @@
 add_subdirectory(Utils)
 
 add_mlir_library(MLIRTransforms
+  BufferDeallocation.cpp
+  BufferOptimizations.cpp
+  BufferResultsToOutParams.cpp
+  BufferUtils.cpp
+  Bufferize.cpp
   Canonicalizer.cpp
-  CompositePass.cpp
-  ControlFlowSink.cpp
   CSE.cpp
-  GenerateRuntimeVerification.cpp
-  InlinerPass.cpp
+  Inliner.cpp
   LocationSnapshot.cpp
+  LoopCoalescing.cpp
+  LoopFusion.cpp
   LoopInvariantCodeMotion.cpp
-  Mem2Reg.cpp
+  NormalizeMemRefs.cpp
   OpStats.cpp
-  PrintIR.cpp
-  RemoveDeadValues.cpp
+  ParallelLoopCollapsing.cpp
+  PipelineDataTransfer.cpp
   SCCP.cpp
-  SROA.cpp
   StripDebugInfo.cpp
   SymbolDCE.cpp
-  SymbolPrivatize.cpp
-  TopologicalSort.cpp
   ViewOpGraph.cpp
+  ViewRegionGraph.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Transforms
 
   DEPENDS
+  MLIRStandardOpsIncGen
   MLIRTransformsPassIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAffine
   MLIRAnalysis
-  MLIRFunctionInterfaces
+  MLIRCopyOpInterface
+  MLIRLinalg
   MLIRLoopLikeInterface
-  MLIRMemorySlotInterfaces
+  MLIRMemRef
+  MLIRSCF
   MLIRPass
-  MLIRRuntimeVerifiableOpInterface
-  MLIRSideEffectInterfaces
-  MLIRSupport
   MLIRTransformUtils
-  MLIRUBDialect
+  MLIRVector
   )

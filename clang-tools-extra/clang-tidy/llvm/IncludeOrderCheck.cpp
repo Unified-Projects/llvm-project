@@ -10,25 +10,25 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
-#include "llvm/ADT/STLExtras.h"
 
 #include <map>
 
-namespace clang::tidy::llvm_check {
+namespace clang {
+namespace tidy {
+namespace llvm_check {
 
 namespace {
 class IncludeOrderPPCallbacks : public PPCallbacks {
 public:
   explicit IncludeOrderPPCallbacks(ClangTidyCheck &Check,
                                    const SourceManager &SM)
-      : Check(Check), SM(SM) {}
+      : LookForMainModule(true), Check(Check), SM(SM) {}
 
   void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           StringRef FileName, bool IsAngled,
-                          CharSourceRange FilenameRange,
-                          OptionalFileEntryRef File, StringRef SearchPath,
-                          StringRef RelativePath, const Module *SuggestedModule,
-                          bool ModuleImported,
+                          CharSourceRange FilenameRange, const FileEntry *File,
+                          StringRef SearchPath, StringRef RelativePath,
+                          const Module *Imported,
                           SrcMgr::CharacteristicKind FileType) override;
   void EndOfMainFile() override;
 
@@ -41,9 +41,9 @@ private:
     bool IsMainModule;     ///< true if this was the first include in a file
   };
 
-  using FileIncludes = std::vector<IncludeDirective>;
+  typedef std::vector<IncludeDirective> FileIncludes;
   std::map<clang::FileID, FileIncludes> IncludeDirectives;
-  bool LookForMainModule = true;
+  bool LookForMainModule;
 
   ClangTidyCheck &Check;
   const SourceManager &SM;
@@ -62,18 +62,14 @@ static int getPriority(StringRef Filename, bool IsAngled, bool IsMainModule) {
     return 0;
 
   // LLVM and clang headers are in the penultimate position.
-  if (Filename.starts_with("llvm/") || Filename.starts_with("llvm-c/") ||
-      Filename.starts_with("clang/") || Filename.starts_with("clang-c/"))
+  if (Filename.startswith("llvm/") || Filename.startswith("llvm-c/") ||
+      Filename.startswith("clang/") || Filename.startswith("clang-c/"))
     return 2;
 
-  // Put these between system and llvm headers to be consistent with LLVM
-  // clang-format style.
-  if (Filename.starts_with("gtest/") || Filename.starts_with("gmock/"))
-    return 3;
-
   // System headers are sorted to the end.
-  if (IsAngled)
-    return 4;
+  if (IsAngled || Filename.startswith("gtest/") ||
+      Filename.startswith("gmock/"))
+    return 3;
 
   // Other headers are inserted between the main module header and LLVM headers.
   return 1;
@@ -81,9 +77,9 @@ static int getPriority(StringRef Filename, bool IsAngled, bool IsMainModule) {
 
 void IncludeOrderPPCallbacks::InclusionDirective(
     SourceLocation HashLoc, const Token &IncludeTok, StringRef FileName,
-    bool IsAngled, CharSourceRange FilenameRange, OptionalFileEntryRef File,
-    StringRef SearchPath, StringRef RelativePath, const Module *SuggestedModule,
-    bool ModuleImported, SrcMgr::CharacteristicKind FileType) {
+    bool IsAngled, CharSourceRange FilenameRange, const FileEntry *File,
+    StringRef SearchPath, StringRef RelativePath, const Module *Imported,
+    SrcMgr::CharacteristicKind FileType) {
   // We recognize the first include as a special main module header and want
   // to leave it in the top position.
   IncludeDirective ID = {HashLoc, FilenameRange, std::string(FileName),
@@ -125,26 +121,26 @@ void IncludeOrderPPCallbacks::EndOfMainFile() {
 
     // Sort the includes. We first sort by priority, then lexicographically.
     for (unsigned BI = 0, BE = Blocks.size() - 1; BI != BE; ++BI)
-      llvm::sort(IncludeIndices.begin() + Blocks[BI],
-                 IncludeIndices.begin() + Blocks[BI + 1],
-                 [&FileDirectives](unsigned LHSI, unsigned RHSI) {
-                   IncludeDirective &LHS = FileDirectives[LHSI];
-                   IncludeDirective &RHS = FileDirectives[RHSI];
+      std::sort(IncludeIndices.begin() + Blocks[BI],
+                IncludeIndices.begin() + Blocks[BI + 1],
+                [&FileDirectives](unsigned LHSI, unsigned RHSI) {
+                  IncludeDirective &LHS = FileDirectives[LHSI];
+                  IncludeDirective &RHS = FileDirectives[RHSI];
 
-                   int PriorityLHS = getPriority(LHS.Filename, LHS.IsAngled,
-                                                 LHS.IsMainModule);
-                   int PriorityRHS = getPriority(RHS.Filename, RHS.IsAngled,
-                                                 RHS.IsMainModule);
+                  int PriorityLHS =
+                      getPriority(LHS.Filename, LHS.IsAngled, LHS.IsMainModule);
+                  int PriorityRHS =
+                      getPriority(RHS.Filename, RHS.IsAngled, RHS.IsMainModule);
 
-                   return std::tie(PriorityLHS, LHS.Filename) <
-                          std::tie(PriorityRHS, RHS.Filename);
-                 });
+                  return std::tie(PriorityLHS, LHS.Filename) <
+                         std::tie(PriorityRHS, RHS.Filename);
+                });
 
     // Emit a warning for each block and fixits for all changes within that
     // block.
     for (unsigned BI = 0, BE = Blocks.size() - 1; BI != BE; ++BI) {
       // Find the first include that's not in the right position.
-      unsigned I = 0, E = 0;
+      unsigned I, E;
       for (I = Blocks[BI], E = Blocks[BI + 1]; I != E; ++I)
         if (IncludeIndices[I] != I)
           break;
@@ -182,4 +178,6 @@ void IncludeOrderPPCallbacks::EndOfMainFile() {
   IncludeDirectives.clear();
 }
 
-} // namespace clang::tidy::llvm_check
+} // namespace llvm_check
+} // namespace tidy
+} // namespace clang

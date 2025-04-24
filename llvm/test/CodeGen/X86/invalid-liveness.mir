@@ -1,5 +1,4 @@
 # RUN: not --crash llc -mtriple=i686-- -run-pass liveintervals -o - %s 2>&1 | FileCheck %s
-# RUN: not --crash llc -mtriple=i686-- --passes='print<live-intervals>' -o - %s 2>&1 | FileCheck %s
 # REQUIRES: asserts
 
 --- |
@@ -26,5 +25,5 @@ body: |
 
   bb.3:
     $eax = COPY %0
-    RET64 $eax
+    RETQ $eax
 ...

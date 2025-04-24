@@ -43,12 +43,6 @@ parsing options from the command line.  ``LIT_OPTS`` is primarily useful for
 supplementing or overriding the command-line options supplied to :program:`lit`
 by ``check`` targets defined by a project's build system.
 
-:program:`lit` can also read options from response files which are specified as
-inputs using the ``@path/to/file.rsp`` syntax. Arguments read from a file must
-be one per line and are treated as if they were in the same place as the
-original file referencing argument on the command line. A response file can
-reference other response files.
-
 Users interested in the :program:`lit` architecture or designing a
 :program:`lit` testing implementation should see :ref:`lit-infrastructure`.
 
@@ -57,11 +51,7 @@ GENERAL OPTIONS
 
 .. option:: -h, --help
 
- Show the :program:`lit` help message and exit.
-
-.. option:: --version
-
- Show :program:`lit`'s version number and exit.
+ Show the :program:`lit` help message.
 
 .. option:: -j N, --workers=N
 
@@ -98,64 +88,38 @@ OUTPUT OPTIONS
  Show more information on test failures, for example the entire test output
  instead of just the test result.
 
- Each command is printed before it is executed. This can be valuable for
- debugging test failures, as the last printed command is the one that failed.
- Moreover, :program:`lit` inserts ``'RUN: at line N'`` before each
- command pipeline in the output to help you locate the source line of
- the failed command.
-
 .. option:: -vv, --echo-all-commands
 
- Deprecated alias for -v.
+ Echo all commands to stdout, as they are being executed.
+ This can be valuable for debugging test failures, as the last echoed command
+ will be the one which has failed.
+ :program:`lit` normally inserts a no-op command (``:`` in the case of bash)
+ with argument ``'RUN: at line N'`` before each command pipeline, and this
+ option also causes those no-op commands to be echoed to stdout to help you
+ locate the source line of the failed command.
+ This option implies ``--verbose``.
 
 .. option:: -a, --show-all
 
- Enable -v, but for all tests not just failed tests.
-
-.. option:: -o PATH, --output PATH
-
- Write test results to the provided path.
+ Show more information about all tests, for example the entire test
+ commandline and output.
 
 .. option:: --no-progress-bar
 
  Do not use curses based progress bar.
 
-.. option:: --show-excluded
-
- Show excluded tests.
-
-.. option:: --show-skipped
-
- Show skipped tests.
-
 .. option:: --show-unsupported
 
- Show unsupported tests.
-
-.. option:: --show-pass
-
- Show passed tests.
-
-.. option:: --show-flakypass
-
- Show passed with retry tests.
+ Show the names of unsupported tests.
 
 .. option:: --show-xfail
 
- Show expectedly failed tests.
+ Show the names of tests that were expected to fail.
 
 .. _execution-options:
 
 EXECUTION OPTIONS
 -----------------
-
-.. option:: --gtest-sharding
-
- Enable sharding for GoogleTest format.
-
-.. option:: --no-gtest-sharding
-
- Disable sharding for GoogleTest format.
 
 .. option:: --path=PATH
 
@@ -171,6 +135,11 @@ EXECUTION OPTIONS
  "``valgrind``" feature that can be used to conditionally disable (or expect
  failure in) certain tests.
 
+.. option:: --vg-arg=ARG
+
+ When :option:`--vg` is used, specify an additional argument to pass to
+ :program:`valgrind` itself.
+
 .. option:: --vg-leak
 
  When :option:`--vg` is used, enable memory leak checks.  When this option is
@@ -178,69 +147,20 @@ EXECUTION OPTIONS
  feature that can be used to conditionally disable (or expect failure in)
  certain tests.
 
-.. option:: --vg-arg=ARG
-
- When :option:`--vg` is used, specify an additional argument to pass to
- :program:`valgrind` itself.
-
-.. option:: --no-execute
-
- Don't execute any tests (assume that they pass).
-
-.. option:: --xunit-xml-output XUNIT_XML_OUTPUT
-
- Write XUnit-compatible XML test reports to the specified file.
-
-.. option:: --report-failures-only
-
- Only include unresolved, timed out, failed and unexpectedly passed tests in the report.
-
-.. option:: --resultdb-output RESULTDB_OUTPUT
-
- Write LuCI ResultDB compatible JSON to the specified file.
-
-.. option:: --time-trace-output TIME_TRACE_OUTPUT
-
- Write Chrome tracing compatible JSON to the specified file
-
-.. option:: --timeout MAXINDIVIDUALTESTTIME
-
- Maximum time to spend running a single test (in seconds). 0 means no time
- limit. [Default: 0]
-
-.. option:: --timeout=N
-
- Spend at most ``N`` seconds (approximately) running each individual test.
- ``0`` means no time limit, and ``0`` is the default. Note that this is not an
- alias for :option:`--max-time`; the two are different kinds of maximums.
-
-.. option:: --max-failures MAX_FAILURES
-
- Stop execution after the given number of failures.
-
-.. option:: --allow-empty-runs
-
- Do not fail the run if all tests are filtered out.
-
-.. option:: --per-test-coverage
-
- Emit the necessary test coverage data, divided per test case (involves
- setting a unique value to LLVM_PROFILE_FILE for each RUN). The coverage
- data files will be emitted in the directory specified by ``config.test_exec_root``.
-
-.. option:: --ignore-fail
-
- Exit with status zero even if some tests fail.
-
-.. option:: --skip-test-time-recording
-
- Do not track elapsed wall time for each test.
-
 .. option:: --time-tests
 
  Track the wall time individual tests take to execute and includes the results
  in the summary output.  This is useful for determining which tests in a test
  suite take the most time to execute.
+
+.. option:: --ignore-fail
+
+ Exit with status zero even if some tests fail.
+
+.. option:: --no-indirectly-run-check
+
+ Do not error if a test would not be run if the user had specified the
+ containing directory instead of naming the test directly.
 
 .. _selection-options:
 
@@ -248,12 +168,21 @@ SELECTION OPTIONS
 -----------------
 
 By default, `lit` will run failing tests first, then run tests in descending
-execution time order to optimize concurrency.  The execution order can be
-changed using the :option:`--order` option.
+execution time order to optimize concurrency.
 
 The timing data is stored in the `test_exec_root` in a file named
 `.lit_test_times.txt`. If this file does not exist, then `lit` checks the
 `test_source_root` for the file to optionally accelerate clean builds.
+
+.. option:: --shuffle
+
+ Run the tests in a random order, not failing/slowest first.
+
+.. option:: --max-failures N
+
+ Stop execution after the given number ``N`` of failures.
+ An integer argument should be passed on the command line
+ prior to execution.
 
 .. option:: --max-tests=N
 
@@ -265,27 +194,28 @@ The timing data is stored in the `test_exec_root` in a file named
  Note that this is not an alias for :option:`--timeout`; the two are
  different kinds of maximums.
 
-.. option:: --order={lexical,random,smart}
+.. option:: --num-shards=M
 
- Define the order in which tests are run. The supported values are:
+ Divide the set of selected tests into ``M`` equal-sized subsets or
+ "shards", and run only one of them.  Must be used with the
+ ``--run-shard=N`` option, which selects the shard to run. The environment
+ variable ``LIT_NUM_SHARDS`` can also be used in place of this
+ option. These two options provide a coarse mechanism for partitioning large
+ testsuites, for parallel execution on separate machines (say in a large
+ testing farm).
 
- - lexical - tests will be run in lexical order according to the test file
-   path. This option is useful when predictable test order is desired.
+.. option:: --run-shard=N
 
- - random - tests will be run in random order.
+ Select which shard to run, assuming the ``--num-shards=M`` option was
+ provided. The two options must be used together, and the value of ``N``
+ must be in the range ``1..M``. The environment variable
+ ``LIT_RUN_SHARD`` can also be used in place of this option.
 
- - smart - tests that failed previously will be run first, then the remaining
-   tests, all in descending execution time order. This is the default as it
-   optimizes concurrency.
+.. option:: --timeout=N
 
-.. option:: --shuffle
-
- Run the tests in a random order, not failing/slowest first. Deprecated,
- use :option:`--order` instead.
-
-.. option:: -i, --incremental
-
- Run failed tests first (DEPRECATED: use ``--order=smart``).
+ Spend at most ``N`` seconds (approximately) running each individual test.
+ ``0`` means no time limit, and ``0`` is the default. Note that this is not an
+ alias for :option:`--max-time`; the two are different kinds of maximums.
 
 .. option:: --filter=REGEXP
 
@@ -343,23 +273,6 @@ The timing data is stored in the `test_exec_root` in a file named
   primary purpose is to suppress an ``XPASS`` result without modifying a test
   case that uses the ``XFAIL`` directive.
 
-.. option:: --num-shards=M
-
- Divide the set of selected tests into ``M`` equal-sized subsets or
- "shards", and run only one of them.  Must be used with the
- ``--run-shard=N`` option, which selects the shard to run. The environment
- variable ``LIT_NUM_SHARDS`` can also be used in place of this
- option. These two options provide a coarse mechanism for partitioning large
- testsuites, for parallel execution on separate machines (say in a large
- testing farm).
-
-.. option:: --run-shard=N
-
- Select which shard to run, assuming the ``--num-shards=M`` option was
- provided. The two options must be used together, and the value of ``N``
- must be in the range ``1..M``. The environment variable
- ``LIT_RUN_SHARD`` can also be used in place of this option.
-
 ADDITIONAL OPTIONS
 ------------------
 
@@ -375,11 +288,6 @@ ADDITIONAL OPTIONS
 .. option:: --show-tests
 
  List all of the discovered tests and exit.
-
-.. option:: --show-used-features
-
- Show all features used in the test suite (in ``XFAIL``, ``UNSUPPORTED`` and
- ``REQUIRES``) and exit.
 
 EXIT STATUS
 -----------
@@ -529,8 +437,9 @@ executed, two important global variables are predefined:
  tests in the suite.
 
  **standalone_tests** When true, mark a directory with tests expected to be run
- standalone. Test discovery is disabled for that directory. *lit.suffixes* and
- *lit.excludes* must be empty when this variable is true.
+ standalone. Test discovery is disabled for that directory and
+ *--no-indirectly-run-check* is in effect. *lit.suffixes* and *lit.excludes*
+ must be empty when this variable is true.
 
  **suffixes** For **lit** test formats which scan directories for tests, this
  variable is a list of suffixes to identify test files.  Used by: *ShTest*.
@@ -599,11 +508,8 @@ TestRunner.py:
  %S                      source dir (directory of the file currently being run)
  %p                      same as %S
  %{pathsep}              path separator
- %{fs-src-root}          root component of file system paths pointing to the LLVM checkout
- %{fs-tmp-root}          root component of file system paths pointing to the test's temporary directory
- %{fs-sep}               file system path separator
  %t                      temporary file name unique to the test
- %basename_t             The last path component of %t but without the ``.tmp`` extension (deprecated, use ``%{t:stem}`` instead)
+ %basename_t             The last path component of %t but without the ``.tmp`` extension
  %T                      parent directory of %t (not unique, deprecated, do not use)
  %%                      %
  %/s                     %s but ``\`` is replaced by ``/``
@@ -611,18 +517,6 @@ TestRunner.py:
  %/p                     %p but ``\`` is replaced by ``/``
  %/t                     %t but ``\`` is replaced by ``/``
  %/T                     %T but ``\`` is replaced by ``/``
- %{s:basename}           The last path component of %s
- %{t:stem}               The last path component of %t but without the ``.tmp`` extension (alias for %basename_t)
- %{s:real}               %s after expanding all symbolic links and substitute drives
- %{S:real}               %S after expanding all symbolic links and substitute drives
- %{p:real}               %p after expanding all symbolic links and substitute drives
- %{t:real}               %t after expanding all symbolic links and substitute drives
- %{T:real}               %T after expanding all symbolic links and substitute drives
- %{/s:real}              %/s after expanding all symbolic links and substitute drives
- %{/S:real}              %/S after expanding all symbolic links and substitute drives
- %{/p:real}              %/p after expanding all symbolic links and substitute drives
- %{/t:real}              %/t after expanding all symbolic links and substitute drives
- %{/T:real}              %/T after expanding all symbolic links and substitute drives
  %{/s:regex_replacement} %/s but escaped for use in the replacement of a ``s@@@`` command in sed
  %{/S:regex_replacement} %/S but escaped for use in the replacement of a ``s@@@`` command in sed
  %{/p:regex_replacement} %/p but escaped for use in the replacement of a ``s@@@`` command in sed
@@ -643,6 +537,14 @@ TestRunner.py:
 Other substitutions are provided that are variations on this base set and
 further substitution patterns can be defined by each test module. See the
 modules :ref:`local-configuration-files`.
+
+By default, substitutions are expanded exactly once, so that if e.g. a
+substitution ``%build`` is defined in top of another substitution ``%cxx``,
+``%build`` will expand to ``%cxx`` textually, not to what ``%cxx`` expands to.
+However, if the ``recursiveExpansionLimit`` property of the ``TestingConfig``
+is set to a non-negative integer, substitutions will be expanded recursively
+until that limit is reached. It is an error if the limit is reached and
+expanding substitutions again would yield a different result.
 
 More detailed information on substitutions can be found in the
 :doc:`../TestingGuide`.
@@ -698,23 +600,6 @@ B, C, and D, and a log message for the failing test C:
   Test 'C' failed as a result of exit code 1.
   ********************
   PASS: D (4 of 4)
-
-DEFAULT FEATURES
-~~~~~~~~~~~~~~~~~
-
-For convenience :program:`lit` automatically adds **available_features** for
-some common use cases.
-
-:program:`lit` adds a feature based on the operating system being built on, for
-example: `system-darwin`, `system-linux`, etc. :program:`lit` also
-automatically adds a feature based on the current architecture, for example
-`target-x86_64`, `target-aarch64`, etc.
-
-When building with sanitizers enabled, :program:`lit` automatically adds the
-short name of the sanitizer, for example: `asan`, `tsan`, etc.
-
-To see the full list of features that can be added, see
-*llvm/utils/lit/lit/llvm/config.py*.
 
 LIT EXAMPLE TESTS
 ~~~~~~~~~~~~~~~~~

@@ -9,10 +9,12 @@
 #ifndef LLD_ELF_ICF_H
 #define LLD_ELF_ICF_H
 
-namespace lld::elf {
-struct Ctx;
+namespace lld {
+namespace elf {
 
-template <class ELFT> void doIcf(Ctx &);
-}
+template <class ELFT> void doIcf();
+
+} // namespace elf
+} // namespace lld
 
 #endif

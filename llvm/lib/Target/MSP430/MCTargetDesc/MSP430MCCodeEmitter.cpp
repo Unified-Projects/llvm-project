@@ -24,7 +24,9 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "mccodeemitter"
 
@@ -72,13 +74,12 @@ public:
   MSP430MCCodeEmitter(MCContext &ctx, MCInstrInfo const &MCII)
       : Ctx(ctx), MCII(MCII) {}
 
-  void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
+  void encodeInstruction(const MCInst &MI, raw_ostream &OS,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const override;
 };
 
-void MSP430MCCodeEmitter::encodeInstruction(const MCInst &MI,
-                                            SmallVectorImpl<char> &CB,
+void MSP430MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
   const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
@@ -92,8 +93,7 @@ void MSP430MCCodeEmitter::encodeInstruction(const MCInst &MI,
   size_t WordCount = Size / 2;
 
   while (WordCount--) {
-    support::endian::write(CB, (uint16_t)BinaryOpCode,
-                           llvm::endianness::little);
+    support::endian::write(OS, (uint16_t)BinaryOpCode, support::little);
     BinaryOpCode >>= 16;
   }
 }
@@ -167,7 +167,7 @@ unsigned MSP430MCCodeEmitter::getCGImmOpValue(const MCInst &MI, unsigned Op,
                                               const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(Op);
   assert(MO.isImm() && "Expr operand expected");
-
+  
   int64_t Imm = MO.getImm();
   switch (Imm) {
   default:
@@ -200,6 +200,7 @@ unsigned MSP430MCCodeEmitter::getCCOpValue(const MCInst &MI, unsigned Op,
 }
 
 MCCodeEmitter *createMSP430MCCodeEmitter(const MCInstrInfo &MCII,
+                                         const MCRegisterInfo &MRI,
                                          MCContext &Ctx) {
   return new MSP430MCCodeEmitter(Ctx, MCII);
 }

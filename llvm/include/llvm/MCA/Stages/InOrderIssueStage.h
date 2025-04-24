@@ -21,7 +21,6 @@
 
 namespace llvm {
 namespace mca {
-class LSUnitBase;
 class RegisterFile;
 
 struct StallInfo {
@@ -30,15 +29,14 @@ struct StallInfo {
     REGISTER_DEPS,
     DISPATCH,
     DELAY,
-    LOAD_STORE,
     CUSTOM_STALL
   };
 
   InstRef IR;
-  unsigned CyclesLeft = 0;
-  StallKind Kind = StallKind::DEFAULT;
+  unsigned CyclesLeft;
+  StallKind Kind;
 
-  StallInfo() = default;
+  StallInfo() : IR(), CyclesLeft(), Kind(StallKind::DEFAULT) {}
 
   StallKind getStallKind() const { return Kind; }
   unsigned getCyclesLeft() const { return CyclesLeft; }
@@ -56,7 +54,6 @@ class InOrderIssueStage final : public Stage {
   RegisterFile &PRF;
   ResourceManager RM;
   CustomBehaviour &CB;
-  LSUnitBase &LSU;
 
   /// Instructions that were issued, but not executed yet.
   SmallVector<InstRef, 4> IssuedInst;
@@ -113,7 +110,7 @@ class InOrderIssueStage final : public Stage {
 
 public:
   InOrderIssueStage(const MCSubtargetInfo &STI, RegisterFile &PRF,
-                    CustomBehaviour &CB, LSUnitBase &LSU);
+                    CustomBehaviour &CB);
 
   unsigned getIssueWidth() const;
   bool isAvailable(const InstRef &) const override;

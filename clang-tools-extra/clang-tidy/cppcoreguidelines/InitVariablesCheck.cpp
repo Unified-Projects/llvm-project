@@ -8,16 +8,16 @@
 
 #include "InitVariablesCheck.h"
 
-#include "../utils/LexerUtils.h"
 #include "clang/AST/ASTContext.h"
-#include "clang/AST/Type.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
-#include <optional>
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::cppcoreguidelines {
+namespace clang {
+namespace tidy {
+namespace cppcoreguidelines {
 
 namespace {
 AST_MATCHER(VarDecl, isLocalVarDecl) { return Node.isLocalVarDecl(); }
@@ -27,8 +27,7 @@ InitVariablesCheck::InitVariablesCheck(StringRef Name,
                                        ClangTidyContext *Context)
     : ClangTidyCheck(Name, Context),
       IncludeInserter(Options.getLocalOrGlobal("IncludeStyle",
-                                               utils::IncludeSorter::IS_LLVM),
-                      areDiagsSelfContained()),
+                                               utils::IncludeSorter::IS_LLVM)),
       MathHeader(Options.get("MathHeader", "<math.h>")) {}
 
 void InitVariablesCheck::storeOptions(ClangTidyOptions::OptionMap &Opts) {
@@ -60,10 +59,6 @@ void InitVariablesCheck::check(const MatchFinder::MatchResult &Result) {
   const ASTContext &Context = *Result.Context;
   const SourceManager &Source = Context.getSourceManager();
 
-  // Clang diagnostic error may cause the variable to be an invalid int vardecl
-  if (MatchedDecl->isInvalidDecl())
-    return;
-
   // We want to warn about cases where the type name
   // comes from a macro like this:
   //
@@ -83,13 +78,11 @@ void InitVariablesCheck::check(const MatchFinder::MatchResult &Result) {
     return;
 
   QualType TypePtr = MatchedDecl->getType();
-  std::optional<const char *> InitializationString;
+  llvm::Optional<const char *> InitializationString = llvm::None;
   bool AddMathInclude = false;
 
   if (TypePtr->isEnumeralType())
     InitializationString = nullptr;
-  else if (TypePtr->isBooleanType())
-    InitializationString = " = false";
   else if (TypePtr->isIntegerType())
     InitializationString = " = 0";
   else if (TypePtr->isFloatingType()) {
@@ -108,9 +101,8 @@ void InitVariablesCheck::check(const MatchFinder::MatchResult &Result) {
         << MatchedDecl;
     if (*InitializationString != nullptr)
       Diagnostic << FixItHint::CreateInsertion(
-          utils::lexer::findNextTerminator(MatchedDecl->getLocation(),
-                                           *Result.SourceManager,
-                                           Result.Context->getLangOpts()),
+          MatchedDecl->getLocation().getLocWithOffset(
+              MatchedDecl->getName().size()),
           *InitializationString);
     if (AddMathInclude) {
       Diagnostic << IncludeInserter.createIncludeInsertion(
@@ -118,4 +110,6 @@ void InitVariablesCheck::check(const MatchFinder::MatchResult &Result) {
     }
   }
 }
-} // namespace clang::tidy::cppcoreguidelines
+} // namespace cppcoreguidelines
+} // namespace tidy
+} // namespace clang

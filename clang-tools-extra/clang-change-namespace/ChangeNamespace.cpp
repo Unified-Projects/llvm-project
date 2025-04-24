@@ -206,7 +206,7 @@ std::string getShortestQualifiedNameInNamespace(llvm::StringRef DeclName,
                                                 llvm::StringRef NsName) {
   DeclName = DeclName.ltrim(':');
   NsName = NsName.ltrim(':');
-  if (!DeclName.contains(':'))
+  if (DeclName.find(':') == llvm::StringRef::npos)
     return std::string(DeclName);
 
   auto NsNameSplitted = splitSymbolName(NsName);
@@ -308,14 +308,14 @@ bool conflictInNamespace(const ASTContext &AST, llvm::StringRef QualifiedSymbol,
     // symbol name would have been shortened.
     const NamedDecl *Scope =
         LookupDecl(*AST.getTranslationUnitDecl(), NsSplitted.front());
-    for (const auto &I : llvm::drop_begin(NsSplitted)) {
-      if (I == SymbolTopNs) // Handles "::ny" in "::nx::ny" case.
+    for (auto I = NsSplitted.begin() + 1, E = NsSplitted.end(); I != E; ++I) {
+      if (*I == SymbolTopNs) // Handles "::ny" in "::nx::ny" case.
         return true;
       // Handles "::util" and "::nx::util" conflicts.
       if (Scope) {
         if (LookupDecl(*Scope, SymbolTopNs))
           return true;
-        Scope = LookupDecl(*Scope, I);
+        Scope = LookupDecl(*Scope, *I);
       }
     }
     if (Scope && LookupDecl(*Scope, SymbolTopNs))
@@ -442,7 +442,7 @@ void ChangeNamespaceTool::registerMatchers(ast_matchers::MatchFinder *Finder) {
                                hasDeclaration(DeclMatcher),
                                unless(templateSpecializationType()))))),
                            hasParent(nestedNameSpecifierLoc()),
-                           hasAncestor(decl(isImplicit())),
+                           hasAncestor(isImplicit()),
                            hasAncestor(UsingShadowDeclInClass),
                            hasAncestor(functionDecl(isDefaulted())))),
               hasAncestor(decl().bind("dc")))
@@ -466,7 +466,7 @@ void ChangeNamespaceTool::registerMatchers(ast_matchers::MatchFinder *Finder) {
           hasAncestor(decl(IsInMovedNs).bind("dc")),
           loc(nestedNameSpecifier(
               specifiesType(hasDeclaration(DeclMatcher.bind("from_decl"))))),
-          unless(anyOf(hasAncestor(decl(isImplicit())),
+          unless(anyOf(hasAncestor(isImplicit()),
                        hasAncestor(UsingShadowDeclInClass),
                        hasAncestor(functionDecl(isDefaulted())),
                        hasAncestor(typeLoc(loc(qualType(hasDeclaration(
@@ -495,7 +495,7 @@ void ChangeNamespaceTool::registerMatchers(ast_matchers::MatchFinder *Finder) {
                                 hasAncestor(cxxRecordDecl()))),
                    hasParent(namespaceDecl()));
   Finder->addMatcher(expr(hasAncestor(decl().bind("dc")), IsInMovedNs,
-                          unless(hasAncestor(decl(isImplicit()))),
+                          unless(hasAncestor(isImplicit())),
                           anyOf(callExpr(callee(FuncMatcher)).bind("call"),
                                 declRefExpr(to(FuncMatcher.bind("func_decl")))
                                     .bind("func_ref"))),
@@ -567,12 +567,14 @@ void ChangeNamespaceTool::run(
     if (Loc.getTypeLocClass() == TypeLoc::Elaborated) {
       NestedNameSpecifierLoc NestedNameSpecifier =
           Loc.castAs<ElaboratedTypeLoc>().getQualifierLoc();
-      // FIXME: avoid changing injected class names.
-      if (auto *NNS = NestedNameSpecifier.getNestedNameSpecifier()) {
-        const Type *SpecifierType = NNS->getAsType();
-        if (SpecifierType && SpecifierType->isRecordType())
-          return;
-      }
+      // This happens for friend declaration of a base class with injected class
+      // name.
+      if (!NestedNameSpecifier.getNestedNameSpecifier())
+        return;
+      const Type *SpecifierType =
+          NestedNameSpecifier.getNestedNameSpecifier()->getAsType();
+      if (SpecifierType && SpecifierType->isRecordType())
+        return;
     }
     fixTypeLoc(Result, startLocationForType(Loc), endLocationForType(Loc), Loc);
   } else if (const auto *VarRef =
@@ -606,8 +608,9 @@ void ChangeNamespaceTool::run(
                  Result.Nodes.getNodeAs<DeclRefExpr>("func_ref")) {
     // If this reference has been processed as a function call, we do not
     // process it again.
-    if (!ProcessedFuncRefs.insert(FuncRef).second)
+    if (ProcessedFuncRefs.count(FuncRef))
       return;
+    ProcessedFuncRefs.insert(FuncRef);
     const auto *Func = Result.Nodes.getNodeAs<FunctionDecl>("func_decl");
     assert(Func);
     const auto *Context = Result.Nodes.getNodeAs<Decl>("dc");
@@ -826,10 +829,10 @@ void ChangeNamespaceTool::replaceQualifiedSymbolInDeclContext(
       // "IsVisibleInNewNs" matcher.
       if (AliasQualifiedName != AliasName) {
         // The alias is defined in some namespace.
-        assert(StringRef(AliasQualifiedName).ends_with("::" + AliasName));
+        assert(StringRef(AliasQualifiedName).endswith("::" + AliasName));
         llvm::StringRef AliasNs =
             StringRef(AliasQualifiedName).drop_back(AliasName.size() + 2);
-        if (!llvm::StringRef(OldNs).starts_with(AliasNs))
+        if (!llvm::StringRef(OldNs).startswith(AliasNs))
           continue;
       }
       std::string NameWithAliasNamespace =
@@ -861,7 +864,7 @@ void ChangeNamespaceTool::replaceQualifiedSymbolInDeclContext(
   // If the new nested name in the new namespace is the same as it was in the
   // old namespace, we don't create replacement unless there can be ambiguity.
   if ((NestedName == ReplaceName && !Conflict) ||
-      (NestedName.starts_with("::") && NestedName.drop_front(2) == ReplaceName))
+      (NestedName.startswith("::") && NestedName.drop_front(2) == ReplaceName))
     return;
   // If the reference need to be fully-qualified, add a leading "::" unless
   // NewNamespace is the global namespace.
@@ -890,7 +893,7 @@ void ChangeNamespaceTool::fixTypeLoc(
   // a typedef type, we need to use the typedef type instead.
   auto IsInMovedNs = [&](const NamedDecl *D) {
     if (!llvm::StringRef(D->getQualifiedNameAsString())
-             .starts_with(OldNamespace + "::"))
+             .startswith(OldNamespace + "::"))
       return false;
     auto ExpansionLoc = Result.SourceManager->getExpansionLoc(D->getBeginLoc());
     if (ExpansionLoc.isInvalid())

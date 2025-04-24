@@ -54,13 +54,13 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
-    AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
-    AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
-    AU.addRequired<MachineDominatorTreeWrapperPass>();
-    AU.addPreserved<MachineDominatorTreeWrapperPass>();
-    AU.addRequired<LiveIntervalsWrapperPass>();
-    AU.addPreserved<SlotIndexesWrapperPass>();
-    AU.addPreserved<LiveIntervalsWrapperPass>();
+    AU.addRequired<MachineBlockFrequencyInfo>();
+    AU.addPreserved<MachineBlockFrequencyInfo>();
+    AU.addRequired<MachineDominatorTree>();
+    AU.addPreserved<MachineDominatorTree>();
+    AU.addRequired<LiveIntervals>();
+    AU.addPreserved<SlotIndexes>();
+    AU.addPreserved<LiveIntervals>();
     AU.addRequired<TargetLibraryInfoWrapperPass>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
@@ -96,8 +96,9 @@ static bool replaceDominatedUses(MachineBasicBlock &MBB, MachineInstr &MI,
 
   SmallVector<SlotIndex, 4> Indices;
 
-  for (MachineOperand &O :
-       llvm::make_early_inc_range(MRI.use_nodbg_operands(FromReg))) {
+  for (auto I = MRI.use_nodbg_begin(FromReg), E = MRI.use_nodbg_end();
+       I != E;) {
+    MachineOperand &O = *I++;
     MachineInstr *Where = O.getParent();
 
     // Check that MI dominates the instruction in the normal way.
@@ -180,12 +181,12 @@ bool WebAssemblyMemIntrinsicResults::runOnMachineFunction(MachineFunction &MF) {
   });
 
   MachineRegisterInfo &MRI = MF.getRegInfo();
-  auto &MDT = getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
+  auto &MDT = getAnalysis<MachineDominatorTree>();
   const WebAssemblyTargetLowering &TLI =
       *MF.getSubtarget<WebAssemblySubtarget>().getTargetLowering();
   const auto &LibInfo =
       getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(MF.getFunction());
-  auto &LIS = getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  auto &LIS = getAnalysis<LiveIntervals>();
   bool Changed = false;
 
   // We don't preserve SSA form.

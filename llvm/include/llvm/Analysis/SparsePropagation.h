@@ -14,8 +14,6 @@
 #ifndef LLVM_ANALYSIS_SPARSEPROPAGATION_H
 #define LLVM_ANALYSIS_SPARSEPROPAGATION_H
 
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
 #include <set>
@@ -87,9 +85,10 @@ public:
   /// ComputeInstructionState - Compute the LatticeKeys that change as a result
   /// of executing instruction \p I. Their associated LatticeVals are store in
   /// \p ChangedValues.
-  virtual void ComputeInstructionState(
-      Instruction &I, SmallDenseMap<LatticeKey, LatticeVal, 16> &ChangedValues,
-      SparseSolver<LatticeKey, LatticeVal> &SS) = 0;
+  virtual void
+  ComputeInstructionState(Instruction &I,
+                          DenseMap<LatticeKey, LatticeVal> &ChangedValues,
+                          SparseSolver<LatticeKey, LatticeVal> &SS) = 0;
 
   /// PrintLatticeVal - Render the given LatticeVal to the specified stream.
   virtual void PrintLatticeVal(LatticeVal LV, raw_ostream &OS);
@@ -330,8 +329,8 @@ void SparseSolver<LatticeKey, LatticeVal, KeyInfo>::getFeasibleSuccessors(
     return;
   }
 
-  if (!isa<SwitchInst>(TI)) {
-    // Unknown termintor, assume all successors are feasible.
+  if (TI.isExceptionalTerminator() ||
+      TI.isIndirectTerminator()) {
     Succs.assign(Succs.size(), true);
     return;
   }
@@ -400,7 +399,7 @@ void SparseSolver<LatticeKey, LatticeVal, KeyInfo>::visitPHINode(PHINode &PN) {
   // computed from its incoming values.  For example, SSI form stores its sigma
   // functions as PHINodes with a single incoming value.
   if (LatticeFunc->IsSpecialCasedPHI(&PN)) {
-    SmallDenseMap<LatticeKey, LatticeVal, 16> ChangedValues;
+    DenseMap<LatticeKey, LatticeVal> ChangedValues;
     LatticeFunc->ComputeInstructionState(PN, ChangedValues, *this);
     for (auto &ChangedValue : ChangedValues)
       if (ChangedValue.second != LatticeFunc->getUntrackedVal())
@@ -455,7 +454,7 @@ void SparseSolver<LatticeKey, LatticeVal, KeyInfo>::visitInst(Instruction &I) {
 
   // Otherwise, ask the transfer function what the result is.  If this is
   // something that we care about, remember it.
-  SmallDenseMap<LatticeKey, LatticeVal, 16> ChangedValues;
+  DenseMap<LatticeKey, LatticeVal> ChangedValues;
   LatticeFunc->ComputeInstructionState(I, ChangedValues, *this);
   for (auto &ChangedValue : ChangedValues)
     if (ChangedValue.second != LatticeFunc->getUntrackedVal())

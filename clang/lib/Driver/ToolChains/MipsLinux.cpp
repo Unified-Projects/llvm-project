@@ -30,7 +30,7 @@ MipsLLVMToolChain::MipsLLVMToolChain(const Driver &D,
   DetectedMultilibs Result;
   findMIPSMultilibs(D, Triple, "", Args, Result);
   Multilibs = Result.Multilibs;
-  SelectedMultilibs = Result.SelectedMultilibs;
+  SelectedMultilib = Result.SelectedMultilib;
 
   // Find out the library suffix based on the ABI.
   LibSuffix = tools::mips::getMipsABILibSuffix(Args, Triple);
@@ -56,8 +56,9 @@ void MipsLLVMToolChain::AddClangSystemIncludeArgs(
 
   const auto &Callback = Multilibs.includeDirsCallback();
   if (Callback) {
-    for (const auto &Path : Callback(SelectedMultilibs.back()))
-      addExternCSystemIncludeIfExists(DriverArgs, CC1Args, D.Dir + Path);
+    for (const auto &Path : Callback(SelectedMultilib))
+      addExternCSystemIncludeIfExists(DriverArgs, CC1Args,
+                                      D.getInstalledDir() + Path);
   }
 }
 
@@ -67,11 +68,11 @@ Tool *MipsLLVMToolChain::buildLinker() const {
 
 std::string MipsLLVMToolChain::computeSysRoot() const {
   if (!getDriver().SysRoot.empty())
-    return getDriver().SysRoot + SelectedMultilibs.back().osSuffix();
+    return getDriver().SysRoot + SelectedMultilib.osSuffix();
 
-  const std::string InstalledDir(getDriver().Dir);
+  const std::string InstalledDir(getDriver().getInstalledDir());
   std::string SysRootPath =
-      InstalledDir + "/../sysroot" + SelectedMultilibs.back().osSuffix();
+      InstalledDir + "/../sysroot" + SelectedMultilib.osSuffix();
   if (llvm::sys::fs::exists(SysRootPath))
     return SysRootPath;
 
@@ -95,8 +96,8 @@ void MipsLLVMToolChain::addLibCxxIncludePaths(
     const llvm::opt::ArgList &DriverArgs,
     llvm::opt::ArgStringList &CC1Args) const {
   if (const auto &Callback = Multilibs.includeDirsCallback()) {
-    for (std::string Path : Callback(SelectedMultilibs.back())) {
-      Path = getDriver().Dir + Path + "/c++/v1";
+    for (std::string Path : Callback(SelectedMultilib)) {
+      Path = getDriver().getInstalledDir() + Path + "/c++/v1";
       if (llvm::sys::fs::exists(Path)) {
         addSystemInclude(DriverArgs, CC1Args, Path);
         return;
@@ -111,8 +112,6 @@ void MipsLLVMToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
          "Only -lc++ (aka libxx) is supported in this toolchain.");
 
   CmdArgs.push_back("-lc++");
-  if (Args.hasArg(options::OPT_fexperimental_library))
-    CmdArgs.push_back("-lc++experimental");
   CmdArgs.push_back("-lc++abi");
   CmdArgs.push_back("-lunwind");
 }
@@ -121,7 +120,7 @@ std::string MipsLLVMToolChain::getCompilerRT(const ArgList &Args,
                                              StringRef Component,
                                              FileType Type) const {
   SmallString<128> Path(getDriver().ResourceDir);
-  llvm::sys::path::append(Path, SelectedMultilibs.back().osSuffix(), "lib" + LibSuffix,
+  llvm::sys::path::append(Path, SelectedMultilib.osSuffix(), "lib" + LibSuffix,
                           getOS());
   const char *Suffix;
   switch (Type) {
@@ -137,5 +136,5 @@ std::string MipsLLVMToolChain::getCompilerRT(const ArgList &Args,
   }
   llvm::sys::path::append(
       Path, Twine("libclang_rt." + Component + "-" + "mips" + Suffix));
-  return std::string(Path);
+  return std::string(Path.str());
 }

@@ -54,8 +54,6 @@ int main(int argc, char *argv[]) {
 // CHECK-NEXT: Total functions: 3
 // CHECK-NEXT: Maximum function count: 327
 // CHECK-NEXT: Maximum internal block count: 297
-// CHECK-NEXT: Total number of blocks: 8
-// CHECK-NEXT: Total count: 805
 // CHECK-NEXT: Statistics for indirect call sites profile:
 // CHECK-NEXT:   Total number of sites: 3
 // CHECK-NEXT:   Total number of sites with values: 3

@@ -16,11 +16,14 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Transforms/Utils/Debugify.h"
@@ -65,7 +68,6 @@ bool applyDebugifyMetadataToMachineFunction(MachineModuleInfo &MMI,
   // all the others.
   Function *DbgValF = M.getFunction("llvm.dbg.value");
   DbgValueInst *EarliestDVI = nullptr;
-  DbgVariableRecord *EarliestDVR = nullptr;
   DenseMap<unsigned, DILocalVariable *> Line2Var;
   DIExpression *Expr = nullptr;
   if (DbgValF) {
@@ -79,20 +81,6 @@ bool applyDebugifyMetadataToMachineFunction(MachineModuleInfo &MMI,
       if (!EarliestDVI || Line < EarliestDVI->getDebugLoc().getLine())
         EarliestDVI = DVI;
       Expr = DVI->getExpression();
-    }
-  }
-  for (BasicBlock &BB : F) {
-    for (Instruction &I : BB) {
-      for (DbgVariableRecord &DVR : filterDbgVars(I.getDbgRecordRange())) {
-        if (!DVR.isDbgValue())
-          continue;
-        unsigned Line = DVR.getDebugLoc().getLine();
-        assert(Line != 0 && "debugify should not insert line 0 locations");
-        Line2Var[Line] = DVR.getVariable();
-        if (!EarliestDVR || Line < EarliestDVR->getDebugLoc().getLine())
-          EarliestDVR = &DVR;
-        Expr = DVR.getExpression();
-      }
     }
   }
   if (Line2Var.empty())
@@ -124,16 +112,15 @@ bool applyDebugifyMetadataToMachineFunction(MachineModuleInfo &MMI,
       // Find a suitable local variable for the DBG_VALUE.
       unsigned Line = MI.getDebugLoc().getLine();
       if (!Line2Var.count(Line))
-        Line = EarliestDVI ? EarliestDVI->getDebugLoc().getLine()
-                           : EarliestDVR->getDebugLoc().getLine();
+        Line = EarliestDVI->getDebugLoc().getLine();
       DILocalVariable *LocalVar = Line2Var[Line];
       assert(LocalVar && "No variable for current line?");
       VarSet.insert(LocalVar);
 
       // Emit DBG_VALUEs for register definitions.
       SmallVector<MachineOperand *, 4> RegDefs;
-      for (MachineOperand &MO : MI.all_defs())
-        if (MO.getReg())
+      for (MachineOperand &MO : MI.operands())
+        if (MO.isReg() && MO.isDef() && MO.getReg())
           RegDefs.push_back(&MO);
       for (MachineOperand *MO : RegDefs)
         BuildMI(MBB, InsertBeforeIt, MI.getDebugLoc(), DbgValDesc,
@@ -169,15 +156,10 @@ bool applyDebugifyMetadataToMachineFunction(MachineModuleInfo &MMI,
       NMD->setOperand(Idx, MDNode::get(Ctx, ValueAsMetadata::getConstant(
                                                 ConstantInt::get(Int32Ty, N))));
     };
-    auto getDebugifyOperand = [&](unsigned Idx) {
-      return mdconst::extract<ConstantInt>(NMD->getOperand(Idx)->getOperand(0))
-          ->getZExtValue();
-    };
     // Set number of lines.
     setDebugifyOperand(0, NextLine - 1);
     // Set number of variables.
-    auto OldNumVars = getDebugifyOperand(1);
-    setDebugifyOperand(1, OldNumVars + VarSet.size());
+    setDebugifyOperand(1, VarSet.size());
   }
 
   return true;
@@ -187,9 +169,6 @@ bool applyDebugifyMetadataToMachineFunction(MachineModuleInfo &MMI,
 /// legacy module pass manager.
 struct DebugifyMachineModule : public ModulePass {
   bool runOnModule(Module &M) override {
-    // We will insert new debugify metadata, so erasing the old one.
-    assert(!M.getNamedMetadata("llvm.mir.debugify") &&
-           "llvm.mir.debugify metadata already exists! Strip it first");
     MachineModuleInfo &MMI =
         getAnalysis<MachineModuleInfoWrapperPass>().getMMI();
     return applyDebugifyMetadata(

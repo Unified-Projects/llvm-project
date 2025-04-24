@@ -15,18 +15,27 @@
 #include "Mips.h"
 #include "MipsMachineFunction.h"
 #include "MipsRegisterInfo.h"
+#include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/IR/CFG.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Type.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "mips-isel"
 
 bool Mips16DAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
-  Subtarget = &MF.getSubtarget<MipsSubtarget>();
+  Subtarget = &static_cast<const MipsSubtarget &>(MF.getSubtarget());
   if (!Subtarget->inMips16Mode())
     return false;
   return MipsDAGToDAGISel::runOnMachineFunction(MF);
@@ -38,16 +47,16 @@ Mips16DAGToDAGISel::selectMULT(SDNode *N, unsigned Opc, const SDLoc &DL, EVT Ty,
   SDNode *Lo = nullptr, *Hi = nullptr;
   SDNode *Mul = CurDAG->getMachineNode(Opc, DL, MVT::Glue, N->getOperand(0),
                                        N->getOperand(1));
-  SDValue InGlue = SDValue(Mul, 0);
+  SDValue InFlag = SDValue(Mul, 0);
 
   if (HasLo) {
     unsigned Opcode = Mips::Mflo16;
-    Lo = CurDAG->getMachineNode(Opcode, DL, Ty, MVT::Glue, InGlue);
-    InGlue = SDValue(Lo, 1);
+    Lo = CurDAG->getMachineNode(Opcode, DL, Ty, MVT::Glue, InFlag);
+    InFlag = SDValue(Lo, 1);
   }
   if (HasHi) {
     unsigned Opcode = Mips::Mfhi16;
-    Hi = CurDAG->getMachineNode(Opcode, DL, Ty, InGlue);
+    Hi = CurDAG->getMachineNode(Opcode, DL, Ty, InFlag);
   }
   return std::make_pair(Lo, Hi);
 }
@@ -112,7 +121,7 @@ bool Mips16DAGToDAGISel::selectAddr(bool SPAllowed, SDValue Addr, SDValue &Base,
   }
   // Addresses of the form FI+const or FI|const
   if (CurDAG->isBaseWithConstantOffset(Addr)) {
-    auto *CN = cast<ConstantSDNode>(Addr.getOperand(1));
+    ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Addr.getOperand(1));
     if (isInt<16>(CN->getSExtValue())) {
       // If the first operand is a FI, get the TargetFI Node
       if (SPAllowed) {
@@ -210,11 +219,7 @@ bool Mips16DAGToDAGISel::trySelect(SDNode *Node) {
   return false;
 }
 
-Mips16DAGToDAGISelLegacy::Mips16DAGToDAGISelLegacy(MipsTargetMachine &TM,
-                                                   CodeGenOptLevel OL)
-    : MipsDAGToDAGISelLegacy(std::make_unique<Mips16DAGToDAGISel>(TM, OL)) {}
-
 FunctionPass *llvm::createMips16ISelDag(MipsTargetMachine &TM,
-                                        CodeGenOptLevel OptLevel) {
-  return new Mips16DAGToDAGISelLegacy(TM, OptLevel);
+                                        CodeGenOpt::Level OptLevel) {
+  return new Mips16DAGToDAGISel(TM, OptLevel);
 }

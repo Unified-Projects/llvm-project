@@ -10,15 +10,16 @@
 #include "lldb/Utility/DataExtractor.h"
 #include "lldb/Utility/Endian.h"
 #include "lldb/Utility/StreamString.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
-#include <optional>
 #include <string>
 
 using namespace lldb;
 using namespace lldb_private;
 using lldb_private::formatters::StringPrinter;
+using llvm::Optional;
 using llvm::StringRef;
 
 #define QUOTE(x) std::string("\"" x "\"")
@@ -26,8 +27,8 @@ using llvm::StringRef;
 /// Format \p input according to the specified string encoding and special char
 /// escape style.
 template <StringPrinter::StringElementType elem_ty>
-static std::optional<std::string>
-format(StringRef input, StringPrinter::EscapeStyle escape_style) {
+static Optional<std::string> format(StringRef input,
+                                    StringPrinter::EscapeStyle escape_style) {
   StreamString out;
   StringPrinter::ReadBufferAndDumpToStreamOptions opts;
   opts.SetStream(&out);
@@ -36,11 +37,12 @@ format(StringRef input, StringPrinter::EscapeStyle escape_style) {
   opts.SetEscapeNonPrintables(true);
   opts.SetIgnoreMaxLength(false);
   opts.SetEscapeStyle(escape_style);
-  opts.SetData(DataExtractor(input.data(), input.size(),
-                             endian::InlHostByteOrder(), sizeof(void *)));
+  DataExtractor extractor(input.data(), input.size(),
+                          endian::InlHostByteOrder(), sizeof(void *));
+  opts.SetData(extractor);
   const bool success = StringPrinter::ReadBufferAndDumpToStream<elem_ty>(opts);
   if (!success)
-    return std::nullopt;
+    return llvm::None;
   return out.GetString().str();
 }
 

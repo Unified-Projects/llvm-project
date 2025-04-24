@@ -11,20 +11,25 @@
 //===----------------------------------------------------------------------===//
 
 #include "XCoreRegisterInfo.h"
+#include "XCore.h"
 #include "XCoreInstrInfo.h"
+#include "XCoreMachineFunctionInfo.h"
 #include "XCoreSubtarget.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
-#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 
@@ -92,8 +97,7 @@ static void InsertFPConstInst(MachineBasicBlock::iterator II,
   MachineInstr &MI = *II;
   MachineBasicBlock &MBB = *MI.getParent();
   DebugLoc dl = MI.getDebugLoc();
-  Register ScratchOffset =
-      RS->scavengeRegisterBackwards(XCore::GRRegsRegClass, II, false, 0);
+  unsigned ScratchOffset = RS->scavengeRegister(&XCore::GRRegsRegClass, II, 0);
   RS->setRegUsed(ScratchOffset);
   TII.loadImmediate(MBB, II, ScratchOffset, Offset);
 
@@ -165,14 +169,12 @@ static void InsertSPConstInst(MachineBasicBlock::iterator II,
 
   unsigned ScratchBase;
   if (OpCode==XCore::STWFI) {
-    ScratchBase =
-        RS->scavengeRegisterBackwards(XCore::GRRegsRegClass, II, false, 0);
+    ScratchBase = RS->scavengeRegister(&XCore::GRRegsRegClass, II, 0);
     RS->setRegUsed(ScratchBase);
   } else
     ScratchBase = Reg;
   BuildMI(MBB, II, dl, TII.get(XCore::LDAWSP_ru6), ScratchBase).addImm(0);
-  Register ScratchOffset =
-      RS->scavengeRegisterBackwards(XCore::GRRegsRegClass, II, false, 0);
+  unsigned ScratchOffset = RS->scavengeRegister(&XCore::GRRegsRegClass, II, 0);
   RS->setRegUsed(ScratchOffset);
   TII.loadImmediate(MBB, II, ScratchOffset, Offset);
 
@@ -248,7 +250,7 @@ XCoreRegisterInfo::useFPForScavengingIndex(const MachineFunction &MF) const {
   return false;
 }
 
-bool
+void
 XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                        int SPAdj, unsigned FIOperandNum,
                                        RegScavenger *RS) const {
@@ -282,7 +284,7 @@ XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   if (MI.isDebugValue()) {
     MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, false /*isDef*/);
     MI.getOperand(FIOperandNum + 1).ChangeToImmediate(Offset);
-    return false;
+    return;
   }
 
   // fold constant into offset.
@@ -311,7 +313,6 @@ XCoreRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // Erase old instruction.
   MachineBasicBlock &MBB = *MI.getParent();
   MBB.erase(II);
-  return true;
 }
 
 

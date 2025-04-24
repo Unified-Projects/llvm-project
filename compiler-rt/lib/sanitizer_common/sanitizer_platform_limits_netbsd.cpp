@@ -122,10 +122,10 @@
 #include <dev/dtv/dtvio_demux.h>
 #include <dev/dtv/dtvio_frontend.h>
 #if !__NetBSD_Prereq__(9, 99, 26)
-#include <dev/filemon/filemon.h>
+#include <dev/fiunified/fiunified.h>
 #else
-#define FILEMON_SET_FD          _IOWR('S', 1, int)
-#define FILEMON_SET_PID         _IOWR('S', 2, pid_t)
+#define FIUNIFIED_SET_FD          _IOWR('S', 1, int)
+#define FIUNIFIED_SET_PID         _IOWR('S', 2, pid_t)
 #endif
 #include <dev/hdaudio/hdaudioio.h>
 #include <dev/hdmicec/hdmicecio.h>
@@ -547,7 +547,6 @@ unsigned pid_t_sz = sizeof(pid_t);
 unsigned timeval_sz = sizeof(timeval);
 unsigned uid_t_sz = sizeof(uid_t);
 unsigned gid_t_sz = sizeof(gid_t);
-unsigned fpos_t_sz = sizeof(fpos_t);
 unsigned mbstate_t_sz = sizeof(mbstate_t);
 unsigned sigset_t_sz = sizeof(sigset_t);
 unsigned struct_timezone_sz = sizeof(struct timezone);
@@ -555,7 +554,7 @@ unsigned struct_tms_sz = sizeof(struct tms);
 unsigned struct_sigevent_sz = sizeof(struct sigevent);
 unsigned struct_sched_param_sz = sizeof(struct sched_param);
 unsigned struct_sockaddr_sz = sizeof(struct sockaddr);
-unsigned ucontext_t_sz(void *ctx) { return sizeof(ucontext_t); }
+unsigned ucontext_t_sz = sizeof(ucontext_t);
 unsigned struct_rlimit_sz = sizeof(struct rlimit);
 unsigned struct_timespec_sz = sizeof(struct timespec);
 unsigned struct_sembuf_sz = sizeof(struct sembuf);
@@ -667,7 +666,6 @@ unsigned struct_ElfW_Phdr_sz = sizeof(Elf_Phdr);
 
 int glob_nomatch = GLOB_NOMATCH;
 int glob_altdirfunc = GLOB_ALTDIRFUNC;
-const int wordexp_wrde_dooffs = WRDE_DOOFFS;
 
 unsigned path_max = PATH_MAX;
 
@@ -1320,8 +1318,8 @@ unsigned IOCTL_FE_SET_VOLTAGE = FE_SET_VOLTAGE;
 unsigned IOCTL_FE_ENABLE_HIGH_LNB_VOLTAGE = FE_ENABLE_HIGH_LNB_VOLTAGE;
 unsigned IOCTL_FE_SET_FRONTEND_TUNE_MODE = FE_SET_FRONTEND_TUNE_MODE;
 unsigned IOCTL_FE_DISHNETWORK_SEND_LEGACY_CMD = FE_DISHNETWORK_SEND_LEGACY_CMD;
-unsigned IOCTL_FILEMON_SET_FD = FILEMON_SET_FD;
-unsigned IOCTL_FILEMON_SET_PID = FILEMON_SET_PID;
+unsigned IOCTL_FIUNIFIED_SET_FD = FIUNIFIED_SET_FD;
+unsigned IOCTL_FIUNIFIED_SET_PID = FIUNIFIED_SET_PID;
 unsigned IOCTL_HDAUDIO_FGRP_INFO = HDAUDIO_FGRP_INFO;
 unsigned IOCTL_HDAUDIO_FGRP_GETCONFIG = HDAUDIO_FGRP_GETCONFIG;
 unsigned IOCTL_HDAUDIO_FGRP_SETCONFIG = HDAUDIO_FGRP_SETCONFIG;
@@ -2343,6 +2341,8 @@ unsigned IOCTL_TIOCDRAIN = TIOCDRAIN;
 unsigned IOCTL_TIOCGFLAGS = TIOCGFLAGS;
 unsigned IOCTL_TIOCSFLAGS = TIOCSFLAGS;
 unsigned IOCTL_TIOCDCDTIMESTAMP = TIOCDCDTIMESTAMP;
+unsigned IOCTL_TIOCRCVFRAME = TIOCRCVFRAME;
+unsigned IOCTL_TIOCXMTFRAME = TIOCXMTFRAME;
 unsigned IOCTL_TIOCPTMGET = TIOCPTMGET;
 unsigned IOCTL_TIOCGRANTPT = TIOCGRANTPT;
 unsigned IOCTL_TIOCPTSNAME = TIOCPTSNAME;
@@ -2487,6 +2487,8 @@ const unsigned RMD160_return_length = RMD160_DIGEST_STRING_LENGTH;
 
 const unsigned MD5_CTX_sz = sizeof(MD5_CTX);
 const unsigned MD5_return_length = MD5_DIGEST_STRING_LENGTH;
+
+const unsigned fpos_t_sz = sizeof(fpos_t);
 
 const unsigned MD2_CTX_sz = sizeof(MD2_CTX);
 const unsigned MD2_return_length = MD2_DIGEST_STRING_LENGTH;

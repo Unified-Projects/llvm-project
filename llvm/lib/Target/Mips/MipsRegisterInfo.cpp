@@ -17,6 +17,7 @@
 #include "MipsSubtarget.h"
 #include "MipsTargetMachine.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -25,6 +26,7 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -37,9 +39,7 @@ using namespace llvm;
 #define GET_REGINFO_TARGET_DESC
 #include "MipsGenRegisterInfo.inc"
 
-MipsRegisterInfo::MipsRegisterInfo() : MipsGenRegisterInfo(Mips::RA) {
-  MIPS_MC::initLLVMToCVRegMapping(this);
-}
+MipsRegisterInfo::MipsRegisterInfo() : MipsGenRegisterInfo(Mips::RA) {}
 
 unsigned MipsRegisterInfo::getPICCallReg() { return Mips::T9; }
 
@@ -159,8 +159,8 @@ getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   const MipsSubtarget &Subtarget = MF.getSubtarget<MipsSubtarget>();
 
-  for (MCPhysReg R : ReservedGPR32)
-    Reserved.set(R);
+  for (unsigned I = 0; I < array_lengthof(ReservedGPR32); ++I)
+    Reserved.set(ReservedGPR32[I]);
 
   // Reserve registers for the NaCl sandbox.
   if (Subtarget.isTargetNaCl()) {
@@ -169,8 +169,8 @@ getReservedRegs(const MachineFunction &MF) const {
     Reserved.set(Mips::T8);   // Reserved for thread pointer.
   }
 
-  for (MCPhysReg R : ReservedGPR64)
-    Reserved.set(R);
+  for (unsigned I = 0; I < array_lengthof(ReservedGPR64); ++I)
+    Reserved.set(ReservedGPR64[I]);
 
   // For mno-abicalls, GP is a program invariant!
   if (!Subtarget.isABICalls()) {
@@ -239,10 +239,15 @@ getReservedRegs(const MachineFunction &MF) const {
   return Reserved;
 }
 
+bool
+MipsRegisterInfo::requiresRegisterScavenging(const MachineFunction &MF) const {
+  return true;
+}
+
 // FrameIndex represent objects inside a abstract stack.
 // We must replace FrameIndex with an stack/frame pointer
 // direct reference.
-bool MipsRegisterInfo::
+void MipsRegisterInfo::
 eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                     unsigned FIOperandNum, RegScavenger *RS) const {
   MachineInstr &MI = *II;
@@ -264,7 +269,6 @@ eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                     << "\n");
 
   eliminateFI(MI, FIOperandNum, FrameIndex, stackSize, spOffset);
-  return false;
 }
 
 Register MipsRegisterInfo::

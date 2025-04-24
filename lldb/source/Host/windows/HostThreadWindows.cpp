@@ -16,8 +16,10 @@
 using namespace lldb;
 using namespace lldb_private;
 
-static void __stdcall ExitThreadProxy(ULONG_PTR dwExitCode) {
+namespace {
+void __stdcall ExitThreadProxy(ULONG_PTR dwExitCode) {
   ::ExitThread(dwExitCode);
+}
 }
 
 HostThreadWindows::HostThreadWindows()
@@ -40,9 +42,9 @@ Status HostThreadWindows::Join(lldb::thread_result_t *result) {
         *result = 0;
       *result = exit_code;
     } else if (WAIT_OBJECT_0 != wait_result)
-      error = Status(::GetLastError(), eErrorTypeWin32);
+      error.SetError(::GetLastError(), eErrorTypeWin32);
   } else
-    error = Status(ERROR_INVALID_HANDLE, eErrorTypeWin32);
+    error.SetError(ERROR_INVALID_HANDLE, eErrorTypeWin32);
 
   Reset();
   return error;
@@ -52,7 +54,7 @@ Status HostThreadWindows::Cancel() {
   Status error;
 
   DWORD result = ::QueueUserAPC(::ExitThreadProxy, m_thread, 0);
-  error = Status(result, eErrorTypeWin32);
+  error.SetError(result, eErrorTypeWin32);
   return error;
 }
 

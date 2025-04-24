@@ -7,18 +7,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "TestVisitor.h"
-#include "llvm/TargetParser/Host.h"
+#include "llvm/Support/Host.h"
 #include <stack>
 
 using namespace clang;
 
 namespace {
 
-class LambdaExprVisitor : public ExpectedLocationVisitor {
+class LambdaExprVisitor : public ExpectedLocationVisitor<LambdaExprVisitor> {
 public:
-  LambdaExprVisitor() { ShouldVisitImplicitCode = false; }
-
-  bool VisitLambdaExpr(LambdaExpr *Lambda) override {
+  bool VisitLambdaExpr(LambdaExpr *Lambda) {
     PendingBodies.push(Lambda->getBody());
     PendingClasses.push(Lambda->getLambdaClass());
     Match("", Lambda->getIntroducerRange().getBegin());
@@ -26,12 +24,12 @@ public:
   }
   /// For each call to VisitLambdaExpr, we expect a subsequent call to visit
   /// the body (and maybe the lambda class, which is implicit).
-  bool VisitStmt(Stmt *S) override {
+  bool VisitStmt(Stmt *S) {
     if (!PendingBodies.empty() && S == PendingBodies.top())
       PendingBodies.pop();
     return true;
   }
-  bool VisitDecl(Decl *D) override {
+  bool VisitDecl(Decl *D) {
     if (!PendingClasses.empty() && D == PendingClasses.top())
       PendingClasses.pop();
     return true;
@@ -39,6 +37,9 @@ public:
   /// Determine whether parts of lambdas (VisitLambdaExpr) were later traversed.
   bool allBodiesHaveBeenTraversed() const { return PendingBodies.empty(); }
   bool allClassesHaveBeenTraversed() const { return PendingClasses.empty(); }
+
+  bool VisitImplicitCode = false;
+  bool shouldVisitImplicitCode() const { return VisitImplicitCode; }
 
 private:
   std::stack<Stmt *> PendingBodies;
@@ -66,7 +67,7 @@ TEST(RecursiveASTVisitor, LambdaInLambda) {
 
 TEST(RecursiveASTVisitor, TopLevelLambda) {
   LambdaExprVisitor Visitor;
-  Visitor.ShouldVisitImplicitCode = true;
+  Visitor.VisitImplicitCode = true;
   Visitor.ExpectMatch("", 1, 10);
   Visitor.ExpectMatch("", 1, 14);
   EXPECT_TRUE(Visitor.runOver("auto x = []{ [] {}; };",
@@ -77,7 +78,7 @@ TEST(RecursiveASTVisitor, TopLevelLambda) {
 
 TEST(RecursiveASTVisitor, VisitsLambdaExprAndImplicitClass) {
   LambdaExprVisitor Visitor;
-  Visitor.ShouldVisitImplicitCode = true;
+  Visitor.VisitImplicitCode = true;
   Visitor.ExpectMatch("", 1, 12);
   EXPECT_TRUE(Visitor.runOver("void f() { []{ return; }(); }",
                               LambdaExprVisitor::Lang_CXX11));
@@ -86,8 +87,8 @@ TEST(RecursiveASTVisitor, VisitsLambdaExprAndImplicitClass) {
 }
 
 TEST(RecursiveASTVisitor, VisitsAttributedLambdaExpr) {
-  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).isPS())
-    GTEST_SKIP(); // PS4/PS5 do not support fastcall.
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).isPS4())
+    return; // PS4 does not support fastcall.
   LambdaExprVisitor Visitor;
   Visitor.ExpectMatch("", 1, 12);
   EXPECT_TRUE(Visitor.runOver(

@@ -6,9 +6,8 @@ struct Mem {
         } u;
 };
 
-struct Mem *columnMem(void){
+struct Mem *columnMem(){
         static const struct Mem nullMem = { {} };
-        return 0;
 }
 
 

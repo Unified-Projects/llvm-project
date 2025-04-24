@@ -11,7 +11,6 @@
 
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,10 +22,8 @@
 #include "lldb/Utility/CompletionRequest.h"
 #include "lldb/Utility/Event.h"
 #include "lldb/Utility/StructuredData.h"
-#include "lldb/Utility/UnimplementedError.h"
 #include "lldb/Utility/UserID.h"
 #include "lldb/lldb-private.h"
-#include "llvm/Support/MemoryBuffer.h"
 
 #define LLDB_THREAD_MAX_STOP_EXC_DATA 8
 
@@ -58,9 +55,9 @@ public:
   bool GetStepOutAvoidsNoDebug() const;
 
   uint64_t GetMaxBacktraceDepth() const;
-
-  uint64_t GetSingleThreadPlanTimeout() const;
 };
+
+typedef std::shared_ptr<ThreadProperties> ThreadPropertiesSP;
 
 class Thread : public std::enable_shared_from_this<Thread>,
                public ThreadProperties,
@@ -77,9 +74,9 @@ public:
     eBroadcastBitThreadSelected = (1 << 4)
   };
 
-  static llvm::StringRef GetStaticBroadcasterClass();
+  static ConstString &GetStaticBroadcasterClass();
 
-  llvm::StringRef GetBroadcasterClass() const override {
+  ConstString &GetBroadcasterClass() const override {
     return GetStaticBroadcasterClass();
   }
 
@@ -93,9 +90,9 @@ public:
 
     ~ThreadEventData() override;
 
-    static llvm::StringRef GetFlavorString();
+    static ConstString GetFlavorString();
 
-    llvm::StringRef GetFlavor() const override {
+    ConstString GetFlavor() const override {
       return ThreadEventData::GetFlavorString();
     }
 
@@ -152,7 +149,7 @@ public:
 
   static void SettingsTerminate();
 
-  static ThreadProperties &GetGlobalProperties();
+  static const ThreadPropertiesSP &GetGlobalProperties();
 
   lldb::ProcessSP GetProcess() const { return m_process_wp.lock(); }
 
@@ -200,14 +197,11 @@ public:
   ///    The User resume state for this thread.
   lldb::StateType GetResumeState() const { return m_resume_state; }
 
-  /// This function is called on all the threads before "ShouldResume" and
-  /// "WillResume" in case a thread needs to change its state before the
-  /// ThreadList polls all the threads to figure out which ones actually will
-  /// get to run and how.
-  ///
-  /// \return
-  ///    True if we pushed a ThreadPlanStepOverBreakpoint
-  bool SetupForResume();
+  // This function is called on all the threads before "ShouldResume" and
+  // "WillResume" in case a thread needs to change its state before the
+  // ThreadList polls all the threads to figure out which ones actually will
+  // get to run and how.
+  void SetupForResume();
 
   // Do not override this function, it is for thread plan logic only
   bool ShouldResume(lldb::StateType resume_state);
@@ -223,6 +217,8 @@ public:
   virtual void DidStop();
 
   virtual void RefreshStateAfterStop() = 0;
+
+  void SelectMostRelevantFrame();
 
   std::string GetStopDescription();
 
@@ -245,7 +241,6 @@ public:
   // this just calls through to the ThreadSpec's ThreadPassesBasicTests method.
   virtual bool MatchesSpec(const ThreadSpec *spec);
 
-  // Get the current public stop info, calculating it if necessary.
   lldb::StopInfoSP GetStopInfo();
 
   lldb::StopReason GetStopReason();
@@ -397,13 +392,6 @@ public:
   /// and having the thread call the SystemRuntime again.
   virtual bool ThreadHasQueueInformation() const { return false; }
 
-  /// GetStackFrameCount can be expensive.  Stacks can get very deep, and they
-  /// require memory reads for each frame.  So only use GetStackFrameCount when 
-  /// you need to know the depth of the stack.  When iterating over frames, its
-  /// better to generate the frames one by one with GetFrameAtIndex, and when
-  /// that returns NULL, you are at the end of the stack.  That way your loop
-  /// will only do the work it needs to, without forcing lldb to realize
-  /// StackFrames you weren't going to look at.
   virtual uint32_t GetStackFrameCount() {
     return GetStackFrameList()->GetNumFrames();
   }
@@ -440,16 +428,11 @@ public:
     return lldb::StackFrameSP();
   }
 
-  // Only pass true to select_most_relevant if you are fulfilling an explicit
-  // user request for GetSelectedFrameIndex.  The most relevant frame is only
-  // for showing to the user, and can do arbitrary work, so we don't want to
-  // call it internally.
-  uint32_t GetSelectedFrameIndex(SelectMostRelevant select_most_relevant) {
-    return GetStackFrameList()->GetSelectedFrameIndex(select_most_relevant);
+  uint32_t GetSelectedFrameIndex() {
+    return GetStackFrameList()->GetSelectedFrameIndex();
   }
 
-  lldb::StackFrameSP
-  GetSelectedFrame(SelectMostRelevant select_most_relevant);
+  lldb::StackFrameSP GetSelectedFrame();
 
   uint32_t SetSelectedFrame(lldb_private::StackFrame *frame,
                             bool broadcast = false);
@@ -504,23 +487,6 @@ public:
   void DumpTraceInstructions(Stream &s, size_t count,
                              size_t start_position = 0) const;
 
-  /// Print a description of this thread using the provided thread format.
-  ///
-  /// \param[out] strm
-  ///   The Stream to print the description to.
-  ///
-  /// \param[in] frame_idx
-  ///   If not \b LLDB_INVALID_FRAME_ID, then use this frame index as context to
-  ///   generate the description.
-  ///
-  /// \param[in] format
-  ///   The input format.
-  ///
-  /// \return
-  ///   \b true if and only if dumping with the given \p format worked.
-  bool DumpUsingFormat(Stream &strm, uint32_t frame_idx,
-                       const FormatEntity::Entry *format);
-
   // If stop_format is true, this will be the form used when we print stop
   // info. If false, it will be the form we use for thread list and co.
   void DumpUsingSettingsFormat(Stream &strm, uint32_t frame_idx,
@@ -574,12 +540,9 @@ public:
   /// This function is designed to be used by commands where the
   /// process is publicly stopped.
   ///
-  /// \param[in] frame_idx
-  ///     The frame index to step out of.
-  ///
   /// \return
   ///     An error that describes anything that went wrong
-  virtual Status StepOut(uint32_t frame_idx = 0);
+  virtual Status StepOut();
 
   /// Retrieves the per-thread data area.
   /// Most OSs maintain a per-thread pointer (e.g. the FS register on
@@ -874,7 +837,7 @@ public:
   ///    See standard meanings for the stop & run votes in ThreadPlan.h.
   ///
   /// \param[in] frame_idx
-  ///     The frame index.
+  ///     The fame index.
   ///
   /// \param[out] status
   ///     A status with an error if queuing failed.
@@ -1054,8 +1017,7 @@ public:
 
   /// Discards the plans queued on the plan stack of the current thread.  This
   /// is
-  /// arbitrated by the "Controlling" ThreadPlans, using the "OkayToDiscard"
-  /// call.
+  /// arbitrated by the "Master" ThreadPlans, using the "OkayToDiscard" call.
   //  But if \a force is true, all thread plans are discarded.
   void DiscardThreadPlans(bool force);
 
@@ -1131,11 +1093,11 @@ public:
 
   size_t GetStatus(Stream &strm, uint32_t start_frame, uint32_t num_frames,
                    uint32_t num_frames_with_source, bool stop_format,
-                   bool show_hidden, bool only_stacks = false);
+                   bool only_stacks = false);
 
   size_t GetStackFrameStatus(Stream &strm, uint32_t first_frame,
                              uint32_t num_frames, bool show_frame_info,
-                             uint32_t num_frames_with_source, bool show_hidden);
+                             uint32_t num_frames_with_source);
 
   // We need a way to verify that even though we have a thread in a shared
   // pointer that the object itself is still valid. Currently this won't be the
@@ -1156,7 +1118,7 @@ public:
   // "checkpointed and restored" stop info, so if it is still around it is
   // right even if you have not calculated this yourself, or if it disagrees
   // with what you might have calculated.
-  virtual lldb::StopInfoSP GetPrivateStopInfo(bool calculate = true);
+  virtual lldb::StopInfoSP GetPrivateStopInfo();
 
   // Calculate the stop info that will be shown to lldb clients.  For instance,
   // a "step out" is implemented by running to a breakpoint on the function
@@ -1169,20 +1131,13 @@ public:
 
   void CalculatePublicStopInfo();
 
-  /// Ask the thread subclass to set its stop info.
-  ///
-  /// Thread subclasses should call Thread::SetStopInfo(...) with the reason the
-  /// thread stopped.
-  ///
-  /// A thread that is sitting at a breakpoint site, but has not yet executed
-  /// the breakpoint instruction, should have a breakpoint-hit StopInfo set.
-  /// When execution is resumed, any thread sitting at a breakpoint site will
-  /// instruction-step over the breakpoint instruction silently, and we will
-  /// never record this breakpoint as being hit, updating the hit count,
-  /// possibly executing breakpoint commands or conditions.
-  ///
-  /// \return
-  ///      True if Thread::SetStopInfo(...) was called, false otherwise.
+  // Ask the thread subclass to set its stop info.
+  //
+  // Thread subclasses should call Thread::SetStopInfo(...) with the reason the
+  // thread stopped.
+  //
+  // \return
+  //      True if Thread::SetStopInfo(...) was called, false otherwise.
   virtual bool CalculateStopInfo() = 0;
 
   // Gets the temporary resume state for a thread.
@@ -1207,14 +1162,6 @@ public:
   void ResetStopInfo();
 
   void SetShouldReportStop(Vote vote);
-  
-  void SetShouldRunBeforePublicStop(bool newval) { 
-      m_should_run_before_public_stop = newval; 
-  }
-  
-  bool ShouldRunBeforePublicStop() {
-      return m_should_run_before_public_stop;
-  }
 
   /// Sets the extended backtrace token for this thread
   ///
@@ -1237,18 +1184,6 @@ public:
   lldb::ValueObjectSP GetCurrentException();
 
   lldb::ThreadSP GetCurrentExceptionBacktrace();
-
-  lldb::ValueObjectSP GetSiginfoValue();
-
-  /// Request the pc value the thread had when previously stopped.
-  ///
-  /// When the thread performs execution, it copies the current RegisterContext
-  /// GetPC() value.  This method returns that value, if it is available.
-  ///
-  /// \return
-  ///     The PC value before execution was resumed.  May not be available;
-  ///     an empty std::optional is returned in that case.
-  std::optional<lldb::addr_t> GetPreviousFrameZeroPC();
 
 protected:
   friend class ThreadPlan;
@@ -1299,11 +1234,6 @@ protected:
 
   void FrameSelectedCallback(lldb_private::StackFrame *frame);
 
-  virtual llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>>
-  GetSiginfo(size_t max_size) const {
-    return llvm::make_error<UnimplementedError>();
-  }
-
   // Classes that inherit from Process can see and modify these
   lldb::ProcessWP m_process_wp;    ///< The process that owns this thread.
   lldb::StopInfoSP m_stop_info_sp; ///< The private stop reason for this thread
@@ -1314,11 +1244,8 @@ protected:
   uint32_t m_stop_info_override_stop_id; // The stop ID containing the last time
                                          // the stop info was checked against
                                          // the stop info override
-  bool m_should_run_before_public_stop;  // If this thread has "stop others" 
-                                         // private work to do, then it will
-                                         // set this.
   const uint32_t m_index_id; ///< A unique 1 based index assigned to each thread
-                             /// for easy UI/command line access.
+                             ///for easy UI/command line access.
   lldb::RegisterContextSP m_reg_context_sp; ///< The register context for this
                                             ///thread's current register state.
   lldb::StateType m_state;                  ///< The state of our process.
@@ -1330,9 +1257,6 @@ protected:
                                            ///populated after a thread stops.
   lldb::StackFrameListSP m_prev_frames_sp; ///< The previous stack frames from
                                            ///the last time this thread stopped.
-  std::optional<lldb::addr_t>
-      m_prev_framezero_pc; ///< Frame 0's PC the last
-                           /// time this thread was stopped.
   int m_resume_signal; ///< The signal that should be used when continuing this
                        ///thread.
   lldb::StateType m_resume_state; ///< This state is used to force a thread to

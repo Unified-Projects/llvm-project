@@ -9,12 +9,10 @@
 #ifndef LLVM_LIBC_SRC_MATH_FMAXL_H
 #define LLVM_LIBC_SRC_MATH_FMAXL_H
 
-#include "src/__support/macros/config.h"
-
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 long double fmaxl(long double x, long double y);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_MATH_FMAXL_H

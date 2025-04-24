@@ -17,7 +17,8 @@ TEST(FormatTest, SingleLine) {
   llvm::raw_string_ostream os(str);
   raw_indented_ostream ros(os);
   ros << 10;
-  EXPECT_THAT(str, StrEq("10"));
+  ros.flush();
+  EXPECT_THAT(os.str(), StrEq("10"));
 }
 
 TEST(FormatTest, SimpleMultiLine) {
@@ -29,7 +30,8 @@ TEST(FormatTest, SimpleMultiLine) {
   ros << "\n";
   ros << "c";
   ros << "\n";
-  EXPECT_THAT(str, StrEq("ab\nc\n"));
+  ros.flush();
+  EXPECT_THAT(os.str(), StrEq("ab\nc\n"));
 }
 
 TEST(FormatTest, SimpleMultiLineIndent) {
@@ -41,7 +43,8 @@ TEST(FormatTest, SimpleMultiLineIndent) {
   ros << "\n";
   ros << "c";
   ros << "\n";
-  EXPECT_THAT(str, StrEq("  a    b\n    c\n"));
+  ros.flush();
+  EXPECT_THAT(os.str(), StrEq("  a    b\n    c\n"));
 }
 
 TEST(FormatTest, SingleRegion) {
@@ -59,6 +62,7 @@ TEST(FormatTest, SingleRegion) {
     }
   }
   ros << "after";
+  ros.flush();
   const auto *expected =
       R"(before
   inside 10
@@ -67,7 +71,7 @@ TEST(FormatTest, SingleRegion) {
     inner inner
   }
 after)";
-  EXPECT_THAT(str, StrEq(expected));
+  EXPECT_THAT(os.str(), StrEq(expected));
 
   // Repeat the above with inline form.
   str.clear();
@@ -75,6 +79,7 @@ after)";
   ros.scope().os << "inside " << 10 << "\n   two\n";
   ros.scope().os.scope("{\n", "\n}\n").os << "inner inner";
   ros << "after";
+  ros.flush();
   EXPECT_THAT(os.str(), StrEq(expected));
 }
 
@@ -93,27 +98,13 @@ TEST(FormatTest, Reindent) {
                  
                  
   )";
-  ros.printReindented(desc);
+  ros.reindent(desc);
+  ros.flush();
   const auto *expected =
       R"(First line
         second line
 
 
 )";
-  EXPECT_THAT(str, StrEq(expected));
-}
-
-TEST(FormatTest, ReindentLineEndings) {
-  std::string str;
-  llvm::raw_string_ostream os(str);
-  raw_indented_ostream ros(os);
-
-  // Similar string as the previous test, but with \r\n (Windows style) line
-  // breaks. Note that C++'s internal string representation uses \n, so just
-  // running the previous test as-is on Windows is not sufficient.
-  const auto *desc =
-      "\r\n\r\n\r\n         First line\r\n                 second line";
-  ros.printReindented(desc);
-  const auto *expected = "First line\r\n        second line";
-  EXPECT_THAT(str, StrEq(expected));
+  EXPECT_THAT(os.str(), StrEq(expected));
 }

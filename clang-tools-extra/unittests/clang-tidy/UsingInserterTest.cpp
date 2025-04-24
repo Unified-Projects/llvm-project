@@ -37,8 +37,8 @@ public:
     auto Hint =
         Inserter->createUsingDeclaration(*Result.Context, *Call, "::foo::func");
 
-    if (Hint)
-      diag(Call->getBeginLoc(), "Fix for testing") << *Hint;
+    if (Hint.hasValue())
+      diag(Call->getBeginLoc(), "Fix for testing") << Hint.getValue();
 
     diag(Call->getBeginLoc(), "insert call")
         << clang::FixItHint::CreateReplacement(
@@ -60,8 +60,9 @@ std::string runChecker(StringRef Code, unsigned ExpectedWarningCount) {
                                                             "}"}};
   std::vector<ClangTidyError> errors;
 
-  std::string result = test::runCheckOnCode<Check>(
-      Code, &errors, "foo.cc", {}, ClangTidyOptions(), AdditionalFileContents);
+  std::string result =
+      test::runCheckOnCode<Check>(Code, &errors, "foo.cc", None,
+                                  ClangTidyOptions(), AdditionalFileContents);
 
   EXPECT_EQ(ExpectedWarningCount, errors.size());
   return result;

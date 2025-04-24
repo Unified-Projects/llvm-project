@@ -18,7 +18,6 @@
 #include "FuzzerSHA1.h"
 #include "FuzzerTracePC.h"
 #include <algorithm>
-#include <bitset>
 #include <chrono>
 #include <numeric>
 #include <random>
@@ -40,13 +39,13 @@ struct InputInfo {
   bool MayDeleteFile = false;
   bool Reduced = false;
   bool HasFocusFunction = false;
-  std::vector<uint32_t> UniqFeatureSet;
-  std::vector<uint8_t> DataFlowTraceForFocusFunction;
+  Vector<uint32_t> UniqFeatureSet;
+  Vector<uint8_t> DataFlowTraceForFocusFunction;
   // Power schedule.
   bool NeedsEnergyUpdate = false;
   double Energy = 0.0;
   double SumIncidence = 0.0;
-  std::vector<std::pair<uint32_t, uint16_t>> FeatureFreqs;
+  Vector<std::pair<uint32_t, uint16_t>> FeatureFreqs;
 
   // Delete feature Idx and its frequency from FeatureFreqs.
   bool DeleteFeatureFreq(uint32_t Idx) {
@@ -78,7 +77,7 @@ struct InputInfo {
     SumIncidence = 0.0;
 
     // Apply add-one smoothing to locally discovered features.
-    for (const auto &F : FeatureFreqs) {
+    for (auto F : FeatureFreqs) {
       double LocalIncidence = F.second + 1;
       Energy -= LocalIncidence * log(LocalIncidence);
       SumIncidence += LocalIncidence;
@@ -210,7 +209,7 @@ public:
   InputInfo *AddToCorpus(const Unit &U, size_t NumFeatures, bool MayDeleteFile,
                          bool HasFocusFunction, bool NeverReduce,
                          std::chrono::microseconds TimeOfUnit,
-                         const std::vector<uint32_t> &FeatureSet,
+                         const Vector<uint32_t> &FeatureSet,
                          const DataFlowTrace &DFT, const InputInfo *BaseII) {
     assert(!U.empty());
     if (FeatureDebug)
@@ -259,7 +258,7 @@ public:
   }
 
   // Debug-only
-  void PrintFeatureSet(const std::vector<uint32_t> &FeatureSet) {
+  void PrintFeatureSet(const Vector<uint32_t> &FeatureSet) {
     if (!FeatureDebug) return;
     Printf("{");
     for (uint32_t Feature: FeatureSet)
@@ -285,8 +284,7 @@ public:
     }
   }
 
-  void Replace(InputInfo *II, const Unit &U,
-               std::chrono::microseconds TimeOfUnit) {
+  void Replace(InputInfo *II, const Unit &U) {
     assert(II->U.size() > U.size());
     Hashes.erase(Sha1ToString(II->Sha1));
     DeleteFile(*II);
@@ -294,7 +292,6 @@ public:
     Hashes.insert(Sha1ToString(II->Sha1));
     II->U = U;
     II->Reduced = true;
-    II->TimeOfUnit = TimeOfUnit;
     DistributionNeedsUpdate = true;
   }
 
@@ -328,8 +325,7 @@ public:
       const auto &II = *Inputs[i];
       Printf("  [% 3zd %s] sz: % 5zd runs: % 5zd succ: % 5zd focus: %d\n", i,
              Sha1ToString(II.Sha1).c_str(), II.U.size(),
-             II.NumExecutedMutations, II.NumSuccessfullMutations,
-             II.HasFocusFunction);
+             II.NumExecutedMutations, II.NumSuccessfullMutations, II.HasFocusFunction);
     }
   }
 
@@ -383,7 +379,6 @@ public:
       }
 
       // Remove most abundant rare feature.
-      IsRareFeature[Delete] = false;
       RareFeatures[Delete] = RareFeatures.back();
       RareFeatures.pop_back();
 
@@ -399,7 +394,6 @@ public:
 
     // Add rare feature, handle collisions, and update energy.
     RareFeatures.push_back(Idx);
-    IsRareFeature[Idx] = true;
     GlobalFeatureFreqs[Idx] = 0;
     for (auto II : Inputs) {
       II->DeleteFeatureFreq(Idx);
@@ -453,7 +447,9 @@ public:
     uint16_t Freq = GlobalFeatureFreqs[Idx32]++;
 
     // Skip if abundant.
-    if (Freq > FreqOfMostAbundantRareFeature || !IsRareFeature[Idx32])
+    if (Freq > FreqOfMostAbundantRareFeature ||
+        std::find(RareFeatures.begin(), RareFeatures.end(), Idx32) ==
+            RareFeatures.end())
       return;
 
     // Update global frequencies.
@@ -567,11 +563,11 @@ private:
   }
   std::piecewise_constant_distribution<double> CorpusDistribution;
 
-  std::vector<double> Intervals;
-  std::vector<double> Weights;
+  Vector<double> Intervals;
+  Vector<double> Weights;
 
   std::unordered_set<std::string> Hashes;
-  std::vector<InputInfo *> Inputs;
+  Vector<InputInfo*> Inputs;
 
   size_t NumAddedFeatures = 0;
   size_t NumUpdatedFeatures = 0;
@@ -581,8 +577,7 @@ private:
   bool DistributionNeedsUpdate = true;
   uint16_t FreqOfMostAbundantRareFeature = 0;
   uint16_t GlobalFeatureFreqs[kFeatureSetSize] = {};
-  std::vector<uint32_t> RareFeatures;
-  std::bitset<kFeatureSetSize> IsRareFeature;
+  Vector<uint32_t> RareFeatures;
 
   std::string OutputCorpus;
 };

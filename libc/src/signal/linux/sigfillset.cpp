@@ -7,22 +7,22 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/signal/sigfillset.h"
+#include "include/errno.h"
+#include "src/errno/llvmlibc_errno.h"
+#include "src/signal/linux/signal.h"
 
-#include "hdr/types/sigset_t.h"
 #include "src/__support/common.h"
-#include "src/__support/macros/config.h"
-#include "src/errno/libc_errno.h"
-#include "src/signal/linux/signal_utils.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 LLVM_LIBC_FUNCTION(int, sigfillset, (sigset_t * set)) {
   if (!set) {
-    libc_errno = EINVAL;
+    llvmlibc_errno = EINVAL;
     return -1;
   }
-  *set = full_set();
+  auto *sigset = reinterpret_cast<__llvm_libc::Sigset *>(set);
+  *sigset = __llvm_libc::Sigset::fullset();
   return 0;
 }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

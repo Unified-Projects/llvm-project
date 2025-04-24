@@ -29,8 +29,7 @@ namespace exegesis {
 class SnippetRepetitor {
 public:
   static std::unique_ptr<const SnippetRepetitor>
-  Create(Benchmark::RepetitionModeE Mode, const LLVMState &State,
-         MCRegister LoopRegister);
+  Create(InstructionBenchmark::RepetitionModeE Mode, const LLVMState &State);
 
   virtual ~SnippetRepetitor();
 
@@ -40,8 +39,8 @@ public:
   // Returns a functor that repeats `Instructions` so that the function executes
   // at least `MinInstructions` instructions.
   virtual FillFunction Repeat(ArrayRef<MCInst> Instructions,
-                              unsigned MinInstructions, unsigned LoopBodySize,
-                              bool CleanupMemory) const = 0;
+                              unsigned MinInstructions,
+                              unsigned LoopBodySize) const = 0;
 
   explicit SnippetRepetitor(const LLVMState &State) : State(State) {}
 

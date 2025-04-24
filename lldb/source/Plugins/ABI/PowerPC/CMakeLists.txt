@@ -8,8 +8,6 @@ add_lldb_library(lldbPluginABIPowerPC PLUGIN
     lldbSymbol
     lldbTarget
     lldbPluginTypeSystemClang
-    lldbValueObject
   LINK_COMPONENTS
     Support
-    TargetParser
   )

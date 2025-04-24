@@ -12,7 +12,5 @@ add_llvm_component_library(LLVMBitWriter
   Core
   MC
   Object
-  ProfileData
   Support
-  TargetParser
   )

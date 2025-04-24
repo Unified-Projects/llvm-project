@@ -5,9 +5,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
-// UNSUPPORTED: no-threads
+//
+// UNSUPPORTED: libcpp-has-no-threads
 // UNSUPPORTED: c++03, c++11, c++14
+
+// ALLOW_RETRIES: 2
+
+// shared_mutex was introduced in macosx10.12
+// UNSUPPORTED: use_system_cxx_lib && target={{.+}}-apple-macosx10.{{9|10|11}}
 
 // <shared_mutex>
 
@@ -16,65 +21,47 @@
 // bool try_lock_shared();
 
 #include <shared_mutex>
-#include <cassert>
 #include <thread>
 #include <vector>
+#include <cstdlib>
+#include <cassert>
 
 #include "make_test_thread.h"
+#include "test_macros.h"
 
-int main(int, char**) {
-  // Try to lock-shared a mutex that is not locked yet. This should succeed.
-  {
-    std::shared_mutex m;
-    std::vector<std::thread> threads;
-    for (int i = 0; i != 5; ++i) {
-      threads.push_back(support::make_test_thread([&] {
-        bool succeeded = m.try_lock_shared();
-        assert(succeeded);
-        m.unlock_shared();
-      }));
-    }
+std::shared_mutex m;
 
-    for (auto& t : threads)
-      t.join();
-  }
+typedef std::chrono::system_clock Clock;
+typedef Clock::time_point time_point;
+typedef Clock::duration duration;
+typedef std::chrono::milliseconds ms;
+typedef std::chrono::nanoseconds ns;
 
-  // Try to lock-shared a mutex that is already exclusively locked. This should fail.
-  {
-    std::shared_mutex m;
-    m.lock();
-
-    std::vector<std::thread> threads;
-    for (int i = 0; i != 5; ++i) {
-      threads.push_back(support::make_test_thread([&] {
-        bool succeeded = m.try_lock_shared();
-        assert(!succeeded);
-      }));
-    }
-
-    for (auto& t : threads)
-      t.join();
-
-    m.unlock();
-  }
-
-  // Try to lock-shared a mutex that is already lock-shared. This should succeed.
-  {
-    std::shared_mutex m;
-    m.lock_shared();
-    std::vector<std::thread> threads;
-    for (int i = 0; i != 5; ++i) {
-      threads.push_back(support::make_test_thread([&] {
-        bool succeeded = m.try_lock_shared();
-        assert(succeeded);
-        m.unlock_shared();
-      }));
-    }
+void f()
+{
+    time_point t0 = Clock::now();
+    assert(!m.try_lock_shared());
+    assert(!m.try_lock_shared());
+    assert(!m.try_lock_shared());
+    while(!m.try_lock_shared())
+        ;
+    time_point t1 = Clock::now();
     m.unlock_shared();
+    ns d = t1 - t0 - ms(250);
+    assert(d < ms(200));  // within 200ms
+}
 
-    for (auto& t : threads)
-      t.join();
-  }
+
+int main(int, char**)
+{
+    m.lock();
+    std::vector<std::thread> v;
+    for (int i = 0; i < 5; ++i)
+        v.push_back(support::make_test_thread(f));
+    std::this_thread::sleep_for(ms(250));
+    m.unlock();
+    for (auto& t : v)
+        t.join();
 
   return 0;
 }

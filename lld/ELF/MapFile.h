@@ -9,9 +9,12 @@
 #ifndef LLD_ELF_MAPFILE_H
 #define LLD_ELF_MAPFILE_H
 
-namespace lld::elf {
-struct Ctx;
-void writeMapAndCref(Ctx &);
-}
+namespace lld {
+namespace elf {
+void writeMapFile();
+void writeCrossReferenceTable();
+void writeArchiveStats();
+} // namespace elf
+} // namespace lld
 
 #endif

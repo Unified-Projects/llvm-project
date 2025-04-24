@@ -11,12 +11,12 @@
 
 #include "llvm/ADT/DenseMap.h"
 
-namespace lld::elf {
-struct Ctx;
+namespace lld {
+namespace elf {
 class InputSectionBase;
 
-llvm::DenseMap<const InputSectionBase *, int>
-computeCallGraphProfileOrder(Ctx &);
-} // namespace lld::elf
+llvm::DenseMap<const InputSectionBase *, int> computeCallGraphProfileOrder();
+} // namespace elf
+} // namespace lld
 
 #endif

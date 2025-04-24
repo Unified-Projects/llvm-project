@@ -1,4 +1,4 @@
-//===-- GCNNSAReassign.cpp - Reassign registers in NSA instructions -------===//
+//===-- GCNNSAReassign.cpp - Reassign registers in NSA unstructions -------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -8,7 +8,7 @@
 //
 /// \file
 /// \brief Try to reassign registers on GFX10+ from non-sequential to sequential
-/// in NSA image instructions. Later SIShrinkInstructions pass will replace NSA
+/// in NSA image instructions. Later SIShrinkInstructions pass will relace NSA
 /// with sequential versions where possible.
 ///
 //===----------------------------------------------------------------------===//
@@ -16,12 +16,10 @@
 #include "AMDGPU.h"
 #include "GCNSubtarget.h"
 #include "SIMachineFunctionInfo.h"
-#include "SIRegisterInfo.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/InitializePasses.h"
 
 using namespace llvm;
@@ -48,21 +46,21 @@ public:
   StringRef getPassName() const override { return "GCN NSA Reassign"; }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<LiveIntervalsWrapperPass>();
-    AU.addRequired<VirtRegMapWrapperLegacy>();
-    AU.addRequired<LiveRegMatrixWrapperLegacy>();
+    AU.addRequired<LiveIntervals>();
+    AU.addRequired<VirtRegMap>();
+    AU.addRequired<LiveRegMatrix>();
     AU.setPreservesAll();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 
 private:
-  using NSA_Status = enum {
+  typedef enum {
     NOT_NSA,        // Not an NSA instruction
     FIXED,          // NSA which we cannot modify
     NON_CONTIGUOUS, // NSA with non-sequential address which we can try
                     // to optimize.
     CONTIGUOUS      // NSA with all sequential address registers
-  };
+  } NSA_Status;
 
   const GCNSubtarget *ST;
 
@@ -94,9 +92,9 @@ private:
 
 INITIALIZE_PASS_BEGIN(GCNNSAReassign, DEBUG_TYPE, "GCN NSA Reassign",
                       false, false)
-INITIALIZE_PASS_DEPENDENCY(LiveIntervalsWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(VirtRegMapWrapperLegacy)
-INITIALIZE_PASS_DEPENDENCY(LiveRegMatrixWrapperLegacy)
+INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
+INITIALIZE_PASS_DEPENDENCY(VirtRegMap)
+INITIALIZE_PASS_DEPENDENCY(LiveRegMatrix)
 INITIALIZE_PASS_END(GCNNSAReassign, DEBUG_TYPE, "GCN NSA Reassign",
                     false, false)
 
@@ -161,23 +159,15 @@ GCNNSAReassign::scavengeRegs(SmallVectorImpl<LiveInterval *> &Intervals) const {
 GCNNSAReassign::NSA_Status
 GCNNSAReassign::CheckNSA(const MachineInstr &MI, bool Fast) const {
   const AMDGPU::MIMGInfo *Info = AMDGPU::getMIMGInfo(MI.getOpcode());
-  if (!Info)
+  if (!Info || Info->MIMGEncoding != AMDGPU::MIMGEncGfx10NSA)
     return NSA_Status::NOT_NSA;
-
-  switch (Info->MIMGEncoding) {
-  case AMDGPU::MIMGEncGfx10NSA:
-  case AMDGPU::MIMGEncGfx11NSA:
-    break;
-  default:
-    return NSA_Status::NOT_NSA;
-  }
 
   int VAddr0Idx =
     AMDGPU::getNamedOperandIdx(MI.getOpcode(), AMDGPU::OpName::vaddr0);
 
   unsigned VgprBase = 0;
   bool NSA = false;
-  for (unsigned I = 0; I < Info->VAddrOperands; ++I) {
+  for (unsigned I = 0; I < Info->VAddrDwords; ++I) {
     const MachineOperand &Op = MI.getOperand(VAddr0Idx + I);
     Register Reg = Op.getReg();
     if (Reg.isPhysical() || !VRM->isAssignedReg(Reg))
@@ -189,16 +179,15 @@ GCNNSAReassign::CheckNSA(const MachineInstr &MI, bool Fast) const {
       if (!PhysReg)
         return NSA_Status::FIXED;
 
-      // TODO: address the below limitation to handle GFX11 BVH instructions
       // Bail if address is not a VGPR32. That should be possible to extend the
       // optimization to work with subregs of a wider register tuples, but the
       // logic to find free registers will be much more complicated with much
       // less chances for success. That seems reasonable to assume that in most
       // cases a tuple is used because a vector variable contains different
-      // parts of an address and it is either already consecutive or cannot
+      // parts of an address and it is either already consequitive or cannot
       // be reassigned if not. If needed it is better to rely on register
       // coalescer to process such address tuples.
-      if (TRI->getRegSizeInBits(*MRI->getRegClass(Reg)) != 32 || Op.getSubReg())
+      if (MRI->getRegClass(Reg) != &AMDGPU::VGPR_32RegClass || Op.getSubReg())
         return NSA_Status::FIXED;
 
       // InlineSpiller does not call LRM::assign() after an LI split leaving
@@ -237,14 +226,14 @@ GCNNSAReassign::CheckNSA(const MachineInstr &MI, bool Fast) const {
 
 bool GCNNSAReassign::runOnMachineFunction(MachineFunction &MF) {
   ST = &MF.getSubtarget<GCNSubtarget>();
-  if (!ST->hasNSAEncoding() || !ST->hasNonNSAEncoding())
+  if (ST->getGeneration() < GCNSubtarget::GFX10)
     return false;
 
   MRI = &MF.getRegInfo();
   TRI = ST->getRegisterInfo();
-  VRM = &getAnalysis<VirtRegMapWrapperLegacy>().getVRM();
-  LRM = &getAnalysis<LiveRegMatrixWrapperLegacy>().getLRM();
-  LIS = &getAnalysis<LiveIntervalsWrapperPass>().getLIS();
+  VRM = &getAnalysis<VirtRegMap>();
+  LRM = &getAnalysis<LiveRegMatrix>();
+  LIS = &getAnalysis<LiveIntervals>();
 
   const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
   MaxNumVGPRs = ST->getMaxNumVGPRs(MF);
@@ -259,10 +248,10 @@ bool GCNNSAReassign::runOnMachineFunction(MachineFunction &MF) {
       default:
         continue;
       case NSA_Status::CONTIGUOUS:
-        Candidates.push_back(std::pair(&MI, true));
+        Candidates.push_back(std::make_pair(&MI, true));
         break;
       case NSA_Status::NON_CONTIGUOUS:
-        Candidates.push_back(std::pair(&MI, false));
+        Candidates.push_back(std::make_pair(&MI, false));
         ++NumNSAInstructions;
         break;
       }
@@ -289,7 +278,7 @@ bool GCNNSAReassign::runOnMachineFunction(MachineFunction &MF) {
     SmallVector<LiveInterval *, 16> Intervals;
     SmallVector<MCRegister, 16> OrigRegs;
     SlotIndex MinInd, MaxInd;
-    for (unsigned I = 0; I < Info->VAddrOperands; ++I) {
+    for (unsigned I = 0; I < Info->VAddrDwords; ++I) {
       const MachineOperand &Op = MI->getOperand(VAddr0Idx + I);
       Register Reg = Op.getReg();
       LiveInterval *LI = &LIS->getInterval(Reg);
@@ -328,14 +317,12 @@ bool GCNNSAReassign::runOnMachineFunction(MachineFunction &MF) {
         continue;
     } else {
       // Check we did not make it worse for other instructions.
-      auto *I =
-          std::lower_bound(Candidates.begin(), &C, MinInd,
-                           [this](const Candidate &C, SlotIndex I) {
-                             return LIS->getInstructionIndex(*C.first) < I;
-                           });
-      for (auto *E = Candidates.end();
-           Success && I != E && LIS->getInstructionIndex(*I->first) < MaxInd;
-           ++I) {
+      auto I = std::lower_bound(Candidates.begin(), &C, MinInd,
+                                [this](const Candidate &C, SlotIndex I) {
+                                  return LIS->getInstructionIndex(*C.first) < I;
+                                });
+      for (auto E = Candidates.end(); Success && I != E &&
+              LIS->getInstructionIndex(*I->first) < MaxInd; ++I) {
         if (I->second && CheckNSA(*I->first, true) < NSA_Status::CONTIGUOUS) {
           Success = false;
           LLVM_DEBUG(dbgs() << "\tNSA conversion conflict with " << *I->first);
@@ -344,11 +331,11 @@ bool GCNNSAReassign::runOnMachineFunction(MachineFunction &MF) {
     }
 
     if (!Success) {
-      for (unsigned I = 0; I < Info->VAddrOperands; ++I)
+      for (unsigned I = 0; I < Info->VAddrDwords; ++I)
         if (VRM->hasPhys(Intervals[I]->reg()))
           LRM->unassign(*Intervals[I]);
 
-      for (unsigned I = 0; I < Info->VAddrOperands; ++I)
+      for (unsigned I = 0; I < Info->VAddrDwords; ++I)
         LRM->assign(*Intervals[I], OrigRegs[I]);
 
       continue;

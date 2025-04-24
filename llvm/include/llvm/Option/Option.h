@@ -15,6 +15,7 @@
 #include "llvm/Option/OptTable.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
+#include <string>
 
 namespace llvm {
 
@@ -34,10 +35,6 @@ enum DriverFlag {
   RenderAsInput    = (1 << 1),
   RenderJoined     = (1 << 2),
   RenderSeparate   = (1 << 3)
-};
-
-enum DriverVisibility {
-  DefaultVis = (1 << 0),
 };
 
 /// Option - Abstract representation for a single form of driver
@@ -100,8 +97,7 @@ public:
   /// Get the name of this option without any prefix.
   StringRef getName() const {
     assert(Info && "Must have a valid info!");
-    assert(Owner && "Must have a valid owner!");
-    return Owner->getOptionName(Info->ID);
+    return Info->Name;
   }
 
   const Option getGroup() const {
@@ -128,16 +124,15 @@ public:
 
   /// Get the default prefix for this option.
   StringRef getPrefix() const {
-    assert(Info && "Must have a valid info!");
-    assert(Owner && "Must have a valid owner!");
-    return Owner->getOptionPrefix(Info->ID);
+    const char *Prefix = *Info->Prefixes;
+    return Prefix ? Prefix : StringRef();
   }
 
   /// Get the name of this option with the default prefix.
-  StringRef getPrefixedName() const {
-    assert(Info && "Must have a valid info!");
-    assert(Owner && "Must have a valid owner!");
-    return Owner->getOptionPrefixedName(Info->ID);
+  std::string getPrefixedName() const {
+    std::string Ret(getPrefix());
+    Ret += getName();
+    return Ret;
   }
 
   /// Get the help text for this option.
@@ -188,11 +183,6 @@ public:
     return Info->Flags & Val;
   }
 
-  /// Test if this option has the visibility flag \a Val.
-  bool hasVisibilityFlag(unsigned Val) const {
-    return Info->Visibility & Val;
-  }
-
   /// getUnaliasedOption - Return the final option this option
   /// aliases (itself, if the option has no alias).
   const Option getUnaliasedOption() const {
@@ -215,9 +205,9 @@ public:
   /// always be false.
   bool matches(OptSpecifier ID) const;
 
-  /// Potentially accept the current argument, returning a new Arg instance,
-  /// or 0 if the option does not accept this argument (or the argument is
-  /// missing values).
+  /// accept - Potentially accept the current argument, returning a
+  /// new Arg instance, or 0 if the option does not accept this
+  /// argument (or the argument is missing values).
   ///
   /// If the option accepts the current argument, accept() sets
   /// Index to the position where argument parsing should resume
@@ -227,15 +217,15 @@ public:
   /// underlying storage to represent a Joined argument.
   /// \p GroupedShortOption If true, we are handling the fallback case of
   /// parsing a prefix of the current argument as a short option.
-  std::unique_ptr<Arg> accept(const ArgList &Args, StringRef CurArg,
-                              bool GroupedShortOption, unsigned &Index) const;
+  Arg *accept(const ArgList &Args, StringRef CurArg, bool GroupedShortOption,
+              unsigned &Index) const;
 
 private:
-  std::unique_ptr<Arg> acceptInternal(const ArgList &Args, StringRef CurArg,
-                                      unsigned &Index) const;
+  Arg *acceptInternal(const ArgList &Args, StringRef CurArg,
+                      unsigned &Index) const;
 
 public:
-  void print(raw_ostream &O, bool AddNewLine = true) const;
+  void print(raw_ostream &O) const;
   void dump() const;
 };
 

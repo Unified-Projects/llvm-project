@@ -14,6 +14,7 @@
 #include "MCTargetDesc/WebAssemblyMCTargetDesc.h"
 #include "WebAssembly.h"
 #include "WebAssemblyInstrInfo.h"
+#include "WebAssemblyMachineFunctionInfo.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/Passes.h"
@@ -35,7 +36,7 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
-    AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
+    AU.addPreserved<MachineBlockFrequencyInfo>();
     AU.addPreservedID(MachineDominatorsID);
     MachineFunctionPass::getAnalysisUsage(AU);
   }
@@ -61,7 +62,7 @@ static void rewriteP2Align(MachineInstr &MI, unsigned OperandNo) {
   assert((*MI.memoperands_begin())->getSize() ==
              (UINT64_C(1) << WebAssembly::GetDefaultP2Align(MI.getOpcode())) &&
          "Default p2align value should be natural");
-  assert(MI.getDesc().operands()[OperandNo].OperandType ==
+  assert(MI.getDesc().OpInfo[OperandNo].OperandType ==
              WebAssembly::OPERAND_P2ALIGN &&
          "Load and store instructions should have a p2align operand");
   uint64_t P2Align = Log2((*MI.memoperands_begin())->getAlign());

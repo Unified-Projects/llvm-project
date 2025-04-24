@@ -8,13 +8,12 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_COMPILECOMMANDS_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_COMPILECOMMANDS_H
 
-#include "GlobalCompilationDatabase.h"
 #include "support/Threading.h"
+#include "clang/Tooling/ArgumentsAdjusters.h"
+#include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/CommandLine.h"
 #include <deque>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,14 +26,17 @@ namespace clangd {
 //  - forcing the use of clangd's builtin headers rather than clang's
 //  - resolving argv0 as cc1 expects
 //  - injecting -isysroot flags on mac as the system clang does
+// FIXME: This is currently not used in all code paths that create invocations.
+// Make use of these adjusters and buildCompilerInvocation in clangd-indexer as
+// well. It should be possible to hook it up by overriding RunInvocation in
+// FrontendActionFactory.
 struct CommandMangler {
   // Absolute path to clang.
-  std::optional<std::string> ClangPath;
+  llvm::Optional<std::string> ClangPath;
   // Directory containing builtin headers.
-  std::optional<std::string> ResourceDir;
+  llvm::Optional<std::string> ResourceDir;
   // Root for searching for standard library (passed to -isysroot).
-  std::optional<std::string> Sysroot;
-  SystemIncludeExtractorFn SystemIncludeExtractor;
+  llvm::Optional<std::string> Sysroot;
 
   // A command-mangler that doesn't know anything about the system.
   // This is hermetic for unit-tests, but won't work well in production.
@@ -45,12 +47,11 @@ struct CommandMangler {
   //  - on mac, find clang and isysroot by querying the `xcrun` launcher
   static CommandMangler detect();
 
-  // `Cmd` may describe compilation of a different file, and will be updated
-  // for parsing `TargetFile`.
-  void operator()(tooling::CompileCommand &Cmd,
-                  llvm::StringRef TargetFile) const;
+  void adjust(std::vector<std::string> &Cmd, llvm::StringRef File) const;
+  explicit operator clang::tooling::ArgumentsAdjuster() &&;
 
 private:
+  CommandMangler() = default;
   Memoize<llvm::StringMap<std::string>> ResolvedDrivers;
   Memoize<llvm::StringMap<std::string>> ResolvedDriversNoFollow;
 };

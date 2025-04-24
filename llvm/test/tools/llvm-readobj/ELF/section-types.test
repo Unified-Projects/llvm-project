@@ -37,8 +37,6 @@
 # LLVM: Type: SHT_SYMTAB_SHNDX
 # LLVM: Name: relr
 # LLVM: Type: SHT_RELR
-# LLVM: Name: crel
-# LLVM: Type: SHT_CREL (0x40000014)
 # LLVM: Name: android_rel
 # LLVM: Type: SHT_ANDROID_REL
 # LLVM: Name: android_rela
@@ -61,8 +59,6 @@
 # LLVM: Type: SHT_LLVM_PART_EHDR
 # LLVM: Name: .phdrs
 # LLVM: Type: SHT_LLVM_PART_PHDR
-# LLVM: Name: .llvm.lto
-# LLVM: Type: SHT_LLVM_LTO
 # LLVM: Name: gnu_attributes
 # LLVM: Type: SHT_GNU_ATTRIBUTES
 # LLVM: Name: gnu_hash
@@ -112,7 +108,6 @@
 # GNU-NEXT: group                   GROUP
 # GNU-NEXT: symtab_shndx            SYMTAB SECTION INDICES
 # GNU-NEXT: relr                    RELR
-# GNU-NEXT: crel                    CREL
 # GNU-NEXT: android_rel             ANDROID_REL
 # GNU-NEXT: android_rela            ANDROID_RELA
 # GNU-NEXT: android_relr            ANDROID_RELR
@@ -124,7 +119,6 @@
 # GNU-NEXT: .llvm_sympart.f         LLVM_SYMPART
 # GNU-NEXT: part1                   LLVM_PART_EHDR
 # GNU-NEXT: .phdrs                  LLVM_PART_PHDR
-# GNU-NEXT: .llvm.lto               LLVM_LTO
 # GNU-NEXT: gnu_attributes          ATTRIBUTES
 # GNU-NEXT: gnu_hash                GNU_HASH
 # GNU-NEXT: gnu_verdef              VERDEF
@@ -188,8 +182,6 @@ Sections:
     Entries: [ 0, 1 ]
   - Name: relr
     Type: SHT_RELR
-  - Name: crel
-    Type: SHT_CREL
   - Name: android_rel
     Type: SHT_ANDROID_REL
   - Name: android_rela
@@ -213,8 +205,6 @@ Sections:
     Type: SHT_LLVM_PART_EHDR
   - Name: .phdrs
     Type: SHT_LLVM_PART_PHDR
-  - Name: .llvm.lto
-    Type: SHT_LLVM_LTO
   - Name: gnu_attributes
     Type: SHT_GNU_ATTRIBUTES
   - Name: gnu_hash

@@ -22,10 +22,10 @@
 
 #ifdef cl_khr_fp64
 
-#include "ep_log.h"
 #include <clc/clc.h>
-#include <clc/math/math.h>
-#include <clc/math/tables.h>
+#include "ep_log.h"
+#include "math.h"
+#include "tables.h"
 
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
 

@@ -25,9 +25,7 @@ void FileAction::Clear() {
   m_file_spec.Clear();
 }
 
-llvm::StringRef FileAction::GetPath() const {
-  return m_file_spec.GetPathAsConstString().AsCString();
-}
+llvm::StringRef FileAction::GetPath() const { return m_file_spec.GetCString(); }
 
 const FileSpec &FileAction::GetFileSpec() const { return m_file_spec; }
 
@@ -41,7 +39,7 @@ bool FileAction::Open(int fd, const FileSpec &file_spec, bool read,
     else if (read)
       m_arg = O_NOCTTY | O_RDONLY;
     else
-      m_arg = O_NOCTTY | O_CREAT | O_WRONLY | O_TRUNC;
+      m_arg = O_NOCTTY | O_CREAT | O_WRONLY;
     m_file_spec = file_spec;
     return true;
   } else {
@@ -83,7 +81,7 @@ void FileAction::Dump(Stream &stream) const {
     break;
   case eFileActionOpen:
     stream.Printf("open fd %d with '%s', OFLAGS = 0x%x", m_fd,
-                  m_file_spec.GetPath().c_str(), m_arg);
+                  m_file_spec.GetCString(), m_arg);
     break;
   }
 }

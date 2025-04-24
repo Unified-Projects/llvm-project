@@ -34,8 +34,7 @@ patterns:
     captures:
       1:
         name: storage.type.llvm
-  - match: "(?<=\\s|^)#dbg_(assign|declare|label|value)\\b|\
-            \\badd\\b|\
+  - match: "\\badd\\b|\
             \\baddrspacecast\\b|\
             \\balloca\\b|\
             \\band\\b|\
@@ -239,7 +238,6 @@ patterns:
             \\bnosync\\b|\
             \\bnoundef\\b|\
             \\bnounwind\\b|\
-            \\bnosanitize_bounds\\b|\
             \\bnosanitize_coverage\\b|\
             \\bnull_pointer_is_valid\\b|\
             \\boptforfuzzing\\b|\

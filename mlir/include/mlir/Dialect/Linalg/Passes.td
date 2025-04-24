@@ -11,100 +11,214 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ConvertElementwiseToLinalgPass : Pass<"convert-elementwise-to-linalg", ""> {
+def ConvertElementwiseToLinalg : FunctionPass<"convert-elementwise-to-linalg"> {
   let summary = "Convert ElementwiseMappable ops to linalg";
   let description = [{
     Convert ops with the `ElementwiseMappable` trait to linalg parallel loops.
 
-    This pass only converts ops that operate on ranked tensors. It can be
-    run on op which contains linalg ops (most commonly a
-    FunctionOpInterface op).
+    This pass only converts ops that operate on ranked tensors.
   }];
+  let constructor = "mlir::createConvertElementwiseToLinalgPass()";
   let dependentDialects = ["linalg::LinalgDialect", "memref::MemRefDialect"];
 }
 
-def ConvertLinalgToAffineLoopsPass : Pass<"convert-linalg-to-affine-loops"> {
-  let summary = "Lower the operations from the linalg dialect into affine "
-                "loops";
-  let dependentDialects = [
-    "affine::AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"];
+def LinalgComprehensiveModuleBufferize :
+    Pass<"linalg-comprehensive-module-bufferize", "ModuleOp"> {
+  let summary = "Bufferize (tensor into memref) for a Module.";
+  let description = [{
+    This pass implements a cross-dialect bufferization approach and performs an
+    analysis to determine which op operands and results may be bufferized in the
+    same buffers. The analysis is performed on topologically sorted CallOp and
+    FuncOp within a module. It provides analyses and bufferization across
+    function boundaries. Within a function boundary, the analysis is performed
+    on SSA use-def chains starting from function operands that are annotated
+    with the 'inplaceable' attribute.
+  }];
+  let options = [
+    Option<"testAnalysisOnly", "test-analysis-only", "bool",
+            /*default=*/"false",
+           "Only runs inplaceability analysis (for testing purposes only)">
+  ];
+  let constructor = "mlir::createLinalgComprehensiveModuleBufferizePass()";
 }
 
-def ConvertLinalgToLoopsPass : Pass<"convert-linalg-to-loops"> {
-  let summary = "Lower the operations from the linalg dialect into loops";
-  let description = [{
-    Lowers the `linalg` ops to loop nests using `scf.for`.
-
-    Pre-condition: the operands used by the `linalg` ops have buffer semantics,
-    i.e., tensor operands and results must be converted to memrefs via
-    bufferization.
-  }];
+def LinalgFoldUnitExtentDims : FunctionPass<"linalg-fold-unit-extent-dims"> {
+  let summary = "Remove unit-extent dimension in Linalg ops on tensors";
+  let constructor = "mlir::createLinalgFoldUnitExtentDimsPass()";
+  let options = [
+    Option<"foldOneTripLoopsOnly", "fold-one-trip-loops-only", "bool",
+            /*default=*/"false",
+           "Only folds the one-trip loops from Linalg ops on tensors "
+           "(for testing purposes only)">
+  ];
   let dependentDialects = [
-    "linalg::LinalgDialect",
-    "scf::SCFDialect",
-    "affine::AffineDialect"
+    "linalg::LinalgDialect", "AffineDialect", "memref::MemRefDialect"
   ];
 }
 
-def ConvertLinalgToParallelLoopsPass
-    : Pass<"convert-linalg-to-parallel-loops"> {
+def LinalgElementwiseOpFusion : Pass<"linalg-fuse-elementwise-ops"> {
+  let summary = "Fuse elementwise operations on tensors";
+  let constructor = "mlir::createLinalgElementwiseOpFusionPass()";
+  let options = [
+    Option<"allowFoldingUnitDimReshapes", "allow-folding-unit-dim-reshapes",
+           "bool", /*default=*/"false",
+           "Allow fusing linalg.tensor_reshape ops that performs unit "
+           "dimension collapsing">
+  ];
+  let dependentDialects = [
+    "AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"
+  ];
+}
+
+def LinalgFoldReshapeOpsByLinearization :
+  Pass<"linalg-fold-reshape-ops-by-linearization"> {
+  let summary = "Fold TensorReshapeOps with generic/indexed generic ops by "
+                "linearization";
+  let constructor = "mlir::createFoldReshapeOpsByLinearizationPass()";
+  let options = [
+    Option<"allowFoldingUnitDimReshapes", "allow-folding-unit-dim-reshapes",
+           "bool", /*default=*/"false",
+           "Allow fusing linalg.tensor_reshape ops that performs unit "
+           "dimension collapsing">
+  ];
+  let dependentDialects = ["AffineDialect", "memref::MemRefDialect"];
+}
+
+def LinalgLowerTiledLoopsToSCF
+    : FunctionPass<"convert-linalg-tiled-loops-to-scf"> {
+  let summary = "Lower linalg tiled loops to SCF loops and parallel loops";
+  let constructor = "mlir::createConvertLinalgTiledLoopsToSCFPass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect",
+    "scf::SCFDialect",
+    "AffineDialect"
+  ];
+}
+
+def LinalgInlineScalarOperands : FunctionPass<"linalg-inline-scalar-operands"> {
+  let summary = "Inline scalar operands into linalg generic ops";
+  let constructor = "mlir::createLinalgInlineScalarOperandsPass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect"
+  ];
+}
+
+def LinalgLowerToAffineLoops : FunctionPass<"convert-linalg-to-affine-loops"> {
+  let summary = "Lower the operations from the linalg dialect into affine "
+                "loops";
+  let constructor = "mlir::createConvertLinalgToAffineLoopsPass()";
+  let dependentDialects = [
+    "AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"];
+}
+
+def LinalgLowerToLoops : FunctionPass<"convert-linalg-to-loops"> {
+  let summary = "Lower the operations from the linalg dialect into loops";
+  let constructor = "mlir::createConvertLinalgToLoopsPass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect",
+    "scf::SCFDialect",
+    "AffineDialect"
+  ];
+}
+
+def LinalgLowerToParallelLoops
+    : FunctionPass<"convert-linalg-to-parallel-loops"> {
   let summary = "Lower the operations from the linalg dialect into parallel "
                 "loops";
+  let constructor = "mlir::createConvertLinalgToParallelLoopsPass()";
   let dependentDialects = [
-    "affine::AffineDialect",
+    "AffineDialect",
     "linalg::LinalgDialect",
     "memref::MemRefDialect",
     "scf::SCFDialect"
   ];
 }
 
-def LinalgFoldUnitExtentDimsPass : Pass<"linalg-fold-unit-extent-dims", ""> {
-  let summary = "Remove unit-extent dimension in Linalg ops on tensors";
+def LinalgBufferize : Pass<"linalg-bufferize", "FuncOp"> {
+  let summary = "Bufferize the linalg dialect";
+  let constructor = "mlir::createLinalgBufferizePass()";
+  let dependentDialects = [
+    "linalg::LinalgDialect",
+    "AffineDialect",
+    "memref::MemRefDialect"
+  ];
+}
+
+def LinalgPromotion : FunctionPass<"linalg-promote-subviews"> {
+  let summary = "Promote subview ops to local buffers";
+  let constructor = "mlir::createLinalgPromotionPass()";
   let options = [
-    Option<"useRankReducingSlices", "use-rank-reducing-slices", "bool",
-           /*default=*/"false",
-           "Generate rank-reducing slices instead of reassociative reshapes">
+    Option<"dynamicBuffers", "test-promote-dynamic", "bool",
+           /*default=*/"false", "Test generation of dynamic promoted buffers">,
+    Option<"useAlloca", "test-use-alloca", "bool",
+           /*default=*/"false", "Test generation of alloca'ed buffers.">
+  ];
+  let dependentDialects = ["linalg::LinalgDialect"];
+}
+
+def LinalgTiling : FunctionPass<"linalg-tile"> {
+  let summary = "Tile operations in the linalg dialect";
+  let constructor = "mlir::createLinalgTilingPass()";
+  let dependentDialects = [
+    "AffineDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect",
+    "scf::SCFDialect"
+  ];
+  let options = [
+    ListOption<"tileSizes", "linalg-tile-sizes", "int64_t", "Tile sizes",
+               "llvm::cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated">
+  ];
+}
+
+def LinalgTilingToParallelLoops
+    : FunctionPass<"linalg-tile-to-parallel-loops"> {
+  let summary = "Tile operations in the linalg dialect to parallel loops";
+  let constructor = "mlir::createLinalgTilingToParallelLoopsPass()";
+  let options = [
+    ListOption<"tileSizes", "linalg-tile-sizes", "int64_t", "Tile sizes",
+               "llvm::cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated">
   ];
   let dependentDialects = [
-    "linalg::LinalgDialect", "affine::AffineDialect", "memref::MemRefDialect"
+    "AffineDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect",
+    "scf::SCFDialect"
   ];
 }
 
-def LinalgElementwiseOpFusionPass : Pass<"linalg-fuse-elementwise-ops"> {
-  let summary = "Fuse elementwise operations on tensors";
+def LinalgTilingToTiledLoops
+    : FunctionPass<"linalg-tile-to-tiled-loop"> {
+  let summary = "Tile operations in the linalg dialect to linalg.tiled_loop";
+  let constructor = "mlir::createLinalgTilingToTiledLoopPass()";
+  let options = [
+    ListOption<"tileSizes", "linalg-tile-sizes", "int64_t", "Tile sizes",
+               "llvm::cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated">,
+    ListOption<"distributionTypes", "linalg-distribution-types", "std::string",
+               "DistributionTypes",
+               "llvm::cl::ZeroOrMore, llvm::cl::MiscFlags::CommaSeparated">
+  ];
   let dependentDialects = [
-    "affine::AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"
+    "AffineDialect",
+    "linalg::LinalgDialect",
+    "memref::MemRefDialect",
+    "scf::SCFDialect"
   ];
 }
 
-def LinalgNamedOpConversionPass: Pass<"linalg-named-op-conversion"> {
-  let summary = "Convert from one named linalg op to another.";
-  let dependentDialects = ["linalg::LinalgDialect", "tensor::TensorDialect"];
-}
-
-def LinalgInlineScalarOperandsPass : Pass<"linalg-inline-scalar-operands"> {
-  let summary = "Inline scalar operands into linalg generic ops";
-  let dependentDialects = [
-    "linalg::LinalgDialect"
-  ];
-}
-
-def LinalgGeneralizeNamedOpsPass : Pass<"linalg-generalize-named-ops"> {
+def LinalgGeneralization : FunctionPass<"linalg-generalize-named-ops"> {
   let summary = "Convert named ops into generic ops";
+  let constructor = "mlir::createLinalgGeneralizationPass()";
   let dependentDialects = ["linalg::LinalgDialect"];
 }
 
-def LinalgSpecializeGenericOpsPass : Pass<"linalg-specialize-generic-ops"> {
-  let summary = "Convert generic ops back to named ops";
-  let dependentDialects = ["linalg::LinalgDialect"];
-}
-
-def LinalgDetensorizePass : InterfacePass<"linalg-detensorize", "FunctionOpInterface"> {
+def LinalgDetensorize : FunctionPass<"linalg-detensorize"> {
   let summary = "Detensorize linalg ops";
+  let constructor = "mlir::createLinalgDetensorizePass()";
   let dependentDialects = [];
 
   let description = [{
-    Detensoring is the process through which a tensor value is converted to one
+    Detensoring is the process through which a tensor value is convereted to one
     or potentially more primitive value(s). During this process, operations with
     such detensored operands are also converted to an equivalent form that works
     on primitives.
@@ -123,76 +237,7 @@ def LinalgDetensorizePass : InterfacePass<"linalg-detensorize", "FunctionOpInter
     In addition to detensoring individual ops, this pass detensors internal
     control flow inside a function. All blocks except for the entry block are
     detensored by converting their arguments whenever possible.
-
-    This can be run on any FunctionOpInterface op and must not be
-    run on others. This is because it performs specific legalization of the
-    blocks that make up the body, which it assumes has is a FunctionOpInterface.
   }];
-  let options = [
-    Option<"aggressiveMode", "aggressive-mode", "bool", /*default=*/"false",
-           "Detensorize all ops that qualify for detensoring along with branch"
-           " operands and basic-block arguments.">
-
-  ];
-}
-
-def LinalgBlockPackMatmul : Pass<"linalg-block-pack-matmul"> {
-  let summary = "Convert linalg matmul ops to block layout and back";
-  let description = [{
-    Pack a matmul operation into blocked layout with two levels of subdivision:
-    - major 2D blocks - outer dimensions, consist of minor blocks
-    - minor 2D blocks - inner dimensions, consist of scalar elements
-
-    A 2D matmul MxNxK gets reshaped into blocked 4D representation
-    as: [MB][NB][mb][nb] += [MB][KB][mb][kb] * [NB][KB][nb][kb]
-    where the (MB, NB, KB) dimensions represent the major blocks,
-    and the (mb, nb, kb) are the minor blocks of their respective
-    original 2D dimensions (M, N, K).
-
-    Depending on the initial operands' data layout and the specified
-    packing options, the major blocks dimensions might get transposed
-    e.g., [MB][KB] -> [KB][MB]. The minor blocks can also be transposed
-    e.g., [mb][kb] -> [kb][mb].
-    Any present batch dimensions remain unchanged.
-    The final result is unpacked back to the original shape.
-
-    For example, given a matmul operation:
-    ```mlir
-      %res = linalg.matmul ins(%A, %B) outs(%C)
-    ```
-    the default transformation result can be represented as:
-    ```mlir
-      %A_packed = pack %A : 2D <MxK> -> 4D <MBxKBxmbxkb>
-      %B_packed = pack %B : 2D <KxN> -> 4D <NBxKBxnbxkb>
-      %C_packed = pack %C : 2D <MxN> -> 4D <MBxNBxmbxnb>
-      %res_packed = linalg.mmt4d ins(%A_packed, %B_packed) outs(%C_packed)
-      %res = unpack %res_packed : 4D <MBxNBxmbxnb> -> 2D <MxN>
-    ```
-  }];
-  let dependentDialects = ["linalg::LinalgDialect", "tensor::TensorDialect"];
-  let options = [
-    ListOption<"blockFactors", "block-factors", "int64_t",
-               "Block factors (mb, nb, kb) for relayout">,
-    Option<"allowPadding", "allow-padding", "bool",
-           /*default=*/"true",
-           "Allow packing padding">,
-    ListOption<"mnkPaddedSizesNextMultipleOf", "mnk-padded-multiples", "int64_t",
-               "Next multiples of the packing sizes">,
-    ListOption<"mnkOrder", "mnk-order", "int64_t",
-               "Permutation of matmul (M, N, K) dimensions order">,
-    Option<"lhsTransposeOuterBlocks", "lhs-transpose-outer-blocks", "bool",
-           /*default=*/"false",
-           "Transpose LHS outer block layout [MB][KB] -> [KB][MB]">,
-    Option<"lhsTransposeInnerBlocks", "lhs-transpose-inner-blocks", "bool",
-           /*default=*/"false",
-           "Transpose LHS inner block layout [mb][kb] -> [kb][mb]">,
-    Option<"rhsTransposeOuterBlocks", "rhs-transpose-outer-blocks", "bool",
-           /*default=*/"true",
-           "Transpose RHS outer block layout [KB][NB] -> [NB][KB]">,
-    Option<"rhsTransposeInnerBlocks", "rhs-transpose-inner-blocks", "bool",
-           /*default=*/"true",
-           "Transpose RHS inner block layout [kb][nb] -> [nb][kb]">
-  ];
 }
 
 #endif // MLIR_DIALECT_LINALG_PASSES

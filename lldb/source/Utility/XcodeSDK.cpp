@@ -11,7 +11,7 @@
 
 #include "lldb/lldb-types.h"
 
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 #include <string>
 
@@ -34,10 +34,6 @@ static llvm::StringRef GetName(XcodeSDK::Type type) {
     return "WatchSimulator";
   case XcodeSDK::watchOS:
     return "WatchOS";
-  case XcodeSDK::XRSimulator:
-    return "XRSimulator";
-  case XcodeSDK::XROS:
-    return "XROS";
   case XcodeSDK::bridgeOS:
     return "bridgeOS";
   case XcodeSDK::Linux:
@@ -58,9 +54,12 @@ XcodeSDK::XcodeSDK(XcodeSDK::Info info) : m_name(GetName(info.type).str()) {
   }
 }
 
-XcodeSDK &XcodeSDK::operator=(const XcodeSDK &other) = default;
+XcodeSDK &XcodeSDK::operator=(const XcodeSDK &other) {
+  m_name = other.m_name;
+  return *this;
+}
 
-bool XcodeSDK::operator==(const XcodeSDK &other) const {
+bool XcodeSDK::operator==(const XcodeSDK &other) {
   return m_name == other.m_name;
 }
 
@@ -79,10 +78,6 @@ static XcodeSDK::Type ParseSDKName(llvm::StringRef &name) {
     return XcodeSDK::WatchSimulator;
   if (name.consume_front("WatchOS"))
     return XcodeSDK::watchOS;
-  if (name.consume_front("XRSimulator"))
-    return XcodeSDK::XRSimulator;
-  if (name.consume_front("XROS"))
-    return XcodeSDK::XROS;
   if (name.consume_front("bridgeOS"))
     return XcodeSDK::bridgeOS;
   if (name.consume_front("Linux"))
@@ -160,7 +155,7 @@ void XcodeSDK::Merge(const XcodeSDK &other) {
     *this = other;
   else {
     // The Internal flag always wins.
-    if (llvm::StringRef(m_name).ends_with(".sdk"))
+    if (llvm::StringRef(m_name).endswith(".sdk"))
       if (!l.internal && r.internal)
         m_name =
             m_name.substr(0, m_name.size() - 3) + std::string("Internal.sdk");
@@ -191,12 +186,6 @@ std::string XcodeSDK::GetCanonicalName(XcodeSDK::Info info) {
   case watchOS:
     name = "watchos";
     break;
-  case XRSimulator:
-    name = "xrsimulator";
-    break;
-  case XROS:
-    name = "xros";
-    break;
   case bridgeOS:
     name = "bridgeos";
     break;
@@ -226,9 +215,6 @@ bool XcodeSDK::SDKSupportsModules(XcodeSDK::Type sdk_type,
   case Type::watchOS:
   case Type::WatchSimulator:
     return version >= llvm::VersionTuple(6);
-  case Type::XROS:
-  case Type::XRSimulator:
-    return true;
   default:
     return false;
   }
@@ -250,8 +236,6 @@ bool XcodeSDK::SupportsSwift() const {
   case Type::WatchSimulator:
   case Type::watchOS:
     return info.version.empty() || info.version >= llvm::VersionTuple(2);
-  case Type::XROS:
-  case Type::XRSimulator:
   case Type::Linux:
     return true;
   default:
@@ -259,30 +243,9 @@ bool XcodeSDK::SupportsSwift() const {
   }
 }
 
-bool XcodeSDK::SDKSupportsBuiltinModules(const llvm::Triple &target_triple,
-                                         llvm::VersionTuple sdk_version) {
-  using namespace llvm;
-
-  switch (target_triple.getOS()) {
-  case Triple::OSType::MacOSX:
-    return sdk_version >= VersionTuple(15U);
-  case Triple::OSType::IOS:
-    return sdk_version >= VersionTuple(18U);
-  case Triple::OSType::TvOS:
-    return sdk_version >= VersionTuple(18U);
-  case Triple::OSType::WatchOS:
-    return sdk_version >= VersionTuple(11U);
-  case Triple::OSType::XROS:
-    return sdk_version >= VersionTuple(2U);
-  default:
-    // New SDKs support builtin modules from the start.
-    return true;
-  }
-}
-
 bool XcodeSDK::SDKSupportsModules(XcodeSDK::Type desired_type,
                                   const FileSpec &sdk_path) {
-  ConstString last_path_component = sdk_path.GetFilename();
+  ConstString last_path_component = sdk_path.GetLastPathComponent();
 
   if (!last_path_component)
     return false;
@@ -316,10 +279,6 @@ XcodeSDK::Type XcodeSDK::GetSDKTypeForTriple(const llvm::Triple &triple) {
     if (triple.getEnvironment() == Triple::Simulator)
       return XcodeSDK::WatchSimulator;
     return XcodeSDK::watchOS;
-  case Triple::XROS:
-    if (triple.getEnvironment() == Triple::Simulator)
-      return XcodeSDK::XRSimulator;
-    return XcodeSDK::XROS;
   case Triple::Linux:
     return XcodeSDK::Linux;
   default:
@@ -335,7 +294,7 @@ std::string XcodeSDK::FindXcodeContentsDirectoryInPath(llvm::StringRef path) {
   // .app. If the next component is Contents then we've found the Contents
   // directory.
   for (auto it = begin; it != end; ++it) {
-    if (it->ends_with(".app")) {
+    if (it->endswith(".app")) {
       auto next = it;
       if (++next != end && *next == "Contents") {
         llvm::SmallString<128> buffer;

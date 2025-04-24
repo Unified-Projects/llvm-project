@@ -14,7 +14,6 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/TargetLowering.h"
-#include "llvm/IR/GlobalAlias.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <cstdint>
@@ -38,18 +37,15 @@ bool BaseIndexOffset::equalBaseIndex(const BaseIndexOffset &Other,
       return true;
 
     // Match GlobalAddresses
-    if (auto *A = dyn_cast<GlobalAddressSDNode>(Base)) {
+    if (auto *A = dyn_cast<GlobalAddressSDNode>(Base))
       if (auto *B = dyn_cast<GlobalAddressSDNode>(Other.Base))
         if (A->getGlobal() == B->getGlobal()) {
           Off += B->getOffset() - A->getOffset();
           return true;
         }
 
-      return false;
-    }
-
     // Match Constants
-    if (auto *A = dyn_cast<ConstantPoolSDNode>(Base)) {
+    if (auto *A = dyn_cast<ConstantPoolSDNode>(Base))
       if (auto *B = dyn_cast<ConstantPoolSDNode>(Other.Base)) {
         bool IsMatch =
             A->isMachineConstantPoolEntry() == B->isMachineConstantPoolEntry();
@@ -65,8 +61,7 @@ bool BaseIndexOffset::equalBaseIndex(const BaseIndexOffset &Other,
         }
       }
 
-      return false;
-    }
+    const MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
 
     // Match FrameIndexes.
     if (auto *A = dyn_cast<FrameIndexSDNode>(Base))
@@ -77,7 +72,6 @@ bool BaseIndexOffset::equalBaseIndex(const BaseIndexOffset &Other,
         // Non-equal FrameIndexes - If both frame indices are fixed
         // we know their relative offsets and can compare them. Otherwise
         // we must be conservative.
-        const MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
         if (MFI.isFixedObjectIndex(A->getIndex()) &&
             MFI.isFixedObjectIndex(B->getIndex())) {
           Off += MFI.getObjectOffset(B->getIndex()) -
@@ -86,42 +80,42 @@ bool BaseIndexOffset::equalBaseIndex(const BaseIndexOffset &Other,
         }
       }
   }
-
   return false;
 }
 
 bool BaseIndexOffset::computeAliasing(const SDNode *Op0,
-                                      const LocationSize NumBytes0,
+                                      const Optional<int64_t> NumBytes0,
                                       const SDNode *Op1,
-                                      const LocationSize NumBytes1,
+                                      const Optional<int64_t> NumBytes1,
                                       const SelectionDAG &DAG, bool &IsAlias) {
+
   BaseIndexOffset BasePtr0 = match(Op0, DAG);
-  if (!BasePtr0.getBase().getNode())
-    return false;
-
   BaseIndexOffset BasePtr1 = match(Op1, DAG);
-  if (!BasePtr1.getBase().getNode())
-    return false;
 
+  if (!(BasePtr0.getBase().getNode() && BasePtr1.getBase().getNode()))
+    return false;
   int64_t PtrDiff;
-  if (BasePtr0.equalBaseIndex(BasePtr1, DAG, PtrDiff)) {
+  if (NumBytes0.hasValue() && NumBytes1.hasValue() &&
+      BasePtr0.equalBaseIndex(BasePtr1, DAG, PtrDiff)) {
     // If the size of memory access is unknown, do not use it to analysis.
+    // One example of unknown size memory access is to load/store scalable
+    // vector objects on the stack.
     // BasePtr1 is PtrDiff away from BasePtr0. They alias if none of the
     // following situations arise:
-    if (PtrDiff >= 0 && NumBytes0.hasValue() && !NumBytes0.isScalable()) {
+    if (PtrDiff >= 0 &&
+        *NumBytes0 != static_cast<int64_t>(MemoryLocation::UnknownSize)) {
       // [----BasePtr0----]
       //                         [---BasePtr1--]
       // ========PtrDiff========>
-      IsAlias = !(static_cast<int64_t>(NumBytes0.getValue().getFixedValue()) <=
-                  PtrDiff);
+      IsAlias = !(*NumBytes0 <= PtrDiff);
       return true;
     }
-    if (PtrDiff < 0 && NumBytes1.hasValue() && !NumBytes1.isScalable()) {
+    if (PtrDiff < 0 &&
+        *NumBytes1 != static_cast<int64_t>(MemoryLocation::UnknownSize)) {
       //                     [----BasePtr0----]
       // [---BasePtr1--]
       // =====(-PtrDiff)====>
-      IsAlias = !((PtrDiff + static_cast<int64_t>(
-                                 NumBytes1.getValue().getFixedValue())) <= 0);
+      IsAlias = !((PtrDiff + *NumBytes1) <= 0);
       return true;
     }
     return false;
@@ -135,7 +129,7 @@ bool BaseIndexOffset::computeAliasing(const SDNode *Op0,
       MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
       // If the base are the same frame index but the we couldn't find a
       // constant offset, (indices are different) be conservative.
-      if (A->getIndex() != B->getIndex() && (!MFI.isFixedObjectIndex(A->getIndex()) ||
+      if (A != B && (!MFI.isFixedObjectIndex(A->getIndex()) ||
                      !MFI.isFixedObjectIndex(B->getIndex()))) {
         IsAlias = false;
         return true;
@@ -149,27 +143,13 @@ bool BaseIndexOffset::computeAliasing(const SDNode *Op0,
   bool IsCV0 = isa<ConstantPoolSDNode>(BasePtr0.getBase());
   bool IsCV1 = isa<ConstantPoolSDNode>(BasePtr1.getBase());
 
-  if ((IsFI0 || IsGV0 || IsCV0) && (IsFI1 || IsGV1 || IsCV1)) {
-    // We can derive NoAlias In case of mismatched base types.
-    if (IsFI0 != IsFI1 || IsGV0 != IsGV1 || IsCV0 != IsCV1) {
-      IsAlias = false;
-      return true;
-    }
-    if (IsGV0 && IsGV1) {
-      auto *GV0 = cast<GlobalAddressSDNode>(BasePtr0.getBase())->getGlobal();
-      auto *GV1 = cast<GlobalAddressSDNode>(BasePtr1.getBase())->getGlobal();
-      // It doesn't make sense to access one global value using another globals
-      // values address, so we can assume that there is no aliasing in case of
-      // two different globals (unless we have symbols that may indirectly point
-      // to each other).
-      // FIXME: This is perhaps a bit too defensive. We could try to follow the
-      // chain with aliasee information for GlobalAlias variables to find out if
-      // we indirect symbols may alias or not.
-      if (GV0 != GV1 && !isa<GlobalAlias>(GV0) && !isa<GlobalAlias>(GV1)) {
-        IsAlias = false;
-        return true;
-      }
-    }
+  // If of mismatched base types or checkable indices we can check
+  // they do not alias.
+  if ((BasePtr0.getIndex() == BasePtr1.getIndex() || (IsFI0 != IsFI1) ||
+       (IsGV0 != IsGV1) || (IsCV0 != IsCV1)) &&
+      (IsFI0 || IsGV0 || IsCV0) && (IsFI1 || IsGV1 || IsCV1)) {
+    IsAlias = false;
+    return true;
   }
   return false; // Cannot determine whether the pointers alias.
 }

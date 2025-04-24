@@ -14,30 +14,23 @@
 #ifndef LLVM_MC_MCTARGETOPTIONSCOMMANDFLAGS_H
 #define LLVM_MC_MCTARGETOPTIONSCOMMANDFLAGS_H
 
-#include <optional>
+#include "llvm/ADT/Optional.h"
 #include <string>
 
 namespace llvm {
 
 class MCTargetOptions;
-enum class EmitDwarfUnwindType;
 
 namespace mc {
 
 bool getRelaxAll();
-std::optional<bool> getExplicitRelaxAll();
+Optional<bool> getExplicitRelaxAll();
 
 bool getIncrementalLinkerCompatible();
-
-bool getFDPIC();
 
 int getDwarfVersion();
 
 bool getDwarf64();
-
-EmitDwarfUnwindType getEmitDwarfUnwind();
-
-bool getEmitCompactUnwindNonCanonical();
 
 bool getShowMCInst();
 
@@ -49,19 +42,7 @@ bool getNoDeprecatedWarn();
 
 bool getNoTypeCheck();
 
-bool getSaveTempLabels();
-
-bool getCrel();
-
-bool getImplicitMapSyms();
-
-bool getX86RelaxRelocations();
-
-bool getX86Sse2Avx();
-
 std::string getABIName();
-
-std::string getAsSecureLogFile();
 
 /// Create this object with static storage to register mc-related command
 /// line options.

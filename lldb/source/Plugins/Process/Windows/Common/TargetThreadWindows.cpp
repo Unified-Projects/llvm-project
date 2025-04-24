@@ -7,14 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Host/HostInfo.h"
+#include "lldb/Host/HostNativeThreadBase.h"
+#include "lldb/Host/windows/HostThreadWindows.h"
+#include "lldb/Host/windows/windows.h"
+#include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/Unwind.h"
-#include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/Logging.h"
+#include "lldb/Utility/State.h"
 
 #include "ProcessWindows.h"
+#include "ProcessWindowsLog.h"
 #include "TargetThreadWindows.h"
-#include "lldb/Host/windows/HostThreadWindows.h"
-#include <llvm/Support/ConvertUTF.h>
 
 #if defined(__x86_64__) || defined(_M_AMD64)
 #include "x64/RegisterContextWindows_x64.h"
@@ -28,9 +32,6 @@
 
 using namespace lldb;
 using namespace lldb_private;
-
-using GetThreadDescriptionFunctionPtr =
-    HRESULT(WINAPI *)(HANDLE hThread, PWSTR *ppszThreadDescription);
 
 TargetThreadWindows::TargetThreadWindows(ProcessWindows &process,
                                          const HostThread &thread)
@@ -60,7 +61,7 @@ RegisterContextSP
 TargetThreadWindows::CreateRegisterContextForFrame(StackFrame *frame) {
   RegisterContextSP reg_ctx_sp;
   uint32_t concrete_frame_idx = 0;
-  Log *log = GetLog(LLDBLog::Thread);
+  Log *log(GetLogIfAllCategoriesSet(LIBLLDB_LOG_THREAD));
 
   if (frame)
     concrete_frame_idx = frame->GetConcreteFrameIndex();
@@ -130,29 +131,12 @@ Status TargetThreadWindows::DoResume() {
     return Status();
 
   if (resume_state == eStateStepping) {
-    Log *log = GetLog(LLDBLog::Thread);
-
     uint32_t flags_index =
         GetRegisterContext()->ConvertRegisterKindToRegisterNumber(
             eRegisterKindGeneric, LLDB_REGNUM_GENERIC_FLAGS);
     uint64_t flags_value =
         GetRegisterContext()->ReadRegisterAsUnsigned(flags_index, 0);
-    ProcessSP process = GetProcess();
-    const ArchSpec &arch = process->GetTarget().GetArchitecture();
-    switch (arch.GetMachine()) {
-    case llvm::Triple::x86:
-    case llvm::Triple::x86_64:
-      flags_value |= 0x100; // Set the trap flag on the CPU
-      break;
-    case llvm::Triple::aarch64:
-    case llvm::Triple::arm:
-    case llvm::Triple::thumb:
-      flags_value |= 0x200000; // The SS bit in PState
-      break;
-    default:
-      LLDB_LOG(log, "single stepping unsupported on this architecture");
-      break;
-    }
+    flags_value |= 0x100; // Set the trap flag on the CPU
     GetRegisterContext()->WriteRegisterFromUnsigned(flags_index, flags_value);
   }
 
@@ -173,31 +157,4 @@ Status TargetThreadWindows::DoResume() {
   }
 
   return Status();
-}
-
-const char *TargetThreadWindows::GetName() {
-  Log *log = GetLog(LLDBLog::Thread);
-  static GetThreadDescriptionFunctionPtr GetThreadDescription = []() {
-    HMODULE hModule = ::LoadLibraryW(L"Kernel32.dll");
-    return hModule
-               ? reinterpret_cast<GetThreadDescriptionFunctionPtr>(
-                     (void *)::GetProcAddress(hModule, "GetThreadDescription"))
-               : nullptr;
-  }();
-  LLDB_LOGF(log, "GetProcAddress: %p",
-            reinterpret_cast<void *>(GetThreadDescription));
-  if (!GetThreadDescription)
-    return m_name.c_str();
-  PWSTR pszThreadName;
-  if (SUCCEEDED(GetThreadDescription(
-          m_host_thread.GetNativeThread().GetSystemHandle(), &pszThreadName))) {
-    LLDB_LOGF(log, "GetThreadDescription: %ls", pszThreadName);
-    llvm::convertUTF16ToUTF8String(
-        llvm::ArrayRef(reinterpret_cast<char *>(pszThreadName),
-                       wcslen(pszThreadName) * sizeof(wchar_t)),
-        m_name);
-    ::LocalFree(pszThreadName);
-  }
-
-  return m_name.c_str();
 }

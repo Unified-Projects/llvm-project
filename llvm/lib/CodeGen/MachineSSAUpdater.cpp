@@ -51,13 +51,17 @@ MachineSSAUpdater::~MachineSSAUpdater() {
 
 /// Initialize - Reset this object to get ready for a new set of SSA
 /// updates.
-void MachineSSAUpdater::Initialize(Register V) {
+void MachineSSAUpdater::Initialize(const TargetRegisterClass *RC) {
   if (!AV)
     AV = new AvailableValsTy();
   else
     getAvailableVals(AV).clear();
 
-  RegAttrs = MRI->getVRegAttrs(V);
+  VRC = RC;
+}
+
+void MachineSSAUpdater::Initialize(Register V) {
+  Initialize(MRI->getRegClass(V));
 }
 
 /// HasValueForBlock - Return true if the MachineSSAUpdater already has a value for
@@ -89,8 +93,8 @@ Register LookForIdenticalPHI(MachineBasicBlock *BB,
     return Register();
 
   AvailableValsTy AVals;
-  for (const auto &[SrcBB, SrcReg] : PredValues)
-    AVals[SrcBB] = SrcReg;
+  for (unsigned i = 0, e = PredValues.size(); i != e; ++i)
+    AVals[PredValues[i].first] = PredValues[i].second;
   while (I != BB->end() && I->isPHI()) {
     bool Same = true;
     for (unsigned i = 1, e = I->getNumOperands(); i != e; i += 2) {
@@ -111,19 +115,18 @@ Register LookForIdenticalPHI(MachineBasicBlock *BB,
 /// InsertNewDef - Insert an empty PHI or IMPLICIT_DEF instruction which define
 /// a value of the given register class at the start of the specified basic
 /// block. It returns the virtual register defined by the instruction.
-static MachineInstrBuilder InsertNewDef(unsigned Opcode, MachineBasicBlock *BB,
-                                        MachineBasicBlock::iterator I,
-                                        MachineRegisterInfo::VRegAttrs RegAttrs,
-                                        MachineRegisterInfo *MRI,
-                                        const TargetInstrInfo *TII) {
-  Register NewVR = MRI->createVirtualRegister(RegAttrs);
+static
+MachineInstrBuilder InsertNewDef(unsigned Opcode,
+                           MachineBasicBlock *BB, MachineBasicBlock::iterator I,
+                           const TargetRegisterClass *RC,
+                           MachineRegisterInfo *MRI,
+                           const TargetInstrInfo *TII) {
+  Register NewVR = MRI->createVirtualRegister(RC);
   return BuildMI(*BB, I, DebugLoc(), TII->get(Opcode), NewVR);
 }
 
 /// GetValueInMiddleOfBlock - Construct SSA form, materializing a value that
-/// is live in the middle of the specified block. If ExistingValueOnly is
-/// true then this will only return an existing value or $noreg; otherwise new
-/// instructions may be inserted to materialize a value.
+/// is live in the middle of the specified block.
 ///
 /// GetValueInMiddleOfBlock is the same as GetValueAtEndOfBlock except in one
 /// important case: if there is a definition of the rewritten value after the
@@ -140,22 +143,18 @@ static MachineInstrBuilder InsertNewDef(unsigned Opcode, MachineBasicBlock *BB,
 /// their respective blocks.  However, the use of X happens in the *middle* of
 /// a block.  Because of this, we need to insert a new PHI node in SomeBB to
 /// merge the appropriate values, and this value isn't live out of the block.
-Register MachineSSAUpdater::GetValueInMiddleOfBlock(MachineBasicBlock *BB,
-                                                    bool ExistingValueOnly) {
+Register MachineSSAUpdater::GetValueInMiddleOfBlock(MachineBasicBlock *BB) {
   // If there is no definition of the renamed variable in this block, just use
   // GetValueAtEndOfBlock to do our work.
   if (!HasValueForBlock(BB))
-    return GetValueAtEndOfBlockInternal(BB, ExistingValueOnly);
+    return GetValueAtEndOfBlockInternal(BB);
 
   // If there are no predecessors, just return undef.
   if (BB->pred_empty()) {
-    // If we cannot insert new instructions, just return $noreg.
-    if (ExistingValueOnly)
-      return Register();
     // Insert an implicit_def to represent an undef value.
-    MachineInstr *NewDef =
-        InsertNewDef(TargetOpcode::IMPLICIT_DEF, BB, BB->getFirstTerminator(),
-                     RegAttrs, MRI, TII);
+    MachineInstr *NewDef = InsertNewDef(TargetOpcode::IMPLICIT_DEF,
+                                        BB, BB->getFirstTerminator(),
+                                        VRC, MRI, TII);
     return NewDef->getOperand(0).getReg();
   }
 
@@ -166,7 +165,7 @@ Register MachineSSAUpdater::GetValueInMiddleOfBlock(MachineBasicBlock *BB,
 
   bool isFirstPred = true;
   for (MachineBasicBlock *PredBB : BB->predecessors()) {
-    Register PredVal = GetValueAtEndOfBlockInternal(PredBB, ExistingValueOnly);
+    Register PredVal = GetValueAtEndOfBlockInternal(PredBB);
     PredValues.push_back(std::make_pair(PredBB, PredVal));
 
     // Compute SingularValue.
@@ -186,22 +185,18 @@ Register MachineSSAUpdater::GetValueInMiddleOfBlock(MachineBasicBlock *BB,
   if (DupPHI)
     return DupPHI;
 
-  // If we cannot create new instructions, return $noreg now.
-  if (ExistingValueOnly)
-    return Register();
-
   // Otherwise, we do need a PHI: insert one now.
   MachineBasicBlock::iterator Loc = BB->empty() ? BB->end() : BB->begin();
-  MachineInstrBuilder InsertedPHI =
-      InsertNewDef(TargetOpcode::PHI, BB, Loc, RegAttrs, MRI, TII);
+  MachineInstrBuilder InsertedPHI = InsertNewDef(TargetOpcode::PHI, BB,
+                                                 Loc, VRC, MRI, TII);
 
   // Fill in all the predecessors of the PHI.
-  for (const auto &[SrcBB, SrcReg] : PredValues)
-    InsertedPHI.addReg(SrcReg).addMBB(SrcBB);
+  for (unsigned i = 0, e = PredValues.size(); i != e; ++i)
+    InsertedPHI.addReg(PredValues[i].second).addMBB(PredValues[i].first);
 
   // See if the PHI node can be merged to a single value.  This can happen in
   // loop cases when we get a PHI of itself and one other value.
-  if (Register ConstVal = InsertedPHI->isConstantValuePHI()) {
+  if (unsigned ConstVal = InsertedPHI->isConstantValuePHI()) {
     InsertedPHI->eraseFromParent();
     return ConstVal;
   }
@@ -209,7 +204,7 @@ Register MachineSSAUpdater::GetValueInMiddleOfBlock(MachineBasicBlock *BB,
   // If the client wants to know about all new instructions, tell it.
   if (InsertedPHIs) InsertedPHIs->push_back(InsertedPHI);
 
-  LLVM_DEBUG(dbgs() << "  Inserted PHI: " << *InsertedPHI);
+  LLVM_DEBUG(dbgs() << "  Inserted PHI: " << *InsertedPHI << "\n");
   return InsertedPHI.getReg(0);
 }
 
@@ -236,22 +231,6 @@ void MachineSSAUpdater::RewriteUse(MachineOperand &U) {
     NewVR = GetValueInMiddleOfBlock(UseMI->getParent());
   }
 
-  // Insert a COPY if needed to satisfy register class constraints for the using
-  // MO. Or, if possible, just constrain the class for NewVR to avoid the need
-  // for a COPY.
-  if (NewVR) {
-    const TargetRegisterClass *UseRC =
-        dyn_cast_or_null<const TargetRegisterClass *>(RegAttrs.RCOrRB);
-    if (UseRC && !MRI->constrainRegClass(NewVR, UseRC)) {
-      MachineBasicBlock *UseBB = UseMI->getParent();
-      MachineInstr *InsertedCopy =
-          InsertNewDef(TargetOpcode::COPY, UseBB, UseBB->getFirstNonPHI(),
-                       RegAttrs, MRI, TII)
-              .addReg(NewVR);
-      NewVR = InsertedCopy->getOperand(0).getReg();
-      LLVM_DEBUG(dbgs() << "  Inserted COPY: " << *InsertedCopy);
-    }
-  }
   U.setReg(NewVR);
 }
 
@@ -286,7 +265,7 @@ public:
     bool operator==(const PHI_iterator& x) const { return idx == x.idx; }
     bool operator!=(const PHI_iterator& x) const { return !operator==(x); }
 
-    Register getIncomingValue() { return PHI->getOperand(idx).getReg(); }
+    unsigned getIncomingValue() { return PHI->getOperand(idx).getReg(); }
 
     MachineBasicBlock *getIncomingBlock() {
       return PHI->getOperand(idx+1).getMBB();
@@ -306,14 +285,15 @@ public:
     append_range(*Preds, BB->predecessors());
   }
 
-  /// GetPoisonVal - Create an IMPLICIT_DEF instruction with a new register.
+  /// GetUndefVal - Create an IMPLICIT_DEF instruction with a new register.
   /// Add it into the specified block and return the register.
-  static Register GetPoisonVal(MachineBasicBlock *BB,
+  static Register GetUndefVal(MachineBasicBlock *BB,
                               MachineSSAUpdater *Updater) {
-    // Insert an implicit_def to represent a poison value.
-    MachineInstr *NewDef =
-        InsertNewDef(TargetOpcode::IMPLICIT_DEF, BB, BB->getFirstNonPHI(),
-                     Updater->RegAttrs, Updater->MRI, Updater->TII);
+    // Insert an implicit_def to represent an undef value.
+    MachineInstr *NewDef = InsertNewDef(TargetOpcode::IMPLICIT_DEF,
+                                        BB, BB->getFirstNonPHI(),
+                                        Updater->VRC, Updater->MRI,
+                                        Updater->TII);
     return NewDef->getOperand(0).getReg();
   }
 
@@ -322,9 +302,9 @@ public:
   static Register CreateEmptyPHI(MachineBasicBlock *BB, unsigned NumPreds,
                                  MachineSSAUpdater *Updater) {
     MachineBasicBlock::iterator Loc = BB->empty() ? BB->end() : BB->begin();
-    MachineInstr *PHI =
-        InsertNewDef(TargetOpcode::PHI, BB, Loc, Updater->RegAttrs,
-                     Updater->MRI, Updater->TII);
+    MachineInstr *PHI = InsertNewDef(TargetOpcode::PHI, BB, Loc,
+                                     Updater->VRC, Updater->MRI,
+                                     Updater->TII);
     return PHI->getOperand(0).getReg();
   }
 
@@ -370,13 +350,10 @@ public:
 /// for the specified BB and if so, return it.  If not, construct SSA form by
 /// first calculating the required placement of PHIs and then inserting new
 /// PHIs where needed.
-Register
-MachineSSAUpdater::GetValueAtEndOfBlockInternal(MachineBasicBlock *BB,
-                                                bool ExistingValueOnly) {
+Register MachineSSAUpdater::GetValueAtEndOfBlockInternal(MachineBasicBlock *BB){
   AvailableValsTy &AvailableVals = getAvailableVals(AV);
-  Register ExistingVal = AvailableVals.lookup(BB);
-  if (ExistingVal || ExistingValueOnly)
-    return ExistingVal;
+  if (Register V = AvailableVals[BB])
+    return V;
 
   SSAUpdaterImpl<MachineSSAUpdater> Impl(this, &AvailableVals, InsertedPHIs);
   return Impl.GetValue(BB);

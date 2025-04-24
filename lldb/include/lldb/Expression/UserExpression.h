@@ -56,7 +56,7 @@ public:
   ///     If not eResultTypeAny, the type to use for the expression
   ///     result.
   UserExpression(ExecutionContextScope &exe_scope, llvm::StringRef expr,
-                 llvm::StringRef prefix, SourceLanguage language,
+                 llvm::StringRef prefix, lldb::LanguageType language,
                  ResultType desired_type,
                  const EvaluateExpressionOptions &options);
 
@@ -192,21 +192,13 @@ public:
   /// expression.  Text() should contain the definition of this function.
   const char *FunctionName() override { return "$__lldb_expr"; }
 
-  /// Returns whether the call to Parse on this user expression is cacheable.
-  /// This function exists to provide an escape hatch for supporting languages
-  /// where parsing an expression in the exact same context is unsafe. For
-  /// example, languages where generic functions aren't monomorphized, but
-  /// implement some other mechanism to represent generic values, may be unsafe
-  /// to cache, as the concrete type substitution may be different in every
-  /// expression evaluation.
-  virtual bool IsParseCacheable() { return true; }
   /// Return the language that should be used when parsing.  To use the
   /// default, return eLanguageTypeUnknown.
-  SourceLanguage Language() const override { return m_language; }
+  lldb::LanguageType Language() const override { return m_language; }
 
   /// Return the desired result type of the function, or eResultTypeAny if
   /// indifferent.
-  ResultType DesiredResultType() const override { return m_desired_type; }
+  ResultType DesiredResultType() override { return m_desired_type; }
 
   /// Return true if validation code should be inserted into the expression.
   bool NeedsValidation() override { return true; }
@@ -240,9 +232,11 @@ public:
   ///     definitions to be included when the expression is parsed.
   ///
   /// \param[in,out] result_valobj_sp
-  ///      If execution is successful, the result valobj is placed
-  ///      here. Otherwise its Error will contain an ExpressionError
-  ///      with details about the failure mode.
+  ///      If execution is successful, the result valobj is placed here.
+  ///
+  /// \param[out] error
+  ///     Filled in with an error in case the expression evaluation
+  ///     fails to parse, run, or evaluated.
   ///
   /// \param[out] fixed_expression
   ///     If non-nullptr, the fixed expression is copied into the provided
@@ -264,7 +258,7 @@ public:
   static lldb::ExpressionResults
   Evaluate(ExecutionContext &exe_ctx, const EvaluateExpressionOptions &options,
            llvm::StringRef expr_cstr, llvm::StringRef expr_prefix,
-           lldb::ValueObjectSP &result_valobj_sp,
+           lldb::ValueObjectSP &result_valobj_sp, Status &error,
            std::string *fixed_expression = nullptr,
            ValueObject *ctx_obj = nullptr);
 
@@ -272,8 +266,10 @@ public:
       0x1001; ///< ValueObject::GetError() returns this if there is no result
               /// from the expression.
 
-  llvm::StringRef GetFixedText() {
-    return m_fixed_text;
+  const char *GetFixedText() {
+    if (m_fixed_text.empty())
+      return nullptr;
+    return m_fixed_text.c_str();
   }
 
 protected:
@@ -284,25 +280,7 @@ protected:
             lldb::ExpressionVariableSP &result) = 0;
 
   static lldb::addr_t GetObjectPointer(lldb::StackFrameSP frame_sp,
-                                       llvm::StringRef object_name,
-                                       Status &err);
-
-  /// Return ValueObject for a given variable name in the current stack frame
-  ///
-  /// \param[in] frame Current stack frame. When passed a 'nullptr', this
-  ///                  function returns an empty ValueObjectSP.
-  ///
-  /// \param[in] object_name Name of the variable in the current stack frame
-  ///                        for which we want the ValueObjectSP.
-  ///
-  /// \param[out] err Status object which will get set on error.
-  ///
-  /// \returns On success returns a ValueObjectSP corresponding to the variable
-  ///          with 'object_name' in the current 'frame'. Otherwise, returns
-  ///          'nullptr' (and sets the error status parameter 'err').
-  static lldb::ValueObjectSP
-  GetObjectPointerValueObject(lldb::StackFrameSP frame,
-                              llvm::StringRef object_name, Status &err);
+                                       ConstString &object_name, Status &err);
 
   /// Populate m_in_cplusplus_method and m_in_objectivec_method based on the
   /// environment.
@@ -313,22 +291,19 @@ protected:
                            lldb::ProcessSP &process_sp,
                            lldb::StackFrameSP &frame_sp);
 
-  /// The address the process is stopped in.
-  Address m_address;
-  /// The text of the expression, as typed by the user.
-  std::string m_expr_text;
-  /// The text of the translation-level definitions, as provided by the user.
-  std::string m_expr_prefix;
-  /// The text of the expression with fix-its applied this won't be set if the
-  /// fixed text doesn't parse.
-  std::string m_fixed_text;
-  /// The language to use when parsing (unknown means use defaults).
-  SourceLanguage m_language;
-  /// The type to coerce the expression's result to. If eResultTypeAny, inferred
-  /// from the expression.
-  ResultType m_desired_type;
-  /// Additional options provided by the user.
-  EvaluateExpressionOptions m_options;
+  Address m_address;       ///< The address the process is stopped in.
+  std::string m_expr_text; ///< The text of the expression, as typed by the user
+  std::string m_expr_prefix; ///< The text of the translation-level definitions,
+                             ///as provided by the user
+  std::string m_fixed_text; ///< The text of the expression with fix-its applied
+                            ///- this won't be set if the fixed text doesn't
+                            ///parse.
+  lldb::LanguageType m_language; ///< The language to use when parsing
+                                 ///(eLanguageTypeUnknown means use defaults)
+  ResultType m_desired_type; ///< The type to coerce the expression's result to.
+                             ///If eResultTypeAny, inferred from the expression.
+  EvaluateExpressionOptions
+      m_options; ///< Additional options provided by the user.
 };
 
 } // namespace lldb_private

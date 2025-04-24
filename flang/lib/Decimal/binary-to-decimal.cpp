@@ -9,7 +9,6 @@
 #include "big-radix-floating-point.h"
 #include "flang/Decimal/decimal.h"
 #include <cassert>
-#include <cfloat>
 #include <string>
 
 namespace Fortran::decimal {
@@ -311,6 +310,7 @@ ConversionToDecimalResult ConvertToDecimal(char *buffer, std::size_t size,
         more.Next();
       }
       number.Minimize(Big{less, rounding}, Big{more, rounding});
+    } else {
     }
     return number.ConvertToDecimal(buffer, size, flags, digits);
   }
@@ -336,8 +336,6 @@ template ConversionToDecimalResult ConvertToDecimal<113>(char *, std::size_t,
     BinaryFloatingPointNumber<113>);
 
 extern "C" {
-RT_EXT_API_GROUP_BEGIN
-
 ConversionToDecimalResult ConvertFloatToDecimal(char *buffer, std::size_t size,
     enum DecimalConversionFlags flags, int digits,
     enum FortranRounding rounding, float x) {
@@ -352,14 +350,14 @@ ConversionToDecimalResult ConvertDoubleToDecimal(char *buffer, std::size_t size,
       rounding, Fortran::decimal::BinaryFloatingPointNumber<53>(x));
 }
 
-#if LDBL_MANT_DIG == 64
+#if LONG_DOUBLE == 80
 ConversionToDecimalResult ConvertLongDoubleToDecimal(char *buffer,
     std::size_t size, enum DecimalConversionFlags flags, int digits,
     enum FortranRounding rounding, long double x) {
   return Fortran::decimal::ConvertToDecimal(buffer, size, flags, digits,
       rounding, Fortran::decimal::BinaryFloatingPointNumber<64>(x));
 }
-#elif LDBL_MANT_DIG == 113
+#elif LONG_DOUBLE == 128
 ConversionToDecimalResult ConvertLongDoubleToDecimal(char *buffer,
     std::size_t size, enum DecimalConversionFlags flags, int digits,
     enum FortranRounding rounding, long double x) {
@@ -367,9 +365,7 @@ ConversionToDecimalResult ConvertLongDoubleToDecimal(char *buffer,
       rounding, Fortran::decimal::BinaryFloatingPointNumber<113>(x));
 }
 #endif
-
-RT_EXT_API_GROUP_END
-} // extern "C"
+}
 
 template <int PREC, int LOG10RADIX>
 template <typename STREAM>
@@ -377,8 +373,7 @@ STREAM &BigRadixFloatingPointNumber<PREC, LOG10RADIX>::Dump(STREAM &o) const {
   if (isNegative_) {
     o << '-';
   }
-  o << "10**(" << exponent_ << ") * ...  (rounding "
-    << static_cast<int>(rounding_) << ")\n";
+  o << "10**(" << exponent_ << ") * ...\n";
   for (int j{digits_}; --j >= 0;) {
     std::string str{std::to_string(digit_[j])};
     o << std::string(20 - str.size(), ' ') << str << " [" << j << ']';

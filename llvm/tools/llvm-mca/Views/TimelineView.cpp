@@ -296,10 +296,8 @@ void TimelineView::printTimeline(raw_ostream &OS) const {
       // attribute is set correctly whether or not it is greater
       // than timeline-max-cycles so we can use that to ensure
       // we don't early exit because of a 0 latency instruction.
-      if (Entry.CycleRetired == 0 && Entry.CycleExecuted != 0) {
-        FOS << "Truncated display due to cycle limit\n";
+      if (Entry.CycleRetired == 0 && Entry.CycleExecuted != 0)
         return;
-      }
 
       unsigned SourceIndex = IID % Source.size();
       printTimelineViewEntry(FOS, Entry, Iteration, SourceIndex);
@@ -315,10 +313,6 @@ json::Value TimelineView::toJSON() const {
   json::Array TimelineInfo;
 
   for (const TimelineViewEntry &TLE : Timeline) {
-    // Check if the timeline-max-cycles has been reached.
-    if (!TLE.CycleRetired && TLE.CycleExecuted)
-      break;
-
     TimelineInfo.push_back(
         json::Object({{"CycleDispatched", TLE.CycleDispatched},
                       {"CycleReady", TLE.CycleReady},

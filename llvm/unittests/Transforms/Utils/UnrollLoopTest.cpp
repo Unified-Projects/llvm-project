@@ -15,7 +15,6 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 
@@ -73,6 +72,6 @@ while.end:                                        ; preds = %while.cond
 
   bool ret =
       UnrollRuntimeLoopRemainder(L, 4, true, false, false, false, &LI, &SE, &DT,
-                                 &AC, /*TTI=*/nullptr, PreserveLCSSA, 4, false);
+                                 &AC, /*TTI=*/nullptr, PreserveLCSSA);
   EXPECT_FALSE(ret);
 }

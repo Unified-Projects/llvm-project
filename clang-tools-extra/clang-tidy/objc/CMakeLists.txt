@@ -3,14 +3,12 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-add_clang_library(clangTidyObjCModule STATIC
-  AssertEquals.cpp
+add_clang_library(clangTidyObjCModule
   AvoidNSErrorInitCheck.cpp
   DeallocInCategoryCheck.cpp
   ForbiddenSubclassingCheck.cpp
   MissingHashCheck.cpp
   NSInvocationArgumentLifetimeCheck.cpp
-  NSDateFormatterCheck.cpp
   ObjCTidyModule.cpp
   PropertyDeclarationCheck.cpp
   SuperSelfCheck.cpp
@@ -21,7 +19,6 @@ add_clang_library(clangTidyObjCModule STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyObjCModule

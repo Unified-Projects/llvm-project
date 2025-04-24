@@ -10,6 +10,8 @@
 //
 //===----------------------------------------------------------------------===//
 #include "ARMBaseInfo.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace llvm;
 namespace llvm {
@@ -17,7 +19,8 @@ ARM::PredBlockMask expandPredBlockMask(ARM::PredBlockMask BlockMask,
                                        ARMVCC::VPTCodes Kind) {
   using PredBlockMask = ARM::PredBlockMask;
   assert(Kind != ARMVCC::None && "Cannot expand a mask with None!");
-  assert(llvm::countr_zero((unsigned)BlockMask) != 0 && "Mask is already full");
+  assert(countTrailingZeros((unsigned)BlockMask) != 0 &&
+         "Mask is already full");
 
   auto ChooseMask = [&](PredBlockMask AddedThen, PredBlockMask AddedElse) {
     return Kind == ARMVCC::Then ? AddedThen : AddedElse;
@@ -62,13 +65,13 @@ const MClassSysReg *lookupMClassSysRegBy8bitSYSmValue(unsigned SYSm) {
   return ARMSysReg::lookupMClassSysRegByM2M3Encoding8((1<<8)|(SYSm & 0xFF));
 }
 
-#define GET_MClassSysRegsList_IMPL
+#define GET_MCLASSSYSREG_IMPL
 #include "ARMGenSystemRegister.inc"
 
 } // end namespace ARMSysReg
 
 namespace ARMBankedReg {
-#define GET_BankedRegsList_IMPL
+#define GET_BANKEDREG_IMPL
 #include "ARMGenSystemRegister.inc"
 } // end namespce ARMSysReg
 } // end namespace llvm

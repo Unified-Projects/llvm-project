@@ -9,20 +9,25 @@
 #ifndef SCUDO_VECTOR_H_
 #define SCUDO_VECTOR_H_
 
-#include "mem_map.h"
+#include "common.h"
 
 #include <string.h>
 
 namespace scudo {
 
-// A low-level vector based on map. It stores the contents inline up to a fixed
-// capacity, or in an external memory buffer if it grows bigger than that. May
-// incur a significant memory overhead for small vectors. The current
-// implementation supports only POD types.
-//
-// NOTE: This class is not meant to be used directly, use Vector<T> instead.
-template <typename T, size_t StaticNumEntries> class VectorNoCtor {
+// A low-level vector based on map. May incur a significant memory overhead for
+// small vectors. The current implementation supports only POD types.
+template <typename T> class VectorNoCtor {
 public:
+  void init(uptr InitialCapacity = 0) {
+    Data = reinterpret_cast<T *>(&LocalData[0]);
+    CapacityBytes = sizeof(LocalData);
+    reserve(InitialCapacity);
+  }
+  void destroy() {
+    if (Data != reinterpret_cast<T *>(&LocalData[0]))
+      unmap(Data, CapacityBytes);
+  }
   T &operator[](uptr I) {
     DCHECK_LT(I, Size);
     return Data[I];
@@ -34,10 +39,8 @@ public:
   void push_back(const T &Element) {
     DCHECK_LE(Size, capacity());
     if (Size == capacity()) {
-      const uptr NewCapacity = roundUpPowerOfTwo(Size + 1);
-      if (!reallocate(NewCapacity)) {
-        return;
-      }
+      const uptr NewCapacity = roundUpToPowerOfTwo(Size + 1);
+      reallocate(NewCapacity);
     }
     memcpy(&Data[Size++], &Element, sizeof(T));
   }
@@ -52,18 +55,15 @@ public:
   uptr size() const { return Size; }
   const T *data() const { return Data; }
   T *data() { return Data; }
-  constexpr uptr capacity() const { return CapacityBytes / sizeof(T); }
-  bool reserve(uptr NewSize) {
+  uptr capacity() const { return CapacityBytes / sizeof(T); }
+  void reserve(uptr NewSize) {
     // Never downsize internal buffer.
     if (NewSize > capacity())
-      return reallocate(NewSize);
-    return true;
+      reallocate(NewSize);
   }
   void resize(uptr NewSize) {
     if (NewSize > Size) {
-      if (!reserve(NewSize)) {
-        return;
-      }
+      reserve(NewSize);
       memset(&Data[Size], 0, sizeof(T) * (NewSize - Size));
     }
     Size = NewSize;
@@ -77,59 +77,33 @@ public:
   const T *end() const { return data() + size(); }
   T *end() { return data() + size(); }
 
-protected:
-  constexpr void init(uptr InitialCapacity = 0) {
-    Data = &LocalData[0];
-    CapacityBytes = sizeof(LocalData);
-    if (InitialCapacity > capacity())
-      reserve(InitialCapacity);
-  }
-  void destroy() {
-    if (Data != &LocalData[0])
-      ExternalBuffer.unmap();
-  }
-
 private:
-  bool reallocate(uptr NewCapacity) {
+  void reallocate(uptr NewCapacity) {
     DCHECK_GT(NewCapacity, 0);
     DCHECK_LE(Size, NewCapacity);
-
-    MemMapT NewExternalBuffer;
-    NewCapacity = roundUp(NewCapacity * sizeof(T), getPageSizeCached());
-    if (!NewExternalBuffer.map(/*Addr=*/0U, NewCapacity, "scudo:vector",
-                               MAP_ALLOWNOMEM)) {
-      return false;
-    }
-    T *NewExternalData = reinterpret_cast<T *>(NewExternalBuffer.getBase());
-
-    memcpy(NewExternalData, Data, Size * sizeof(T));
+    NewCapacity = roundUpTo(NewCapacity * sizeof(T), getPageSizeCached());
+    T *NewData =
+        reinterpret_cast<T *>(map(nullptr, NewCapacity, "scudo:vector"));
+    memcpy(NewData, Data, Size * sizeof(T));
     destroy();
-
-    Data = NewExternalData;
+    Data = NewData;
     CapacityBytes = NewCapacity;
-    ExternalBuffer = NewExternalBuffer;
-    return true;
   }
 
   T *Data = nullptr;
+  u8 LocalData[256] = {};
   uptr CapacityBytes = 0;
   uptr Size = 0;
-
-  T LocalData[StaticNumEntries] = {};
-  MemMapT ExternalBuffer;
 };
 
-template <typename T, size_t StaticNumEntries>
-class Vector : public VectorNoCtor<T, StaticNumEntries> {
+template <typename T> class Vector : public VectorNoCtor<T> {
 public:
-  static_assert(StaticNumEntries > 0U,
-                "Vector must have a non-zero number of static entries.");
-  constexpr Vector() { VectorNoCtor<T, StaticNumEntries>::init(); }
+  Vector() { VectorNoCtor<T>::init(); }
   explicit Vector(uptr Count) {
-    VectorNoCtor<T, StaticNumEntries>::init(Count);
+    VectorNoCtor<T>::init(Count);
     this->resize(Count);
   }
-  ~Vector() { VectorNoCtor<T, StaticNumEntries>::destroy(); }
+  ~Vector() { VectorNoCtor<T>::destroy(); }
   // Disallow copies and moves.
   Vector(const Vector &) = delete;
   Vector &operator=(const Vector &) = delete;

@@ -25,6 +25,8 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -53,16 +55,16 @@ NestedNameSpecifier::FindOrInsert(const ASTContext &Context,
   return NNS;
 }
 
-NestedNameSpecifier *NestedNameSpecifier::Create(const ASTContext &Context,
-                                                 NestedNameSpecifier *Prefix,
-                                                 const IdentifierInfo *II) {
+NestedNameSpecifier *
+NestedNameSpecifier::Create(const ASTContext &Context,
+                            NestedNameSpecifier *Prefix, IdentifierInfo *II) {
   assert(II && "Identifier cannot be NULL");
   assert((!Prefix || Prefix->isDependent()) && "Prefix must be dependent");
 
   NestedNameSpecifier Mockup;
   Mockup.Prefix.setPointer(Prefix);
   Mockup.Prefix.setInt(StoredIdentifier);
-  Mockup.Specifier = const_cast<IdentifierInfo *>(II);
+  Mockup.Specifier = II;
   return FindOrInsert(Context, Mockup);
 }
 
@@ -85,7 +87,7 @@ NestedNameSpecifier::Create(const ASTContext &Context,
 NestedNameSpecifier *
 NestedNameSpecifier::Create(const ASTContext &Context,
                             NestedNameSpecifier *Prefix,
-                            const NamespaceAliasDecl *Alias) {
+                            NamespaceAliasDecl *Alias) {
   assert(Alias && "Namespace alias cannot be NULL");
   assert((!Prefix ||
           (Prefix->getAsType() == nullptr &&
@@ -94,7 +96,7 @@ NestedNameSpecifier::Create(const ASTContext &Context,
   NestedNameSpecifier Mockup;
   Mockup.Prefix.setPointer(Prefix);
   Mockup.Prefix.setInt(StoredDecl);
-  Mockup.Specifier = const_cast<NamespaceAliasDecl *>(Alias);
+  Mockup.Specifier = Alias;
   return FindOrInsert(Context, Mockup);
 }
 
@@ -110,13 +112,13 @@ NestedNameSpecifier::Create(const ASTContext &Context,
   return FindOrInsert(Context, Mockup);
 }
 
-NestedNameSpecifier *NestedNameSpecifier::Create(const ASTContext &Context,
-                                                 const IdentifierInfo *II) {
+NestedNameSpecifier *
+NestedNameSpecifier::Create(const ASTContext &Context, IdentifierInfo *II) {
   assert(II && "Identifier cannot be NULL");
   NestedNameSpecifier Mockup;
   Mockup.Prefix.setPointer(nullptr);
   Mockup.Prefix.setInt(StoredIdentifier);
-  Mockup.Specifier = const_cast<IdentifierInfo *>(II);
+  Mockup.Specifier = II;
   return FindOrInsert(Context, Mockup);
 }
 
@@ -278,14 +280,14 @@ void NestedNameSpecifier::print(raw_ostream &OS, const PrintingPolicy &Policy,
   case TypeSpecWithTemplate:
     OS << "template ";
     // Fall through to print the type.
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
 
   case TypeSpec: {
     const auto *Record =
             dyn_cast_or_null<ClassTemplateSpecializationDecl>(getAsRecordDecl());
     if (ResolveTemplateArguments && Record) {
         // Print the type trait with resolved template parameters.
-        Record->printName(OS, Policy);
+        Record->printName(OS);
         printTemplateArgumentList(
             OS, Record->getTemplateArgs().asArray(), Policy,
             Record->getSpecializedTemplate()->getTemplateParameters());
@@ -309,8 +311,7 @@ void NestedNameSpecifier::print(raw_ostream &OS, const PrintingPolicy &Policy,
           = dyn_cast<TemplateSpecializationType>(T)) {
       // Print the template name without its corresponding
       // nested-name-specifier.
-      SpecType->getTemplateName().print(OS, InnerPolicy,
-                                        TemplateName::Qualified::None);
+      SpecType->getTemplateName().print(OS, InnerPolicy, true);
 
       // Print the template argument list.
       printTemplateArgumentList(OS, SpecType->template_arguments(),

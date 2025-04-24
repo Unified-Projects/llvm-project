@@ -1,15 +1,18 @@
 ! Check that the driver correctly defines macros with the compiler version
 
 !--------------------------
-! FLANG DRIVER (flang)
+! FLANG DRIVER (flang-new)
 !--------------------------
 ! RUN: %flang_fc1 -E %s  2>&1 | FileCheck %s --ignore-case
 
 !-----------------------------------------
-! FRONTEND FLANG DRIVER (flang -fc1)
+! FRONTEND FLANG DRIVER (flang-new -fc1)
 !-----------------------------------------
 ! RUN: %flang_fc1 -E %s  2>&1 | FileCheck %s --ignore-case
 
+!-----------------
+! EXPECTED OUTPUT
+!-----------------
 ! CHECK: flang = 1
 ! CHECK: flang_major = {{[1-9][0-9]*$}}
 ! CHECK: flang_minor = {{[0-9]+$}}

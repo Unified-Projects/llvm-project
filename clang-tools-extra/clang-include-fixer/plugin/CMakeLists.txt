@@ -1,4 +1,4 @@
-add_clang_library(clangIncludeFixerPlugin STATIC
+add_clang_library(clangIncludeFixerPlugin
   IncludeFixerPlugin.cpp
 
   LINK_LIBS
@@ -13,5 +13,4 @@ add_clang_library(clangIncludeFixerPlugin STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )

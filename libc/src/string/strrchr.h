@@ -9,12 +9,10 @@
 #ifndef LLVM_LIBC_SRC_STRING_STRRCHR_H
 #define LLVM_LIBC_SRC_STRING_STRRCHR_H
 
-#include "src/__support/macros/config.h"
-
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 char *strrchr(const char *src, int c);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_STRING_STRRCHR_H

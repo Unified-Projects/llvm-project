@@ -14,6 +14,7 @@
 #define LLVM_EXECUTIONENGINE_ORC_RTDYLDOBJECTLINKINGLAYER_H
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
@@ -49,7 +50,7 @@ public:
       MaterializationResponsibility &R, std::unique_ptr<MemoryBuffer>)>;
 
   using GetMemoryManagerFunction =
-      unique_function<std::unique_ptr<RuntimeDyld::MemoryManager>()>;
+      std::function<std::unique_ptr<RuntimeDyld::MemoryManager>()>;
 
   /// Construct an ObjectLinkingLayer with the given NotifyLoaded,
   ///        and NotifyEmitted functors.
@@ -137,11 +138,10 @@ private:
                  object::OwningBinary<object::ObjectFile> O,
                  std::unique_ptr<RuntimeDyld::MemoryManager> MemMgr,
                  std::unique_ptr<RuntimeDyld::LoadedObjectInfo> LoadedObjInfo,
-                 std::unique_ptr<SymbolDependenceMap> Deps, Error Err);
+                 Error Err);
 
-  Error handleRemoveResources(JITDylib &JD, ResourceKey K) override;
-  void handleTransferResources(JITDylib &JD, ResourceKey DstKey,
-                               ResourceKey SrcKey) override;
+  Error handleRemoveResources(ResourceKey K) override;
+  void handleTransferResources(ResourceKey DstKey, ResourceKey SrcKey) override;
 
   mutable std::mutex RTDyldLayerMutex;
   GetMemoryManagerFunction GetMemoryManager;

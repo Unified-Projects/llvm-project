@@ -13,9 +13,11 @@
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ComputeDependence.h"
+#include "clang/AST/DependenceFlags.h"
 #include "clang/AST/SelectorLocationsKind.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 #include <cassert>
@@ -269,7 +271,20 @@ QualType ObjCMessageExpr::getCallReturnType(ASTContext &Ctx) const {
     }
     return QT;
   }
-  return Ctx.getReferenceQualifiedType(this);
+
+  // Expression type might be different from an expected call return type,
+  // as expression type would never be a reference even if call returns a
+  // reference. Reconstruct the original expression type.
+  QualType QT = getType();
+  switch (getValueKind()) {
+  case VK_LValue:
+    return Ctx.getLValueReferenceType(QT);
+  case VK_XValue:
+    return Ctx.getRValueReferenceType(QT);
+  case VK_PRValue:
+    return QT;
+  }
+  llvm_unreachable("Unsupported ExprValueKind");
 }
 
 SourceRange ObjCMessageExpr::getReceiverRange() const {

@@ -1,4 +1,4 @@
-//===-- STLAlgorithmModeling.cpp ----------------------------------*- C++ -*--//
+//===-- STLAlgorithmModeling.cpp -----------------------------------*- C++ -*--//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -12,7 +12,6 @@
 
 #include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
-#include "clang/StaticAnalyzer/Core/PathSensitive/CallDescription.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CheckerContext.h"
 
@@ -33,56 +32,35 @@ class STLAlgorithmModeling : public Checker<eval::Call> {
                                                 const CallExpr *) const;
 
   const CallDescriptionMap<FnCheck> Callbacks = {
-      {{CDM::SimpleFunc, {"std", "find"}, 3}, &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find"}, 4}, &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_if"}, 3},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_if"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_if_not"}, 3},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_if_not"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_first_of"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_first_of"}, 5},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_first_of"}, 6},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_end"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_end"}, 5},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "find_end"}, 6},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "lower_bound"}, 3},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "lower_bound"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "upper_bound"}, 3},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "upper_bound"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search"}, 3},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search"}, 5},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search"}, 6},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search_n"}, 4},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search_n"}, 5},
-       &STLAlgorithmModeling::evalFind},
-      {{CDM::SimpleFunc, {"std", "search_n"}, 6},
-       &STLAlgorithmModeling::evalFind},
+    {{{"std", "find"}, 3}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_if"}, 3}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_if"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_if_not"}, 3}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_if_not"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_first_of"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_first_of"}, 5}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_first_of"}, 6}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_end"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_end"}, 5}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "find_end"}, 6}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "lower_bound"}, 3}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "lower_bound"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "upper_bound"}, 3}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "upper_bound"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search"}, 3}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search"}, 5}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search"}, 6}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search_n"}, 4}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search_n"}, 5}, &STLAlgorithmModeling::evalFind},
+    {{{"std", "search_n"}, 6}, &STLAlgorithmModeling::evalFind},
   };
 
 public:
   STLAlgorithmModeling() = default;
 
-  bool AggressiveStdFindModeling = false;
+  bool AggressiveStdFindModeling;
 
   bool evalCall(const CallEvent &Call, CheckerContext &C) const;
 }; //
@@ -152,7 +130,7 @@ void STLAlgorithmModeling::Find(CheckerContext &C, const CallExpr *CE,
                                         nonloc::SymbolVal(NewPos->getOffset()),
                                         nonloc::SymbolVal(Pos->getOffset()),
                                         SVB.getConditionType());
-    assert(isa<DefinedSVal>(GreaterOrEqual) &&
+    assert(GreaterOrEqual.getAs<DefinedSVal>() &&
            "Symbol comparison must be a `DefinedSVal`");
     StateFound = StateFound->assume(GreaterOrEqual.castAs<DefinedSVal>(), true);
   }
@@ -174,7 +152,7 @@ void STLAlgorithmModeling::Find(CheckerContext &C, const CallExpr *CE,
                               nonloc::SymbolVal(NewPos->getOffset()),
                               nonloc::SymbolVal(Pos->getOffset()),
                               SVB.getConditionType());
-    assert(isa<DefinedSVal>(Less) &&
+    assert(Less.getAs<DefinedSVal>() &&
            "Symbol comparison must be a `DefinedSVal`");
     StateFound = StateFound->assume(Less.castAs<DefinedSVal>(), true);
   }

@@ -34,7 +34,7 @@ struct LanaiRegisterInfo : public LanaiGenRegisterInfo {
 
   bool requiresRegisterScavenging(const MachineFunction &MF) const override;
 
-  bool eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
+  void eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
 
@@ -43,6 +43,8 @@ struct LanaiRegisterInfo : public LanaiGenRegisterInfo {
   Register getFrameRegister(const MachineFunction &MF) const override;
   Register getBaseRegister() const;
   bool hasBasePointer(const MachineFunction &MF) const;
+
+  int getDwarfRegNum(unsigned RegNum, bool IsEH) const;
 };
 
 } // end namespace llvm

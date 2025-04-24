@@ -11,13 +11,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_DIALECT_TOSA_UTILS_QUANTUTILS_H
-#define MLIR_DIALECT_TOSA_UTILS_QUANTUTILS_H
+#ifndef DIALECT_TOSA_UTILS_QUANT_UTILS_H
+#define DIALECT_TOSA_UTILS_QUANT_UTILS_H
 
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 
-#include "mlir/Dialect/Quant/Utils/FakeQuantSupport.h"
-#include "mlir/Dialect/Quant/Utils/UniformSupport.h"
+#include "mlir/Dialect/Quant/FakeQuantSupport.h"
+#include "mlir/Dialect/Quant/UniformSupport.h"
 
 namespace mlir {
 namespace tosa {
@@ -68,4 +68,4 @@ TypeAttr buildQTypeAttrFromMinMax(OpBuilder builder, Type inputDType,
 } // namespace tosa
 } // namespace mlir
 
-#endif // MLIR_DIALECT_TOSA_UTILS_QUANTUTILS_H
+#endif // DIALECT_TOSA_UTILS_QUANT_UTILS_H

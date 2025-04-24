@@ -8,15 +8,11 @@
 
 #include "llvm/Support/JSON.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/NativeFormatting.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
-#include <cerrno>
-#include <optional>
 
 namespace llvm {
 namespace json {
@@ -39,30 +35,30 @@ const Value *Object::get(StringRef K) const {
     return nullptr;
   return &I->second;
 }
-std::optional<std::nullptr_t> Object::getNull(StringRef K) const {
+llvm::Optional<std::nullptr_t> Object::getNull(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsNull();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<bool> Object::getBoolean(StringRef K) const {
+llvm::Optional<bool> Object::getBoolean(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsBoolean();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<double> Object::getNumber(StringRef K) const {
+llvm::Optional<double> Object::getNumber(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsNumber();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<int64_t> Object::getInteger(StringRef K) const {
+llvm::Optional<int64_t> Object::getInteger(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsInteger();
-  return std::nullopt;
+  return llvm::None;
 }
-std::optional<llvm::StringRef> Object::getString(StringRef K) const {
+llvm::Optional<llvm::StringRef> Object::getString(StringRef K) const {
   if (auto *V = get(K))
     return V->getAsString();
-  return std::nullopt;
+  return llvm::None;
 }
 const json::Object *Object::getObject(StringRef K) const {
   if (auto *V = get(K))
@@ -113,7 +109,6 @@ void Value::copyFrom(const Value &M) {
   case T_Boolean:
   case T_Double:
   case T_Integer:
-  case T_UINT64:
     memcpy(&Union, &M.Union, sizeof(Union));
     break;
   case T_StringRef:
@@ -138,7 +133,6 @@ void Value::moveFrom(const Value &&M) {
   case T_Boolean:
   case T_Double:
   case T_Integer:
-  case T_UINT64:
     memcpy(&Union, &M.Union, sizeof(Union));
     break;
   case T_StringRef:
@@ -165,7 +159,6 @@ void Value::destroy() {
   case T_Boolean:
   case T_Double:
   case T_Integer:
-  case T_UINT64:
     break;
   case T_StringRef:
     as<StringRef>().~StringRef();
@@ -239,8 +232,10 @@ Error Path::Root::getError() const {
         OS << '[' << S.index() << ']';
     }
   }
-  return createStringError(llvm::inconvertibleErrorCode(), S);
+  return createStringError(llvm::inconvertibleErrorCode(), OS.str());
 }
+
+namespace {
 
 std::vector<const Object::value_type *> sortedElements(const Object &O) {
   std::vector<const Object::value_type *> Elements;
@@ -256,7 +251,7 @@ std::vector<const Object::value_type *> sortedElements(const Object &O) {
 // Prints a one-line version of a value that isn't our main focus.
 // We interleave writes to OS and JOS, exploiting the lack of extra buffering.
 // This is OK as we own the implementation.
-static void abbreviate(const Value &V, OStream &JOS) {
+void abbreviate(const Value &V, OStream &JOS) {
   switch (V.kind()) {
   case Value::Array:
     JOS.rawValue(V.getAsArray()->empty() ? "[]" : "[ ... ]");
@@ -282,7 +277,7 @@ static void abbreviate(const Value &V, OStream &JOS) {
 
 // Prints a semi-expanded version of a value that is our main focus.
 // Array/Object entries are printed, but not recursively as they may be huge.
-static void abbreviateChildren(const Value &V, OStream &JOS) {
+void abbreviateChildren(const Value &V, OStream &JOS) {
   switch (V.kind()) {
   case Value::Array:
     JOS.array([&] {
@@ -303,6 +298,8 @@ static void abbreviateChildren(const Value &V, OStream &JOS) {
     JOS.value(V);
   }
 }
+
+} // namespace
 
 void Path::Root::printErrorContext(const Value &R, raw_ostream &OS) const {
   OStream JOS(OS, /*IndentSize=*/2);
@@ -332,7 +329,7 @@ void Path::Root::printErrorContext(const Value &R, raw_ostream &OS) const {
       JOS.object([&] {
         for (const auto *KV : sortedElements(*O)) {
           JOS.attributeBegin(KV->first);
-          if (FieldName == StringRef(KV->first))
+          if (FieldName.equals(KV->first))
             Recurse(KV->second, Path.drop_back(), Recurse);
           else
             abbreviate(KV->second, JOS);
@@ -407,10 +404,9 @@ private:
            C == 'e' || C == 'E' || C == '+' || C == '-' || C == '.';
   }
 
-  std::optional<Error> Err;
+  Optional<Error> Err;
   const char *Start, *P, *End;
 };
-} // namespace
 
 bool Parser::parseValue(Value &Out) {
   eatWhitespace();
@@ -509,24 +505,12 @@ bool Parser::parseNumber(char First, Value &Out) {
     S.push_back(next());
   char *End;
   // Try first to parse as integer, and if so preserve full 64 bits.
-  // We check for errno for out of bounds errors and for End == S.end()
-  // to make sure that the numeric string is not malformed.
-  errno = 0;
-  int64_t I = std::strtoll(S.c_str(), &End, 10);
-  if (End == S.end() && errno != ERANGE) {
+  // strtoll returns long long >= 64 bits, so check it's in range too.
+  auto I = std::strtoll(S.c_str(), &End, 10);
+  if (End == S.end() && I >= std::numeric_limits<int64_t>::min() &&
+      I <= std::numeric_limits<int64_t>::max()) {
     Out = int64_t(I);
     return true;
-  }
-  // strtroull has a special handling for negative numbers, but in this
-  // case we don't want to do that because negative numbers were already
-  // handled in the previous block.
-  if (First != '-') {
-    errno = 0;
-    uint64_t UI = std::strtoull(S.c_str(), &End, 10);
-    if (End == S.end() && errno != ERANGE) {
-      Out = UI;
-      return true;
-    }
   }
   // If it's not an integer
   Out = std::strtod(S.c_str(), &End);
@@ -678,6 +662,7 @@ bool Parser::parseError(const char *Msg) {
       std::make_unique<ParseError>(Msg, Line, P - StartOfLine, P - Start));
   return false;
 }
+} // namespace
 
 Expected<Value> parse(StringRef JSON) {
   Parser P(JSON);
@@ -765,8 +750,6 @@ void llvm::json::OStream::value(const Value &V) {
     valueBegin();
     if (V.Type == Value::T_Integer)
       OS << *V.getAsInteger();
-    else if (V.Type == Value::T_UINT64)
-      OS << *V.getAsUINT64();
     else
       OS << format("%.*g", std::numeric_limits<double>::max_digits10,
                    *V.getAsNumber());

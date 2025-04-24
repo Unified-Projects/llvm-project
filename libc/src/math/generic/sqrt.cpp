@@ -7,12 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/math/sqrt.h"
-#include "src/__support/FPUtil/sqrt.h"
 #include "src/__support/common.h"
-#include "src/__support/macros/config.h"
+#include "utils/FPUtil/Sqrt.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
-LLVM_LIBC_FUNCTION(double, sqrt, (double x)) { return fputil::sqrt<double>(x); }
+LLVM_LIBC_FUNCTION(double, sqrt, (double x)) { return fputil::sqrt(x); }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

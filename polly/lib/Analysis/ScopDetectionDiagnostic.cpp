@@ -45,14 +45,13 @@ using namespace llvm;
 #define DEBUG_TYPE "polly-detect"
 
 #define SCOP_STAT(NAME, DESC)                                                  \
-  {"polly-detect", "NAME", "Number of rejected regions: " DESC}
+  { "polly-detect", "NAME", "Number of rejected regions: " DESC }
 
 static Statistic RejectStatistics[] = {
     SCOP_STAT(CFG, ""),
     SCOP_STAT(InvalidTerminator, "Unsupported terminator instruction"),
-    SCOP_STAT(IrreducibleRegion, "Irreducible loops"),
     SCOP_STAT(UnreachableInExit, "Unreachable in exit block"),
-    SCOP_STAT(IndirectPredecessor, "Branch from indirect terminator"),
+    SCOP_STAT(IrreducibleRegion, "Irreducible loops"),
     SCOP_STAT(LastCFG, ""),
     SCOP_STAT(AffFunc, ""),
     SCOP_STAT(UndefCond, "Undefined branch condition"),
@@ -71,7 +70,7 @@ static Statistic RejectStatistics[] = {
     SCOP_STAT(LoopOnlySomeLatches, "Not all loop latches in scop"),
     SCOP_STAT(FuncCall, "Function call with side effects"),
     SCOP_STAT(NonSimpleMemoryAccess,
-              "Complicated access semantics (volatile or atomic)"),
+              "Compilated access semantics (volatile or atomic)"),
     SCOP_STAT(Alias, "Base address aliasing"),
     SCOP_STAT(Other, ""),
     SCOP_STAT(IntToPtr, "Integer to pointer conversions"),
@@ -89,6 +88,7 @@ template <typename T> std::string operator+(Twine LHS, const T &RHS) {
   std::string Buf;
   raw_string_ostream fmt(Buf);
   fmt << RHS;
+  fmt.flush();
 
   return LHS.concat(Buf).str();
 }
@@ -121,7 +121,7 @@ void getDebugLocations(const BBPair &P, DebugLoc &Begin, DebugLoc &End) {
       continue;
     Todo.append(succ_begin(BB), succ_end(BB));
     for (const Instruction &Inst : *BB) {
-      DebugLoc DL = Inst.getStableDebugLoc();
+      DebugLoc DL = Inst.getDebugLoc();
       if (!DL)
         continue;
 
@@ -237,37 +237,6 @@ std::string ReportUnreachableInExit::getEndUserMessage() const {
 
 bool ReportUnreachableInExit::classof(const RejectReason *RR) {
   return RR->getKind() == RejectReasonKind::UnreachableInExit;
-}
-
-//===----------------------------------------------------------------------===//
-// IndirectPredecessor.
-
-std::string ReportIndirectPredecessor::getRemarkName() const {
-  return "IndirectPredecessor";
-}
-
-const Value *ReportIndirectPredecessor::getRemarkBB() const {
-  if (Inst)
-    return Inst->getParent();
-  return nullptr;
-}
-
-std::string ReportIndirectPredecessor::getMessage() const {
-  if (Inst)
-    return "Branch from indirect terminator: " + *Inst;
-  return getEndUserMessage();
-}
-
-const DebugLoc &ReportIndirectPredecessor::getDebugLoc() const {
-  return DbgLoc;
-}
-
-std::string ReportIndirectPredecessor::getEndUserMessage() const {
-  return "Branch from indirect terminator.";
-}
-
-bool ReportIndirectPredecessor::classof(const RejectReason *RR) {
-  return RR->getKind() == RejectReasonKind::IndirectPredecessor;
 }
 
 //===----------------------------------------------------------------------===//
@@ -637,7 +606,8 @@ bool ReportNonSimpleMemoryAccess::classof(const RejectReason *RR) {
 
 ReportAlias::ReportAlias(Instruction *Inst, AliasSet &AS)
     : RejectReason(RejectReasonKind::Alias), Inst(Inst) {
-  append_range(Pointers, AS.getPointers());
+  for (const auto &I : AS)
+    Pointers.push_back(I.getValue());
 }
 
 std::string ReportAlias::formatInvalidAlias(std::string Prefix,
@@ -668,7 +638,7 @@ std::string ReportAlias::formatInvalidAlias(std::string Prefix,
 
   OS << Suffix;
 
-  return Message;
+  return OS.str();
 }
 
 std::string ReportAlias::getRemarkName() const { return "Alias"; }
@@ -820,7 +790,7 @@ std::string ReportUnprofitable::getEndUserMessage() const {
 const DebugLoc &ReportUnprofitable::getDebugLoc() const {
   for (const BasicBlock *BB : R->blocks())
     for (const Instruction &Inst : *BB)
-      if (const DebugLoc &DL = Inst.getStableDebugLoc())
+      if (const DebugLoc &DL = Inst.getDebugLoc())
         return DL;
 
   return R->getEntry()->getTerminator()->getDebugLoc();

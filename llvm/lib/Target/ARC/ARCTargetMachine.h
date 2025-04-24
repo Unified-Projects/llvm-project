@@ -14,23 +14,21 @@
 #define LLVM_LIB_TARGET_ARC_ARCTARGETMACHINE_H
 
 #include "ARCSubtarget.h"
-#include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
-#include <optional>
+#include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
 
 class TargetPassConfig;
 
-class ARCTargetMachine : public CodeGenTargetMachineImpl {
+class ARCTargetMachine : public LLVMTargetMachine {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   ARCSubtarget Subtarget;
 
 public:
   ARCTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                    StringRef FS, const TargetOptions &Options,
-                   std::optional<Reloc::Model> RM,
-                   std::optional<CodeModel::Model> CM, CodeGenOptLevel OL,
-                   bool JIT);
+                   Optional<Reloc::Model> RM, Optional<CodeModel::Model> CM,
+                   CodeGenOpt::Level OL, bool JIT);
   ~ARCTargetMachine() override;
 
   const ARCSubtarget *getSubtargetImpl() const { return &Subtarget; }
@@ -41,14 +39,10 @@ public:
   // Pass Pipeline Configuration
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
 
-  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
+  TargetTransformInfo getTargetTransformInfo(const Function &F) override;
   TargetLoweringObjectFile *getObjFileLowering() const override {
     return TLOF.get();
   }
-
-  MachineFunctionInfo *
-  createMachineFunctionInfo(BumpPtrAllocator &Allocator, const Function &F,
-                            const TargetSubtargetInfo *STI) const override;
 };
 
 } // end namespace llvm

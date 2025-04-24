@@ -29,13 +29,16 @@
 #include "clang/AST/Type.h"
 #include "clang/Basic/IdentifierTable.h"
 #include "clang/Basic/LLVM.h"
-#include "clang/Basic/Module.h"
+#include "clang/Basic/LangOptions.h"
 #include "clang/Basic/ObjCRuntime.h"
 #include "clang/Basic/PartialDiagnostic.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TargetInfo.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/PointerIntPair.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/VersionTuple.h"
@@ -68,20 +71,21 @@ void Decl::updateOutOfDate(IdentifierInfo &II) const {
 #include "clang/AST/DeclNodes.inc"
 
 void *Decl::operator new(std::size_t Size, const ASTContext &Context,
-                         GlobalDeclID ID, std::size_t Extra) {
+                         unsigned ID, std::size_t Extra) {
   // Allocate an extra 8 bytes worth of storage, which ensures that the
   // resulting pointer will still be 8-byte aligned.
-  static_assert(sizeof(uint64_t) >= alignof(Decl), "Decl won't be misaligned");
+  static_assert(sizeof(unsigned) * 2 >= alignof(Decl),
+                "Decl won't be misaligned");
   void *Start = Context.Allocate(Size + Extra + 8);
   void *Result = (char*)Start + 8;
 
-  uint64_t *PrefixPtr = (uint64_t *)Result - 1;
+  unsigned *PrefixPtr = (unsigned *)Result - 2;
 
-  *PrefixPtr = ID.getRawValue();
+  // Zero out the first 4 bytes; this is used to store the owning module ID.
+  PrefixPtr[0] = 0;
 
-  // We leave the upper 16 bits to store the module IDs. 48 bits should be
-  // sufficient to store a declaration ID.
-  assert(*PrefixPtr < llvm::maskTrailingOnes<uint64_t>(48));
+  // Store the global declaration ID in the second 4 bytes.
+  PrefixPtr[1] = ID;
 
   return Result;
 }
@@ -105,37 +109,6 @@ void *Decl::operator new(std::size_t Size, const ASTContext &Ctx,
     return new (Buffer) Module*(ParentModule) + 1;
   }
   return ::operator new(Size + Extra, Ctx);
-}
-
-GlobalDeclID Decl::getGlobalID() const {
-  if (!isFromASTFile())
-    return GlobalDeclID();
-  // See the comments in `Decl::operator new` for details.
-  uint64_t ID = *((const uint64_t *)this - 1);
-  return GlobalDeclID(ID & llvm::maskTrailingOnes<uint64_t>(48));
-}
-
-unsigned Decl::getOwningModuleID() const {
-  if (!isFromASTFile())
-    return 0;
-
-  uint64_t ID = *((const uint64_t *)this - 1);
-  return ID >> 48;
-}
-
-void Decl::setOwningModuleID(unsigned ID) {
-  assert(isFromASTFile() && "Only works on a deserialized declaration");
-  uint64_t *IDAddress = (uint64_t *)this - 1;
-  *IDAddress &= llvm::maskTrailingOnes<uint64_t>(48);
-  *IDAddress |= (uint64_t)ID << 48;
-}
-
-Module *Decl::getTopLevelOwningNamedModule() const {
-  if (getOwningModule() &&
-      getOwningModule()->getTopLevelModule()->isNamedModule())
-    return getOwningModule()->getTopLevelModule();
-
-  return nullptr;
 }
 
 Module *Decl::getOwningModuleSlow() const {
@@ -177,15 +150,6 @@ void Decl::setInvalidDecl(bool Invalid) {
       Binding->setInvalidDecl();
     }
   }
-}
-
-bool DeclContext::hasValidDeclKind() const {
-  switch (getDeclKind()) {
-#define DECL(DERIVED, BASE) case Decl::DERIVED: return true;
-#define ABSTRACT_DECL(DECL)
-#include "clang/AST/DeclNodes.inc"
-  }
-  return false;
 }
 
 const char *DeclContext::getDeclKindName() const {
@@ -288,12 +252,12 @@ const TemplateParameterList *Decl::getDescribedTemplateParams() const {
 
 bool Decl::isTemplated() const {
   // A declaration is templated if it is a template or a template pattern, or
-  // is within (lexcially for a friend or local function declaration,
-  // semantically otherwise) a dependent context.
+  // is within (lexcially for a friend, semantically otherwise) a dependent
+  // context.
+  // FIXME: Should local extern declarations be treated like friends?
   if (auto *AsDC = dyn_cast<DeclContext>(this))
     return AsDC->isDependentContext();
-  auto *DC = getFriendObjectKind() || isLocalExternDecl()
-      ? getLexicalDeclContext() : getDeclContext();
+  auto *DC = getFriendObjectKind() ? getLexicalDeclContext() : getDeclContext();
   return DC->isDependentContext() || isTemplateDecl() ||
          getDescribedTemplateParams();
 }
@@ -319,10 +283,10 @@ unsigned Decl::getTemplateDepth() const {
   return cast<Decl>(DC)->getTemplateDepth();
 }
 
-const DeclContext *Decl::getParentFunctionOrMethod(bool LexicalParent) const {
-  for (const DeclContext *DC = LexicalParent ? getLexicalDeclContext()
-                                             : getDeclContext();
-       DC && !DC->isFileContext(); DC = DC->getParent())
+const DeclContext *Decl::getParentFunctionOrMethod() const {
+  for (const DeclContext *DC = getDeclContext();
+       DC && !DC->isTranslationUnit() && !DC->isNamespace();
+       DC = DC->getParent())
     if (DC->isFunctionOrMethod())
       return DC;
 
@@ -429,85 +393,7 @@ bool Decl::isInAnonymousNamespace() const {
 
 bool Decl::isInStdNamespace() const {
   const DeclContext *DC = getDeclContext();
-  return DC && DC->getNonTransparentContext()->isStdNamespace();
-}
-
-bool Decl::isFileContextDecl() const {
-  const auto *DC = dyn_cast<DeclContext>(this);
-  return DC && DC->isFileContext();
-}
-
-bool Decl::isFlexibleArrayMemberLike(
-    ASTContext &Ctx, const Decl *D, QualType Ty,
-    LangOptions::StrictFlexArraysLevelKind StrictFlexArraysLevel,
-    bool IgnoreTemplateOrMacroSubstitution) {
-  // For compatibility with existing code, we treat arrays of length 0 or
-  // 1 as flexible array members.
-  const auto *CAT = Ctx.getAsConstantArrayType(Ty);
-  if (CAT) {
-    using FAMKind = LangOptions::StrictFlexArraysLevelKind;
-
-    llvm::APInt Size = CAT->getSize();
-    if (StrictFlexArraysLevel == FAMKind::IncompleteOnly)
-      return false;
-
-    // GCC extension, only allowed to represent a FAM.
-    if (Size.isZero())
-      return true;
-
-    if (StrictFlexArraysLevel == FAMKind::ZeroOrIncomplete && Size.uge(1))
-      return false;
-
-    if (StrictFlexArraysLevel == FAMKind::OneZeroOrIncomplete && Size.uge(2))
-      return false;
-  } else if (!Ctx.getAsIncompleteArrayType(Ty)) {
-    return false;
-  }
-
-  if (const auto *OID = dyn_cast_if_present<ObjCIvarDecl>(D))
-    return OID->getNextIvar() == nullptr;
-
-  const auto *FD = dyn_cast_if_present<FieldDecl>(D);
-  if (!FD)
-    return false;
-
-  if (CAT) {
-    // GCC treats an array memeber of a union as an FAM if the size is one or
-    // zero.
-    llvm::APInt Size = CAT->getSize();
-    if (FD->getParent()->isUnion() && (Size.isZero() || Size.isOne()))
-      return true;
-  }
-
-  // Don't consider sizes resulting from macro expansions or template argument
-  // substitution to form C89 tail-padded arrays.
-  if (IgnoreTemplateOrMacroSubstitution) {
-    TypeSourceInfo *TInfo = FD->getTypeSourceInfo();
-    while (TInfo) {
-      TypeLoc TL = TInfo->getTypeLoc();
-
-      // Look through typedefs.
-      if (TypedefTypeLoc TTL = TL.getAsAdjusted<TypedefTypeLoc>()) {
-        const TypedefNameDecl *TDL = TTL.getTypedefNameDecl();
-        TInfo = TDL->getTypeSourceInfo();
-        continue;
-      }
-
-      if (auto CTL = TL.getAs<ConstantArrayTypeLoc>()) {
-        if (const Expr *SizeExpr =
-                dyn_cast_if_present<IntegerLiteral>(CTL.getSizeExpr());
-            !SizeExpr || SizeExpr->getExprLoc().isMacroID())
-          return false;
-      }
-
-      break;
-    }
-  }
-
-  // Test that the field is the last in the structure.
-  RecordDecl::field_iterator FI(
-      DeclContext::decl_iterator(const_cast<FieldDecl *>(FD)));
-  return ++FI == FD->getParent()->field_end();
+  return DC && DC->isStdNamespace();
 }
 
 TranslationUnitDecl *Decl::getTranslationUnitDecl() {
@@ -693,29 +579,12 @@ static AvailabilityResult CheckAvailability(ASTContext &Context,
   // Make sure that this declaration has already been introduced.
   if (!A->getIntroduced().empty() &&
       EnclosingVersion < A->getIntroduced()) {
-    IdentifierInfo *IIEnv = A->getEnvironment();
-    StringRef TargetEnv =
-        Context.getTargetInfo().getTriple().getEnvironmentName();
-    StringRef EnvName = llvm::Triple::getEnvironmentTypeName(
-        Context.getTargetInfo().getTriple().getEnvironment());
-    // Matching environment or no environment on attribute
-    if (!IIEnv || (!TargetEnv.empty() && IIEnv->getName() == TargetEnv)) {
-      if (Message) {
-        Message->clear();
-        llvm::raw_string_ostream Out(*Message);
-        VersionTuple VTI(A->getIntroduced());
-        Out << "introduced in " << PrettyPlatformName << " " << VTI << " "
-            << EnvName << HintMessage;
-      }
-    }
-    // Non-matching environment or no environment on target
-    else {
-      if (Message) {
-        Message->clear();
-        llvm::raw_string_ostream Out(*Message);
-        Out << "not available on " << PrettyPlatformName << " " << EnvName
-            << HintMessage;
-      }
+    if (Message) {
+      Message->clear();
+      llvm::raw_string_ostream Out(*Message);
+      VersionTuple VTI(A->getIntroduced());
+      Out << "introduced in " << PrettyPlatformName << ' '
+          << VTI << HintMessage;
     }
 
     return A->getStrict() ? AR_Unavailable : AR_NotYetIntroduced;
@@ -880,10 +749,11 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
     case ObjCMethod:
     case ObjCProperty:
     case MSProperty:
-    case HLSLBuffer:
       return IDNS_Ordinary;
     case Label:
       return IDNS_Label;
+    case IndirectField:
+      return IDNS_Ordinary | IDNS_Member;
 
     case Binding:
     case NonTypeTemplateParm:
@@ -921,7 +791,6 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
       return IDNS_ObjCProtocol;
 
     case Field:
-    case IndirectField:
     case ObjCAtDefsField:
     case ObjCIvar:
       return IDNS_Member;
@@ -959,25 +828,23 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
     case LinkageSpec:
     case Export:
     case FileScopeAsm:
-    case TopLevelStmt:
     case StaticAssert:
     case ObjCPropertyImpl:
     case PragmaComment:
     case PragmaDetectMismatch:
     case Block:
     case Captured:
-    case OutlinedFunction:
     case TranslationUnit:
     case ExternCContext:
     case Decomposition:
     case MSGuid:
-    case UnnamedGlobalConstant:
     case TemplateParamObject:
 
     case UsingDirective:
     case BuiltinTemplate:
     case ClassTemplateSpecialization:
     case ClassTemplatePartialSpecialization:
+    case ClassScopeFunctionSpecialization:
     case VarTemplateSpecialization:
     case VarTemplatePartialSpecialization:
     case ObjCImplementation:
@@ -991,7 +858,6 @@ unsigned Decl::getIdentifierNamespaceForKind(Kind DeclKind) {
     case Empty:
     case LifetimeExtendedTemporary:
     case RequiresExprBody:
-    case ImplicitConceptSpecialization:
       // Never looked up by name.
       return 0;
   }
@@ -1046,14 +912,20 @@ const AttrVec &Decl::getAttrs() const {
 
 Decl *Decl::castFromDeclContext (const DeclContext *D) {
   Decl::Kind DK = D->getDeclKind();
-  switch (DK) {
+  switch(DK) {
 #define DECL(NAME, BASE)
-#define DECL_CONTEXT(NAME)                                                     \
-  case Decl::NAME:                                                             \
-    return static_cast<NAME##Decl *>(const_cast<DeclContext *>(D));
+#define DECL_CONTEXT(NAME) \
+    case Decl::NAME:       \
+      return static_cast<NAME##Decl *>(const_cast<DeclContext *>(D));
+#define DECL_CONTEXT_BASE(NAME)
 #include "clang/AST/DeclNodes.inc"
-  default:
-    llvm_unreachable("a decl that inherits DeclContext isn't handled");
+    default:
+#define DECL(NAME, BASE)
+#define DECL_CONTEXT_BASE(NAME)                  \
+      if (DK >= first##NAME && DK <= last##NAME) \
+        return static_cast<NAME##Decl *>(const_cast<DeclContext *>(D));
+#include "clang/AST/DeclNodes.inc"
+      llvm_unreachable("a decl that inherits DeclContext isn't handled");
   }
 }
 
@@ -1061,12 +933,18 @@ DeclContext *Decl::castToDeclContext(const Decl *D) {
   Decl::Kind DK = D->getKind();
   switch(DK) {
 #define DECL(NAME, BASE)
-#define DECL_CONTEXT(NAME)                                                     \
-  case Decl::NAME:                                                             \
-    return static_cast<NAME##Decl *>(const_cast<Decl *>(D));
+#define DECL_CONTEXT(NAME) \
+    case Decl::NAME:       \
+      return static_cast<NAME##Decl *>(const_cast<Decl *>(D));
+#define DECL_CONTEXT_BASE(NAME)
 #include "clang/AST/DeclNodes.inc"
-  default:
-    llvm_unreachable("a decl that inherits DeclContext isn't handled");
+    default:
+#define DECL(NAME, BASE)
+#define DECL_CONTEXT_BASE(NAME)                                   \
+      if (DK >= first##NAME && DK <= last##NAME)                  \
+        return static_cast<NAME##Decl *>(const_cast<Decl *>(D));
+#include "clang/AST/DeclNodes.inc"
+      llvm_unreachable("a decl that inherits DeclContext isn't handled");
   }
 }
 
@@ -1086,7 +964,7 @@ SourceLocation Decl::getBodyRBrace() const {
   return {};
 }
 
-bool Decl::AccessDeclContextCheck() const {
+bool Decl::AccessDeclContextSanity() const {
 #ifndef NDEBUG
   // Suppress this check if any of the following hold:
   // 1. this is the translation unit (and thus has no parent)
@@ -1106,76 +984,15 @@ bool Decl::AccessDeclContextCheck() const {
       isa<ParmVarDecl>(this) ||
       // FIXME: a ClassTemplateSpecialization or CXXRecordDecl can have
       // AS_none as access specifier.
-      isa<CXXRecordDecl>(this) || isa<LifetimeExtendedTemporaryDecl>(this))
+      isa<CXXRecordDecl>(this) ||
+      isa<ClassScopeFunctionSpecializationDecl>(this) ||
+      isa<LifetimeExtendedTemporaryDecl>(this))
     return true;
 
   assert(Access != AS_none &&
          "Access specifier is AS_none inside a record decl");
 #endif
   return true;
-}
-
-bool Decl::isInExportDeclContext() const {
-  const DeclContext *DC = getLexicalDeclContext();
-
-  while (DC && !isa<ExportDecl>(DC))
-    DC = DC->getLexicalParent();
-
-  return isa_and_nonnull<ExportDecl>(DC);
-}
-
-bool Decl::isInAnotherModuleUnit() const {
-  auto *M = getOwningModule();
-
-  if (!M)
-    return false;
-
-  // FIXME or NOTE: maybe we need to be clear about the semantics
-  // of clang header modules. e.g., if this lives in a clang header
-  // module included by the current unit, should we return false
-  // here?
-  //
-  // This is clear for header units as the specification says the
-  // header units live in a synthesised translation unit. So we
-  // can return false here.
-  M = M->getTopLevelModule();
-  if (!M->isNamedModule())
-    return false;
-
-  return M != getASTContext().getCurrentNamedModule();
-}
-
-bool Decl::isInCurrentModuleUnit() const {
-  auto *M = getOwningModule();
-
-  if (!M || !M->isNamedModule())
-    return false;
-
-  return M == getASTContext().getCurrentNamedModule();
-}
-
-bool Decl::shouldEmitInExternalSource() const {
-  ExternalASTSource *Source = getASTContext().getExternalSource();
-  if (!Source)
-    return false;
-
-  return Source->hasExternalDefinitions(this) == ExternalASTSource::EK_Always;
-}
-
-bool Decl::isFromExplicitGlobalModule() const {
-  return getOwningModule() && getOwningModule()->isExplicitGlobalModule();
-}
-
-bool Decl::isFromGlobalModule() const {
-  return getOwningModule() && getOwningModule()->isGlobalModule();
-}
-
-bool Decl::isInNamedModule() const {
-  return getOwningModule() && getOwningModule()->isNamedModule();
-}
-
-bool Decl::isFromHeaderUnit() const {
-  return getOwningModule() && getOwningModule()->isHeaderUnit();
 }
 
 static Decl::Kind getKind(const Decl *D) { return D->getKind(); }
@@ -1194,40 +1011,14 @@ const FunctionType *Decl::getFunctionType(bool BlocksToo) const {
   else
     return nullptr;
 
-  if (Ty.isNull()) {
-    // BindingDecls do not have types during parsing, so return nullptr. This is
-    // the only known case where `Ty` is null.
-    assert(isa<BindingDecl>(this));
-    return nullptr;
-  }
-
   if (Ty->isFunctionPointerType())
     Ty = Ty->castAs<PointerType>()->getPointeeType();
-  else if (Ty->isMemberFunctionPointerType())
-    Ty = Ty->castAs<MemberPointerType>()->getPointeeType();
   else if (Ty->isFunctionReferenceType())
     Ty = Ty->castAs<ReferenceType>()->getPointeeType();
   else if (BlocksToo && Ty->isBlockPointerType())
     Ty = Ty->castAs<BlockPointerType>()->getPointeeType();
 
   return Ty->getAs<FunctionType>();
-}
-
-bool Decl::isFunctionPointerType() const {
-  QualType Ty;
-  if (const auto *D = dyn_cast<ValueDecl>(this))
-    Ty = D->getType();
-  else if (const auto *D = dyn_cast<TypedefNameDecl>(this))
-    Ty = D->getUnderlyingType();
-  else
-    return false;
-
-  return Ty.getCanonicalType()->isFunctionPointerType();
-}
-
-DeclContext *Decl::getNonTransparentDeclContext() {
-  assert(getDeclContext());
-  return getDeclContext()->getNonTransparentContext();
 }
 
 /// Starting at a given context (a Decl or DeclContext), look for a
@@ -1248,8 +1039,6 @@ template <class T> static Decl *getNonClosureContext(T *D) {
     return getNonClosureContext(BD->getParent());
   if (auto *CD = dyn_cast<CapturedDecl>(D))
     return getNonClosureContext(CD->getParent());
-  if (auto *OFD = dyn_cast<OutlinedFunctionDecl>(D))
-    return getNonClosureContext(OFD->getParent());
   return nullptr;
 }
 
@@ -1276,14 +1065,20 @@ DeclContext::DeclContext(Decl::Kind K) {
 }
 
 bool DeclContext::classof(const Decl *D) {
-  Decl::Kind DK = D->getKind();
-  switch (DK) {
+  switch (D->getKind()) {
 #define DECL(NAME, BASE)
 #define DECL_CONTEXT(NAME) case Decl::NAME:
+#define DECL_CONTEXT_BASE(NAME)
 #include "clang/AST/DeclNodes.inc"
-    return true;
-  default:
-    return false;
+      return true;
+    default:
+#define DECL(NAME, BASE)
+#define DECL_CONTEXT_BASE(NAME)                 \
+      if (D->getKind() >= Decl::first##NAME &&  \
+          D->getKind() <= Decl::last##NAME)     \
+        return true;
+#include "clang/AST/DeclNodes.inc"
+      return false;
   }
 }
 
@@ -1357,8 +1152,6 @@ bool DeclContext::isDependentContext() const {
 
     if (Record->isDependentLambda())
       return true;
-    if (Record->isNeverDependentLambda())
-      return false;
   }
 
   if (const auto *Function = dyn_cast<FunctionDecl>(this)) {
@@ -1382,11 +1175,11 @@ bool DeclContext::isTransparentContext() const {
   if (getDeclKind() == Decl::Enum)
     return !cast<EnumDecl>(this)->isScoped();
 
-  return isa<LinkageSpecDecl, ExportDecl, HLSLBufferDecl>(this);
+  return getDeclKind() == Decl::LinkageSpec || getDeclKind() == Decl::Export;
 }
 
 static bool isLinkageSpecContext(const DeclContext *DC,
-                                 LinkageSpecLanguageIDs ID) {
+                                 LinkageSpecDecl::LanguageIDs ID) {
   while (DC->getDeclKind() != Decl::TranslationUnit) {
     if (DC->getDeclKind() == Decl::LinkageSpec)
       return cast<LinkageSpecDecl>(DC)->getLanguage() == ID;
@@ -1396,14 +1189,14 @@ static bool isLinkageSpecContext(const DeclContext *DC,
 }
 
 bool DeclContext::isExternCContext() const {
-  return isLinkageSpecContext(this, LinkageSpecLanguageIDs::C);
+  return isLinkageSpecContext(this, LinkageSpecDecl::lang_c);
 }
 
 const LinkageSpecDecl *DeclContext::getExternCContext() const {
   const DeclContext *DC = this;
   while (DC->getDeclKind() != Decl::TranslationUnit) {
     if (DC->getDeclKind() == Decl::LinkageSpec &&
-        cast<LinkageSpecDecl>(DC)->getLanguage() == LinkageSpecLanguageIDs::C)
+        cast<LinkageSpecDecl>(DC)->getLanguage() == LinkageSpecDecl::lang_c)
       return cast<LinkageSpecDecl>(DC);
     DC = DC->getLexicalParent();
   }
@@ -1411,7 +1204,7 @@ const LinkageSpecDecl *DeclContext::getExternCContext() const {
 }
 
 bool DeclContext::isExternCXXContext() const {
-  return isLinkageSpecContext(this, LinkageSpecLanguageIDs::CXX);
+  return isLinkageSpecContext(this, LinkageSpecDecl::lang_cxx);
 }
 
 bool DeclContext::Encloses(const DeclContext *DC) const {
@@ -1419,19 +1212,9 @@ bool DeclContext::Encloses(const DeclContext *DC) const {
     return getPrimaryContext()->Encloses(DC);
 
   for (; DC; DC = DC->getParent())
-    if (!isa<LinkageSpecDecl>(DC) && !isa<ExportDecl>(DC) &&
-        DC->getPrimaryContext() == this)
+    if (DC->getPrimaryContext() == this)
       return true;
   return false;
-}
-
-DeclContext *DeclContext::getNonTransparentContext() {
-  DeclContext *DC = this;
-  while (DC->isTransparentContext()) {
-    DC = DC->getParent();
-    assert(DC && "All transparent contexts should have a parent!");
-  }
-  return DC;
 }
 
 DeclContext *DeclContext::getPrimaryContext() {
@@ -1439,29 +1222,19 @@ DeclContext *DeclContext::getPrimaryContext() {
   case Decl::ExternCContext:
   case Decl::LinkageSpec:
   case Decl::Export:
-  case Decl::TopLevelStmt:
   case Decl::Block:
   case Decl::Captured:
-  case Decl::OutlinedFunction:
   case Decl::OMPDeclareReduction:
   case Decl::OMPDeclareMapper:
   case Decl::RequiresExprBody:
     // There is only one DeclContext for these entities.
     return this;
 
-  case Decl::HLSLBuffer:
-    // Each buffer, even with the same name, is a distinct construct.
-    // Multiple buffers with the same name are allowed for backward
-    // compatibility.
-    // As long as buffers have unique resource bindings the names don't matter.
-    // The names get exposed via the CPU-side reflection API which
-    // supports querying bindings, so we cannot remove them.
-    return this;
-
   case Decl::TranslationUnit:
     return static_cast<TranslationUnitDecl *>(this)->getFirstDecl();
   case Decl::Namespace:
-    return static_cast<NamespaceDecl *>(this)->getFirstDecl();
+    // The original namespace is our primary context.
+    return static_cast<NamespaceDecl *>(this)->getOriginalNamespace();
 
   case Decl::ObjCMethod:
     return this;
@@ -1514,8 +1287,7 @@ DeclContext *DeclContext::getPrimaryContext() {
 }
 
 template <typename T>
-static void collectAllContextsImpl(T *Self,
-                                   SmallVectorImpl<DeclContext *> &Contexts) {
+void collectAllContextsImpl(T *Self, SmallVectorImpl<DeclContext *> &Contexts) {
   for (T *D = Self->getMostRecentDecl(); D; D = D->getPreviousDecl())
     Contexts.push_back(D);
 
@@ -1743,11 +1515,7 @@ void DeclContext::removeDecl(Decl *D) {
       if (Map) {
         StoredDeclsMap::iterator Pos = Map->find(ND->getDeclName());
         assert(Pos != Map->end() && "no lookup entry for decl");
-        StoredDeclsList &List = Pos->second;
-        List.remove(ND);
-        // Clean up the entry if there are no more decls.
-        if (List.isNull())
-          Map->erase(Pos);
+        Pos->second.remove(ND);
       }
     } while (DC->isTransparentContext() && (DC = DC->getParent()));
   }
@@ -1866,20 +1634,13 @@ void DeclContext::buildLookupImpl(DeclContext *DCtx, bool Internal) {
 
 DeclContext::lookup_result
 DeclContext::lookup(DeclarationName Name) const {
-  // For transparent DeclContext, we should lookup in their enclosing context.
-  if (getDeclKind() == Decl::LinkageSpec || getDeclKind() == Decl::Export)
-    return getParent()->lookup(Name);
+  assert(getDeclKind() != Decl::LinkageSpec &&
+         getDeclKind() != Decl::Export &&
+         "should not perform lookups into transparent contexts");
 
-  return getPrimaryContext()->lookupImpl(Name, this);
-}
-
-DeclContext::lookup_result
-DeclContext::lookupImpl(DeclarationName Name,
-                        const DeclContext *OriginalLookupDC) const {
-  assert(this == getPrimaryContext() &&
-         "lookupImpl should only be called with primary DC!");
-  assert(getDeclKind() != Decl::LinkageSpec && getDeclKind() != Decl::Export &&
-         "We shouldn't lookup in transparent DC.");
+  const DeclContext *PrimaryContext = getPrimaryContext();
+  if (PrimaryContext != this)
+    return PrimaryContext->lookup(Name);
 
   // If we have an external source, ensure that any later redeclarations of this
   // context have been loaded, since they may add names to the result of this
@@ -1910,8 +1671,7 @@ DeclContext::lookupImpl(DeclarationName Name,
     if (!R.second && !R.first->second.hasExternalDecls())
       return R.first->second.getLookupResult();
 
-    if (Source->FindExternalVisibleDeclsByName(this, Name, OriginalLookupDC) ||
-        !R.second) {
+    if (Source->FindExternalVisibleDeclsByName(this, Name) || !R.second) {
       if (StoredDeclsMap *Map = LookupPtr) {
         StoredDeclsMap::iterator I = Map->find(Name);
         if (I != Map->end())
@@ -1939,9 +1699,9 @@ DeclContext::lookupImpl(DeclarationName Name,
 
 DeclContext::lookup_result
 DeclContext::noload_lookup(DeclarationName Name) {
-  // For transparent DeclContext, we should lookup in their enclosing context.
-  if (getDeclKind() == Decl::LinkageSpec || getDeclKind() == Decl::Export)
-    return getParent()->noload_lookup(Name);
+  assert(getDeclKind() != Decl::LinkageSpec &&
+         getDeclKind() != Decl::Export &&
+         "should not perform lookups into transparent contexts");
 
   DeclContext *PrimaryContext = getPrimaryContext();
   if (PrimaryContext != this)
@@ -1979,8 +1739,7 @@ void DeclContext::localUncachedLookup(DeclarationName Name,
   if (!hasExternalVisibleStorage() && !hasExternalLexicalStorage() && Name) {
     lookup_result LookupResults = lookup(Name);
     Results.insert(Results.end(), LookupResults.begin(), LookupResults.end());
-    if (!Results.empty())
-      return;
+    return;
   }
 
   // If we have a lookup table, check there first. Maybe we'll get lucky.
@@ -2137,8 +1896,7 @@ void DeclContext::makeDeclVisibleInContextImpl(NamedDecl *D, bool Internal) {
     if (ExternalASTSource *Source = getParentASTContext().getExternalSource())
       if (hasExternalVisibleStorage() &&
           Map->find(D->getDeclName()) == Map->end())
-        Source->FindExternalVisibleDeclsByName(this, D->getDeclName(),
-                                               D->getDeclContext());
+        Source->FindExternalVisibleDeclsByName(this, D->getDeclName());
 
   // Insert this declaration into the map.
   StoredDeclsList &DeclNameEntries = (*Map)[D->getDeclName()];
@@ -2195,7 +1953,6 @@ void ASTContext::ReleaseDeclContextMaps() {
   // pointer because the subclass doesn't add anything that needs to
   // be deleted.
   StoredDeclsMap::DestroyAll(LastSDM.getPointer(), LastSDM.getInt());
-  LastSDM.setPointer(nullptr);
 }
 
 void StoredDeclsMap::DestroyAll(StoredDeclsMap *Map, bool Dependent) {
@@ -2237,8 +1994,4 @@ DependentDiagnostic *DependentDiagnostic::Create(ASTContext &C,
   Map->FirstDiagnostic = DD;
 
   return DD;
-}
-
-unsigned DeclIDBase::getLocalDeclIndex() const {
-  return ID & llvm::maskTrailingOnes<DeclID>(32);
 }

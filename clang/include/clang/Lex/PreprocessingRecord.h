@@ -19,6 +19,8 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator.h"
@@ -28,7 +30,6 @@
 #include <cassert>
 #include <cstddef>
 #include <iterator>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -48,6 +49,7 @@ void operator delete(void *ptr, clang::PreprocessingRecord &PR,
 
 namespace clang {
 
+class FileEntry;
 class IdentifierInfo;
 class MacroInfo;
 class SourceManager;
@@ -180,13 +182,13 @@ class Token;
     }
 
     /// True if it is a builtin macro.
-    bool isBuiltinMacro() const { return isa<IdentifierInfo *>(NameOrDef); }
+    bool isBuiltinMacro() const { return NameOrDef.is<IdentifierInfo *>(); }
 
     /// The name of the macro being expanded.
     const IdentifierInfo *getName() const {
       if (MacroDefinitionRecord *Def = getDefinition())
         return Def->getName();
-      return cast<IdentifierInfo *>(NameOrDef);
+      return NameOrDef.get<IdentifierInfo *>();
     }
 
     /// The definition of the macro being expanded. May return null if
@@ -228,27 +230,25 @@ class Token;
 
     /// Whether the file name was in quotation marks; otherwise, it was
     /// in angle brackets.
-    LLVM_PREFERRED_TYPE(bool)
     unsigned InQuotes : 1;
 
     /// The kind of inclusion directive we have.
     ///
     /// This is a value of type InclusionKind.
-    LLVM_PREFERRED_TYPE(InclusionKind)
     unsigned Kind : 2;
 
     /// Whether the inclusion directive was automatically turned into
     /// a module import.
-    LLVM_PREFERRED_TYPE(bool)
     unsigned ImportedModule : 1;
 
     /// The file that was included.
-    OptionalFileEntryRef File;
+    const FileEntry *File;
 
   public:
-    InclusionDirective(PreprocessingRecord &PPRec, InclusionKind Kind,
-                       StringRef FileName, bool InQuotes, bool ImportedModule,
-                       OptionalFileEntryRef File, SourceRange Range);
+    InclusionDirective(PreprocessingRecord &PPRec,
+                       InclusionKind Kind, StringRef FileName,
+                       bool InQuotes, bool ImportedModule,
+                       const FileEntry *File, SourceRange Range);
 
     /// Determine what kind of inclusion directive this is.
     InclusionKind getKind() const { return static_cast<InclusionKind>(Kind); }
@@ -266,7 +266,7 @@ class Token;
 
     /// Retrieve the file entry for the actual file that was included
     /// by this directive.
-    OptionalFileEntryRef getFile() const { return File; }
+    const FileEntry *getFile() const { return File; }
 
     // Implement isa/cast/dyncast/etc.
     static bool classof(const PreprocessedEntity *PE) {
@@ -293,9 +293,9 @@ class Token;
 
     /// Optionally returns true or false if the preallocated preprocessed
     /// entity with index \p Index came from file \p FID.
-    virtual std::optional<bool> isPreprocessedEntityInFileID(unsigned Index,
-                                                             FileID FID) {
-      return std::nullopt;
+    virtual Optional<bool> isPreprocessedEntityInFileID(unsigned Index,
+                                                        FileID FID) {
+      return None;
     }
 
     /// Read a preallocated skipped range from the external source.
@@ -531,9 +531,8 @@ class Token;
     void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                             StringRef FileName, bool IsAngled,
                             CharSourceRange FilenameRange,
-                            OptionalFileEntryRef File, StringRef SearchPath,
-                            StringRef RelativePath,
-                            const Module *SuggestedModule, bool ModuleImported,
+                            const FileEntry *File, StringRef SearchPath,
+                            StringRef RelativePath, const Module *Imported,
                             SrcMgr::CharacteristicKind FileType) override;
     void Ifdef(SourceLocation Loc, const Token &MacroNameTok,
                const MacroDefinition &MD) override;

@@ -1,27 +1,29 @@
-; RUN: llc -mtriple=hexagon -mcpu=hexagonv62 -mtriple=hexagon-unknown-linux-musl < %s | FileCheck %s
+; RUN: llc -march=hexagon -mcpu=hexagonv62 -mtriple=hexagon-unknown-linux-musl < %s | FileCheck %s
 ; CHECK-LABEL: PrintInts:
 ; CHECK-DAG: memw{{.*}} = r{{[0-9]+}}
 ; CHECK-DAG: memw{{.*}} = r{{[0-9]+}}
 ; CHECK-DAG: r{{[0-9]+}}:{{[0-9]+}} = memd{{.*}}
 ; CHECK-DAG: memd{{.*}} = r{{[0-9]+}}:{{[0-9]+}}
 
-%struct.__va_list_tag = type { ptr, ptr, ptr }
+%struct.__va_list_tag = type { i8*, i8*, i8* }
 
 ; Function Attrs: nounwind
 define void @PrintInts(i32 %first, ...) #0 {
 entry:
   %vl = alloca [1 x %struct.__va_list_tag], align 8
   %vl_count = alloca [1 x %struct.__va_list_tag], align 8
-  call void @llvm.va_start(ptr %vl)
-  call void @llvm.va_copy(ptr %vl_count, ptr %vl)
+  %arraydecay1 = bitcast [1 x %struct.__va_list_tag]* %vl to i8*
+  call void @llvm.va_start(i8* %arraydecay1)
+  %0 = bitcast [1 x %struct.__va_list_tag]* %vl_count to i8*
+  call void @llvm.va_copy(i8* %0, i8* %arraydecay1)
   ret void
 }
 
 ; Function Attrs: nounwind
-declare void @llvm.va_start(ptr) #1
+declare void @llvm.va_start(i8*) #1
 
 ; Function Attrs: nounwind
-declare void @llvm.va_copy(ptr, ptr) #1
+declare void @llvm.va_copy(i8*, i8*) #1
 
 ; Function Attrs: nounwind
 define i32 @main() #0 {

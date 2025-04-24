@@ -21,7 +21,8 @@
  */
 
 #include <clc/clc.h>
-#include <clc/math/clc_subnormal_config.h>
+
+#include "config.h"
 
 _CLC_DEF bool __clc_fp16_subnormals_supported() { return false; }
 

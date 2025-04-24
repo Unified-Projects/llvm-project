@@ -259,7 +259,6 @@ void ScalarEnumerationTraits<CallingConvention>::enumeration(
   IO.enumCase(Value, "ClrCall", CallingConvention::ClrCall);
   IO.enumCase(Value, "Inline", CallingConvention::Inline);
   IO.enumCase(Value, "NearVector", CallingConvention::NearVector);
-  IO.enumCase(Value, "Swift", CallingConvention::Swift);
 }
 
 void ScalarEnumerationTraits<PointerKind>::enumeration(IO &IO,
@@ -491,10 +490,7 @@ private:
 
 Error LeafRecordImpl<FieldListRecord>::fromCodeViewRecord(CVType Type) {
   MemberRecordConversionVisitor V(Members);
-  FieldListRecord FieldList;
-  cantFail(TypeDeserializer::deserializeAs<FieldListRecord>(Type,
-                                                            FieldList));
-  return visitMemberRecordStream(FieldList.Data, V);
+  return visitMemberRecordStream(Type.content(), V);
 }
 
 CVType LeafRecordImpl<FieldListRecord>::toCodeViewRecord(
@@ -785,7 +781,7 @@ std::vector<LeafRecord>
 llvm::CodeViewYAML::fromDebugT(ArrayRef<uint8_t> DebugTorP,
                                StringRef SectionName) {
   ExitOnError Err("Invalid " + std::string(SectionName) + " section!");
-  BinaryStreamReader Reader(DebugTorP, llvm::endianness::little);
+  BinaryStreamReader Reader(DebugTorP, support::little);
   CVTypeArray Types;
   uint32_t Magic;
 
@@ -814,7 +810,7 @@ ArrayRef<uint8_t> llvm::CodeViewYAML::toDebugT(ArrayRef<LeafRecord> Leafs,
   }
   uint8_t *ResultBuffer = Alloc.Allocate<uint8_t>(Size);
   MutableArrayRef<uint8_t> Output(ResultBuffer, Size);
-  BinaryStreamWriter Writer(Output, llvm::endianness::little);
+  BinaryStreamWriter Writer(Output, support::little);
   ExitOnError Err("Error writing type record to " + std::string(SectionName) +
                   " section");
   Err(Writer.writeInteger<uint32_t>(COFF::DEBUG_SECTION_MAGIC));

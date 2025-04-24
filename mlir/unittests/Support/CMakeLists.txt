@@ -1,8 +1,10 @@
 add_mlir_unittest(MLIRSupportTests
-  CyclicReplacerCacheTest.cpp
+  DebugActionTest.cpp
+  DebugCounterTest.cpp
   IndentedOstreamTest.cpp
+  MathExtrasTest.cpp
   StorageUniquerTest.cpp
 )
 
-mlir_target_link_libraries(MLIRSupportTests
-  PRIVATE MLIRSupport)
+target_link_libraries(MLIRSupportTests
+  PRIVATE MLIRSupportIndentedOstream MLIRSupport)

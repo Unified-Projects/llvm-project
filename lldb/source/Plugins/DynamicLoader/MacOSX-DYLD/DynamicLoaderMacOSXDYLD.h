@@ -43,14 +43,12 @@ public:
 
   static void Terminate();
 
-  static llvm::StringRef GetPluginNameStatic() { return "macosx-dyld"; }
+  static lldb_private::ConstString GetPluginNameStatic();
 
-  static llvm::StringRef GetPluginDescriptionStatic();
+  static const char *GetPluginDescriptionStatic();
 
   static lldb_private::DynamicLoader *
   CreateInstance(lldb_private::Process *process, bool force);
-
-  static void DebuggerInitialize(lldb_private::Debugger &debugger);
 
   /// Called after attaching a process.
   ///
@@ -66,7 +64,9 @@ public:
       lldb_private::LazyBool &private_shared_cache) override;
 
   // PluginInterface protocol
-  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
+  lldb_private::ConstString GetPluginName() override;
+
+  uint32_t GetPluginVersion() override;
 
   bool IsFullyInitialized() override;
 

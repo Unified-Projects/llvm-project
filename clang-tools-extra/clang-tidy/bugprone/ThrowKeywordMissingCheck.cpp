@@ -12,20 +12,23 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::bugprone {
+namespace clang {
+namespace tidy {
+namespace bugprone {
 
 void ThrowKeywordMissingCheck::registerMatchers(MatchFinder *Finder) {
+  auto CtorInitializerList =
+      cxxConstructorDecl(hasAnyConstructorInitializer(anything()));
+
   Finder->addMatcher(
       cxxConstructExpr(
           hasType(cxxRecordDecl(
               isSameOrDerivedFrom(matchesName("[Ee]xception|EXCEPTION")))),
-          unless(anyOf(
-              hasAncestor(
-                  stmt(anyOf(cxxThrowExpr(), callExpr(), returnStmt()))),
-              hasAncestor(decl(anyOf(varDecl(), fieldDecl()))),
-              hasAncestor(expr(cxxNewExpr(hasAnyPlacementArg(anything())))),
-              allOf(hasAncestor(cxxConstructorDecl()),
-                    unless(hasAncestor(cxxCatchStmt()))))))
+          unless(anyOf(hasAncestor(stmt(
+                           anyOf(cxxThrowExpr(), callExpr(), returnStmt()))),
+                       hasAncestor(varDecl()),
+                       allOf(hasAncestor(CtorInitializerList),
+                             unless(hasAncestor(cxxCatchStmt()))))))
           .bind("temporary-exception-not-thrown"),
       this);
 }
@@ -39,4 +42,6 @@ void ThrowKeywordMissingCheck::check(const MatchFinder::MatchResult &Result) {
       << TemporaryExpr->getType().getBaseTypeIdentifier()->getName();
 }
 
-} // namespace clang::tidy::bugprone
+} // namespace bugprone
+} // namespace tidy
+} // namespace clang

@@ -60,8 +60,6 @@ struct DebugValueDrop : public FunctionPass {
       for (Instruction &I : BB) {
         if (auto *DVI = dyn_cast<DbgVariableIntrinsic>(&I))
           Dbgs.push_back(DVI);
-        // If there are any non-intrinsic records (DbgRecords), drop those too.
-        I.dropDbgRecords();
       }
     }
 
@@ -123,15 +121,15 @@ TEST(DebugInfoDrop, DropOriginalDebugInfo) {
 
   DebugInfoDrop *P = new DebugInfoDrop();
 
-  DebugInfoPerPass DIBeforePass;
+  DebugInfoPerPassMap DIPreservationMap;
   DebugifyCustomPassManager Passes;
-  Passes.setDebugInfoBeforePass(DIBeforePass);
+  Passes.setDIPreservationMap(DIPreservationMap);
   Passes.add(createDebugifyModulePass(DebugifyMode::OriginalDebugInfo, "",
-                                      &(Passes.getDebugInfoPerPass())));
+                                      &(Passes.getDebugInfoPerPassMap())));
   Passes.add(P);
   Passes.add(createCheckDebugifyModulePass(false, "", nullptr,
                                            DebugifyMode::OriginalDebugInfo,
-                                           &(Passes.getDebugInfoPerPass())));
+                                           &(Passes.getDebugInfoPerPassMap())));
 
   testing::internal::CaptureStderr();
   Passes.run(*M);
@@ -174,15 +172,15 @@ TEST(DebugValueDrop, DropOriginalDebugValues) {
 
   DebugValueDrop *P = new DebugValueDrop();
 
-  DebugInfoPerPass DIBeforePass;
+  DebugInfoPerPassMap DIPreservationMap;
   DebugifyCustomPassManager Passes;
-  Passes.setDebugInfoBeforePass(DIBeforePass);
+  Passes.setDIPreservationMap(DIPreservationMap);
   Passes.add(createDebugifyModulePass(DebugifyMode::OriginalDebugInfo, "",
-                                      &(Passes.getDebugInfoPerPass())));
+                                      &(Passes.getDebugInfoPerPassMap())));
   Passes.add(P);
   Passes.add(createCheckDebugifyModulePass(false, "", nullptr,
                                            DebugifyMode::OriginalDebugInfo,
-                                           &(Passes.getDebugInfoPerPass())));
+                                           &(Passes.getDebugInfoPerPassMap())));
 
   testing::internal::CaptureStderr();
   Passes.run(*M);
@@ -227,15 +225,15 @@ TEST(DebugInfoDummyAnalysis, PreserveOriginalDebugInfo) {
 
   DebugInfoDummyAnalysis *P = new DebugInfoDummyAnalysis();
 
-  DebugInfoPerPass DIBeforePass;
+  DebugInfoPerPassMap DIPreservationMap;
   DebugifyCustomPassManager Passes;
-  Passes.setDebugInfoBeforePass(DIBeforePass);
+  Passes.setDIPreservationMap(DIPreservationMap);
   Passes.add(createDebugifyModulePass(DebugifyMode::OriginalDebugInfo, "",
-                                      &(Passes.getDebugInfoPerPass())));
+                                      &(Passes.getDebugInfoPerPassMap())));
   Passes.add(P);
   Passes.add(createCheckDebugifyModulePass(false, "", nullptr,
                                            DebugifyMode::OriginalDebugInfo,
-                                           &(Passes.getDebugInfoPerPass())));
+                                           &(Passes.getDebugInfoPerPassMap())));
 
   testing::internal::CaptureStderr();
   Passes.run(*M);

@@ -72,7 +72,7 @@ lldb::pid_t ProcessDebugger::GetDebuggedProcessId() const {
 }
 
 Status ProcessDebugger::DetachProcess() {
-  Log *log = GetLog(WindowsLog::Process);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS);
   DebuggerThreadSP debugger_thread;
   {
     // Acquire the lock only long enough to get the DebuggerThread.
@@ -108,7 +108,7 @@ Status ProcessDebugger::LaunchProcess(ProcessLaunchInfo &launch_info,
   // thread has been kicked off.  So there's no race conditions, and it
   // shouldn't be necessary to acquire the mutex.
 
-  Log *log = GetLog(WindowsLog::Process);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS);
   Status result;
 
   FileSpec working_dir = launch_info.GetWorkingDirectory();
@@ -116,8 +116,8 @@ Status ProcessDebugger::LaunchProcess(ProcessLaunchInfo &launch_info,
   if (working_dir) {
     FileSystem::Instance().Resolve(working_dir);
     if (!FileSystem::Instance().IsDirectory(working_dir)) {
-      result = Status::FromErrorStringWithFormat(
-          "No such file or directory: %s", working_dir.GetPath().c_str());
+      result.SetErrorStringWithFormat("No such file or directory: %s",
+                                      working_dir.GetCString());
       return result;
     }
   }
@@ -128,7 +128,7 @@ Status ProcessDebugger::LaunchProcess(ProcessLaunchInfo &launch_info,
                   "only be used for debug launches.",
                   launch_info.GetExecutableFile().GetPath().c_str());
     std::string message = stream.GetString().str();
-    result = Status::FromErrorString(message.c_str());
+    result.SetErrorString(message.c_str());
 
     LLDB_LOG(log, "error: {0}", message);
     return result;
@@ -171,7 +171,7 @@ Status ProcessDebugger::LaunchProcess(ProcessLaunchInfo &launch_info,
 Status ProcessDebugger::AttachProcess(lldb::pid_t pid,
                                       const ProcessAttachInfo &attach_info,
                                       DebugDelegateSP delegate) {
-  Log *log = GetLog(WindowsLog::Process);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS);
   m_session_data.reset(
       new ProcessWindowsData(!attach_info.GetContinueOnceAttached()));
   DebuggerThreadSP debugger(new DebuggerThread(delegate));
@@ -209,7 +209,7 @@ Status ProcessDebugger::AttachProcess(lldb::pid_t pid,
 }
 
 Status ProcessDebugger::DestroyProcess(const lldb::StateType state) {
-  Log *log = GetLog(WindowsLog::Process);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS);
   DebuggerThreadSP debugger_thread;
   {
     // Acquire this lock inside an inner scope, only long enough to get the
@@ -245,14 +245,14 @@ Status ProcessDebugger::DestroyProcess(const lldb::StateType state) {
 }
 
 Status ProcessDebugger::HaltProcess(bool &caused_stop) {
-  Log *log = GetLog(WindowsLog::Process);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS);
   Status error;
   llvm::sys::ScopedLock lock(m_mutex);
   caused_stop = ::DebugBreakProcess(m_session_data->m_debugger->GetProcess()
                                         .GetNativeProcess()
                                         .GetSystemHandle());
   if (!caused_stop) {
-    error = Status(::GetLastError(), eErrorTypeWin32);
+    error.SetError(::GetLastError(), eErrorTypeWin32);
     LLDB_LOG(log, "DebugBreakProcess failed with error {0}", error);
   }
 
@@ -263,11 +263,11 @@ Status ProcessDebugger::ReadMemory(lldb::addr_t vm_addr, void *buf, size_t size,
                                    size_t &bytes_read) {
   Status error;
   bytes_read = 0;
-  Log *log = GetLog(WindowsLog::Memory);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_MEMORY);
   llvm::sys::ScopedLock lock(m_mutex);
 
   if (!m_session_data) {
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "cannot read, there is no active debugger connection.");
     LLDB_LOG(log, "error: {0}", error);
     return error;
@@ -276,29 +276,20 @@ Status ProcessDebugger::ReadMemory(lldb::addr_t vm_addr, void *buf, size_t size,
   LLDB_LOG(log, "attempting to read {0} bytes from address {1:x}", size,
            vm_addr);
 
-  lldb::process_t handle = m_session_data->m_debugger->GetProcess()
-                               .GetNativeProcess()
-                               .GetSystemHandle();
+  HostProcess process = m_session_data->m_debugger->GetProcess();
   void *addr = reinterpret_cast<void *>(vm_addr);
   SIZE_T num_of_bytes_read = 0;
-  if (::ReadProcessMemory(handle, addr, buf, size, &num_of_bytes_read)) {
+  if (!::ReadProcessMemory(process.GetNativeProcess().GetSystemHandle(), addr,
+                           buf, size, &num_of_bytes_read)) {
+    // Reading from the process can fail for a number of reasons - set the
+    // error code and make sure that the number of bytes read is set back to 0
+    // because in some scenarios the value of bytes_read returned from the API
+    // is garbage.
+    error.SetError(GetLastError(), eErrorTypeWin32);
+    LLDB_LOG(log, "reading failed with error: {0}", error);
+  } else {
     bytes_read = num_of_bytes_read;
-    return Status();
   }
-  error = Status(GetLastError(), eErrorTypeWin32);
-  MemoryRegionInfo info;
-  if (GetMemoryRegionInfo(vm_addr, info).Fail() ||
-      info.GetMapped() != MemoryRegionInfo::OptionalBool::eYes)
-    return error;
-  size = info.GetRange().GetRangeEnd() - vm_addr;
-  LLDB_LOG(log, "retrying the read with size {0:x}", size);
-  if (::ReadProcessMemory(handle, addr, buf, size, &num_of_bytes_read)) {
-    LLDB_LOG(log, "success: read {0:x} bytes", num_of_bytes_read);
-    bytes_read = num_of_bytes_read;
-    return Status();
-  }
-  error = Status(GetLastError(), eErrorTypeWin32);
-  LLDB_LOG(log, "error: {0}", error);
   return error;
 }
 
@@ -306,13 +297,13 @@ Status ProcessDebugger::WriteMemory(lldb::addr_t vm_addr, const void *buf,
                                     size_t size, size_t &bytes_written) {
   Status error;
   bytes_written = 0;
-  Log *log = GetLog(WindowsLog::Memory);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_MEMORY);
   llvm::sys::ScopedLock lock(m_mutex);
   LLDB_LOG(log, "attempting to write {0} bytes into address {1:x}", size,
            vm_addr);
 
   if (!m_session_data) {
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "cannot write, there is no active debugger connection.");
     LLDB_LOG(log, "error: {0}", error);
     return error;
@@ -326,7 +317,7 @@ Status ProcessDebugger::WriteMemory(lldb::addr_t vm_addr, const void *buf,
     FlushInstructionCache(handle, addr, num_of_bytes_written);
     bytes_written = num_of_bytes_written;
   } else {
-    error = Status(GetLastError(), eErrorTypeWin32);
+    error.SetError(GetLastError(), eErrorTypeWin32);
     LLDB_LOG(log, "writing failed with error: {0}", error);
   }
   return error;
@@ -336,13 +327,13 @@ Status ProcessDebugger::AllocateMemory(size_t size, uint32_t permissions,
                                        lldb::addr_t &addr) {
   Status error;
   addr = LLDB_INVALID_ADDRESS;
-  Log *log = GetLog(WindowsLog::Memory);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_MEMORY);
   llvm::sys::ScopedLock lock(m_mutex);
   LLDB_LOG(log, "attempting to allocate {0} bytes with permissions {1}", size,
            permissions);
 
   if (!m_session_data) {
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "cannot allocate, there is no active debugger connection");
     LLDB_LOG(log, "error: {0}", error);
     return error;
@@ -353,7 +344,7 @@ Status ProcessDebugger::AllocateMemory(size_t size, uint32_t permissions,
   auto protect = ConvertLldbToWinApiProtect(permissions);
   auto result = ::VirtualAllocEx(handle, nullptr, size, MEM_COMMIT, protect);
   if (!result) {
-    error = Status(GetLastError(), eErrorTypeWin32);
+    error.SetError(GetLastError(), eErrorTypeWin32);
     LLDB_LOG(log, "allocating failed with error: {0}", error);
   } else {
     addr = reinterpret_cast<addr_t>(result);
@@ -364,12 +355,12 @@ Status ProcessDebugger::AllocateMemory(size_t size, uint32_t permissions,
 Status ProcessDebugger::DeallocateMemory(lldb::addr_t vm_addr) {
   Status result;
 
-  Log *log = GetLog(WindowsLog::Memory);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_MEMORY);
   llvm::sys::ScopedLock lock(m_mutex);
   LLDB_LOG(log, "attempting to deallocate bytes at address {0}", vm_addr);
 
   if (!m_session_data) {
-    result = Status::FromErrorString(
+    result.SetErrorString(
         "cannot deallocate, there is no active debugger connection");
     LLDB_LOG(log, "error: {0}", result);
     return result;
@@ -379,7 +370,7 @@ Status ProcessDebugger::DeallocateMemory(lldb::addr_t vm_addr) {
   lldb::process_t handle = process.GetNativeProcess().GetSystemHandle();
   if (!::VirtualFreeEx(handle, reinterpret_cast<LPVOID>(vm_addr), 0,
                        MEM_RELEASE)) {
-    result = Status(GetLastError(), eErrorTypeWin32);
+    result.SetError(GetLastError(), eErrorTypeWin32);
     LLDB_LOG(log, "deallocating failed with error: {0}", result);
   }
 
@@ -388,13 +379,13 @@ Status ProcessDebugger::DeallocateMemory(lldb::addr_t vm_addr) {
 
 Status ProcessDebugger::GetMemoryRegionInfo(lldb::addr_t vm_addr,
                                             MemoryRegionInfo &info) {
-  Log *log = GetLog(WindowsLog::Memory);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_MEMORY);
   Status error;
   llvm::sys::ScopedLock lock(m_mutex);
   info.Clear();
 
   if (!m_session_data) {
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "GetMemoryRegionInfo called with no debugging session.");
     LLDB_LOG(log, "error: {0}", error);
     return error;
@@ -402,7 +393,7 @@ Status ProcessDebugger::GetMemoryRegionInfo(lldb::addr_t vm_addr,
   HostProcess process = m_session_data->m_debugger->GetProcess();
   lldb::process_t handle = process.GetNativeProcess().GetSystemHandle();
   if (handle == nullptr || handle == LLDB_INVALID_PROCESS) {
-    error = Status::FromErrorString(
+    error.SetErrorString(
         "GetMemoryRegionInfo called with an invalid target process.");
     LLDB_LOG(log, "error: {0}", error);
     return error;
@@ -427,7 +418,7 @@ Status ProcessDebugger::GetMemoryRegionInfo(lldb::addr_t vm_addr,
       info.SetMapped(MemoryRegionInfo::eNo);
       return error;
     } else {
-      error = Status(last_error, eErrorTypeWin32);
+      error.SetError(last_error, eErrorTypeWin32);
       LLDB_LOG(log,
                "VirtualQueryEx returned error {0} while getting memory "
                "region info for address {1:x}",
@@ -454,7 +445,7 @@ Status ProcessDebugger::GetMemoryRegionInfo(lldb::addr_t vm_addr,
   // AllocationBase is defined for MEM_COMMIT and MEM_RESERVE but not MEM_FREE.
   if (mem_info.State != MEM_FREE) {
     info.GetRange().SetRangeBase(
-        reinterpret_cast<addr_t>(mem_info.BaseAddress));
+        reinterpret_cast<addr_t>(mem_info.AllocationBase));
     info.GetRange().SetRangeEnd(reinterpret_cast<addr_t>(mem_info.BaseAddress) +
                                 mem_info.RegionSize);
     info.SetMapped(MemoryRegionInfo::eYes);
@@ -493,7 +484,7 @@ void ProcessDebugger::OnDebuggerConnected(lldb::addr_t image_base) {}
 ExceptionResult
 ProcessDebugger::OnDebugException(bool first_chance,
                                   const ExceptionRecord &record) {
-  Log *log = GetLog(WindowsLog::Exception);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_EXCEPTION);
   llvm::sys::ScopedLock lock(m_mutex);
   // FIXME: Without this check, occasionally when running the test suite
   // there is an issue where m_session_data can be null.  It's not clear how
@@ -547,7 +538,7 @@ void ProcessDebugger::OnDebugString(const std::string &string) {}
 
 void ProcessDebugger::OnDebuggerError(const Status &error, uint32_t type) {
   llvm::sys::ScopedLock lock(m_mutex);
-  Log *log = GetLog(WindowsLog::Process);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS);
 
   if (m_session_data->m_initial_stop_received) {
     // This happened while debugging.  Do we shutdown the debugging session,
@@ -560,7 +551,7 @@ void ProcessDebugger::OnDebuggerError(const Status &error, uint32_t type) {
     // If we haven't actually launched the process yet, this was an error
     // launching the process.  Set the internal error and signal the initial
     // stop event so that the DoLaunch method wakes up and returns a failure.
-    m_session_data->m_launch_error = error.Clone();
+    m_session_data->m_launch_error = error;
     ::SetEvent(m_session_data->m_initial_stop_event);
     LLDB_LOG(log,
              "Error {0} occurred launching the process before the initial "
@@ -573,7 +564,8 @@ void ProcessDebugger::OnDebuggerError(const Status &error, uint32_t type) {
 Status ProcessDebugger::WaitForDebuggerConnection(DebuggerThreadSP debugger,
                                                   HostProcess &process) {
   Status result;
-  Log *log = GetLog(WindowsLog::Process | WindowsLog::Breakpoints);
+  Log *log = ProcessWindowsLog::GetLogIfAny(WINDOWS_LOG_PROCESS |
+                                            WINDOWS_LOG_BREAKPOINTS);
   LLDB_LOG(log, "Waiting for loader breakpoint.");
 
   // Block this function until we receive the initial stop from the process.
@@ -582,7 +574,7 @@ Status ProcessDebugger::WaitForDebuggerConnection(DebuggerThreadSP debugger,
     LLDB_LOG(log, "hit loader breakpoint, returning.");
 
     process = debugger->GetProcess();
-    return m_session_data->m_launch_error.Clone();
+    return m_session_data->m_launch_error;
   } else
     return Status(::GetLastError(), eErrorTypeWin32);
 }

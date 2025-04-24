@@ -37,12 +37,14 @@ public:
   AbbreviationMap() {}
 
   void set(unsigned recordID, unsigned abbrevID) {
-    assert(!Abbrevs.contains(recordID) && "Abbreviation already set.");
+    assert(Abbrevs.find(recordID) == Abbrevs.end()
+           && "Abbreviation already set.");
     Abbrevs[recordID] = abbrevID;
   }
 
   unsigned get(unsigned recordID) {
-    assert(Abbrevs.contains(recordID) && "Abbreviation not set.");
+    assert(Abbrevs.find(recordID) != Abbrevs.end() &&
+           "Abbreviation not set.");
     return Abbrevs[recordID];
   }
 };
@@ -93,7 +95,8 @@ class SDiagsMerger : SerializedDiagnosticReader {
   AbbrevLookup DiagFlagLookup;
 
 public:
-  SDiagsMerger(SDiagsWriter &Writer) : Writer(Writer) {}
+  SDiagsMerger(SDiagsWriter &Writer)
+      : SerializedDiagnosticReader(), Writer(Writer) {}
 
   std::error_code mergeRecordsFromFile(const char *File) {
     return readDiagnostics(File);
@@ -202,7 +205,7 @@ private:
 
   /// Emit the string information for diagnostic flags.
   unsigned getEmitDiagnosticFlag(DiagnosticsEngine::Level DiagLevel,
-                                 const Diagnostic *Diag = nullptr);
+                                 unsigned DiagID = 0);
 
   unsigned getEmitDiagnosticFlag(StringRef DiagName);
 
@@ -536,13 +539,11 @@ unsigned SDiagsWriter::getEmitCategory(unsigned int category) {
 }
 
 unsigned SDiagsWriter::getEmitDiagnosticFlag(DiagnosticsEngine::Level DiagLevel,
-                                             const Diagnostic *Diag) {
-  if (!Diag || DiagLevel == DiagnosticsEngine::Note)
+                                             unsigned DiagID) {
+  if (DiagLevel == DiagnosticsEngine::Note)
     return 0; // No flag for notes.
 
-  StringRef FlagName =
-      Diag->getDiags()->getDiagnosticIDs()->getWarningOptionForDiag(
-          Diag->getID());
+  StringRef FlagName = DiagnosticIDs::getWarningOptionForDiag(DiagID);
   return getEmitDiagnosticFlag(FlagName);
 }
 
@@ -576,7 +577,7 @@ void SDiagsWriter::HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
     SmallString<256> diagnostic;
     Info.FormatDiagnostic(diagnostic);
     getMetaDiags()->Report(
-        diag::warn_fe_serialized_diag_failure_during_finalization)
+        diag::warn_fe_serialized_diag_failure_during_finalisation)
         << diagnostic;
     return;
   }
@@ -652,12 +653,12 @@ void SDiagsWriter::EmitDiagnosticMessage(FullSourceLoc Loc, PresumedLoc PLoc,
   Record.push_back(getStableLevel(Level));
   AddLocToRecord(Loc, PLoc, Record);
 
-  if (const Diagnostic *Info = dyn_cast_if_present<const Diagnostic *>(D)) {
+  if (const Diagnostic *Info = D.dyn_cast<const Diagnostic*>()) {
     // Emit the category string lazily and get the category ID.
     unsigned DiagID = DiagnosticIDs::getCategoryNumberForDiag(Info->getID());
     Record.push_back(getEmitCategory(DiagID));
     // Emit the diagnostic flag string lazily and get the mapped ID.
-    Record.push_back(getEmitDiagnosticFlag(Level, Info));
+    Record.push_back(getEmitDiagnosticFlag(Level, Info->getID()));
   } else {
     Record.push_back(getEmitCategory());
     Record.push_back(getEmitDiagnosticFlag(Level));

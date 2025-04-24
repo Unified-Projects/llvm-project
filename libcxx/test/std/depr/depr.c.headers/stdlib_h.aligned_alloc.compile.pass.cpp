@@ -13,13 +13,10 @@
 
 // ::aligned_alloc is provided by the C library, but it's marked as unavailable
 // until macOS 10.15
-// XFAIL: target={{.+}}-apple-macosx10.{{(13|14)(.0)?}}
+// XFAIL: use_system_cxx_lib && target={{.+}}-apple-macosx10.{{9|10|11|12|13|14}}
 
 // ::aligned_alloc is not implemented on Windows
-// XFAIL: target={{.+}}-windows-{{.+}}
-
-// ::aligned_alloc is available starting with Android P (API 28)
-// XFAIL: target={{.+}}-android{{(eabi)?(21|22|23|24|25|26|27)}}
+// XFAIL: target={{.+}}-pc-windows-{{.+}}
 
 #include <stdlib.h>
 #include <type_traits>

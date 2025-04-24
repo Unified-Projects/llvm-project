@@ -30,13 +30,14 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/RecyclingAllocator.h"
 #include <cassert>
 #include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -83,7 +84,7 @@ public:
   bool runOnMachineFunction(MachineFunction &F) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<MachineDominatorTreeWrapperPass>();
+    AU.addRequired<MachineDominatorTree>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 
@@ -126,7 +127,7 @@ static MachineOperand *getCallTargetRegOpnd(MachineInstr &MI) {
 
   MachineOperand &MO = MI.getOperand(0);
 
-  if (!MO.isReg() || !MO.isUse() || !MO.getReg().isVirtual())
+  if (!MO.isReg() || !MO.isUse() || !Register::isVirtualRegister(MO.getReg()))
     return nullptr;
 
   return &MO;
@@ -169,7 +170,7 @@ static void eraseGPOpnd(MachineInstr &MI) {
   for (unsigned I = 0; I < MI.getNumOperands(); ++I) {
     MachineOperand &MO = MI.getOperand(I);
     if (MO.isReg() && MO.getReg() == Reg) {
-      MI.removeOperand(I);
+      MI.RemoveOperand(I);
       return;
     }
   }
@@ -193,12 +194,11 @@ void MBBInfo::postVisit() {
 
 // OptimizePICCall methods.
 bool OptimizePICCall::runOnMachineFunction(MachineFunction &F) {
-  if (F.getSubtarget<MipsSubtarget>().inMips16Mode())
+  if (static_cast<const MipsSubtarget &>(F.getSubtarget()).inMips16Mode())
     return false;
 
   // Do a pre-order traversal of the dominator tree.
-  MachineDominatorTree *MDT =
-      &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
+  MachineDominatorTree *MDT = &getAnalysis<MachineDominatorTree>();
   bool Changed = false;
 
   SmallVector<MBBInfo, 8> WorkList(1, MBBInfo(MDT->getRootNode()));

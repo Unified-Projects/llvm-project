@@ -9,6 +9,7 @@
 #include "llvm/MC/MCSectionWasm.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -44,14 +45,16 @@ static void printName(raw_ostream &OS, StringRef Name) {
   OS << '"';
 }
 
-void MCSectionWasm::printSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
+void MCSectionWasm::PrintSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
                                          raw_ostream &OS,
-                                         uint32_t Subsection) const {
+                                         const MCExpr *Subsection) const {
 
   if (shouldOmitSectionDirective(getName(), MAI)) {
     OS << '\t' << getName();
-    if (Subsection)
-      OS << '\t' << Subsection;
+    if (Subsection) {
+      OS << '\t';
+      Subsection->print(OS, &MAI);
+    }
     OS << '\n';
     return;
   }
@@ -68,8 +71,6 @@ void MCSectionWasm::printSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
     OS << 'S';
   if (SegmentFlags & wasm::WASM_SEG_FLAG_TLS)
     OS << 'T';
-  if (SegmentFlags & wasm::WASM_SEG_FLAG_RETAIN)
-    OS << 'R';
 
   OS << '"';
 
@@ -94,8 +95,13 @@ void MCSectionWasm::printSwitchToSection(const MCAsmInfo &MAI, const Triple &T,
 
   OS << '\n';
 
-  if (Subsection)
-    OS << "\t.subsection\t" << Subsection << '\n';
+  if (Subsection) {
+    OS << "\t.subsection\t";
+    Subsection->print(OS, &MAI);
+    OS << '\n';
+  }
 }
 
-bool MCSectionWasm::useCodeAlign() const { return false; }
+bool MCSectionWasm::UseCodeAlign() const { return false; }
+
+bool MCSectionWasm::isVirtualSection() const { return false; }

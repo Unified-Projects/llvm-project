@@ -1,4 +1,6 @@
-// RUN: %clang -### --target=x86_64-linux-gnu \
+// REQUIRES: clang-driver, x86-registered-target, amdgpu-registered-target
+
+// RUN: %clang -### -target x86_64-linux-gnu \
 // RUN:   --offload-arch=gfx1030 \
 // RUN:   --offload-arch=gfx1031 \
 // RUN:   -nogpuinc -nogpulib \

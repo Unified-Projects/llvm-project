@@ -42,23 +42,10 @@ public:
       return flavor_string.c_str();
     }
 
-    const char *GetCPUString() {
-      if (cpu_string.empty() || cpu_string == "default")
-        return nullptr;
-      return cpu_string.c_str();
-    }
-
-    const char *GetFeaturesString() {
-      if (features_string.empty() || features_string == "default")
-        return nullptr;
-      return features_string.c_str();
-    }
-
     Status OptionParsingFinished(ExecutionContext *execution_context) override;
 
     bool show_mixed; // Show mixed source/assembly
     bool show_bytes;
-    bool show_control_flow_kind;
     uint32_t num_lines_context = 0;
     uint32_t num_instructions = 0;
     bool raw;
@@ -70,8 +57,6 @@ public:
     bool frame_line = false;
     std::string plugin_name;
     std::string flavor_string;
-    std::string cpu_string;
-    std::string features_string;
     ArchSpec arch;
     bool some_location_specified = false; // If no location was specified, we'll
                                           // select "at_pc".  This should be set
@@ -87,7 +72,7 @@ public:
   Options *GetOptions() override { return &m_options; }
 
 protected:
-  void DoExecute(Args &command, CommandReturnObject &result) override;
+  bool DoExecute(Args &command, CommandReturnObject &result) override;
 
   llvm::Expected<std::vector<AddressRange>>
   GetRangesForSelectedMode(CommandReturnObject &result);

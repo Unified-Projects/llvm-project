@@ -1,4 +1,4 @@
-; RUN: opt %loadNPMPolly '-passes=print<polly-detect>' -disable-output < %s 2>&1 | FileCheck %s
+; RUN: opt %loadPolly -polly-detect -analyze < %s | FileCheck %s
 
 ; CHECK-NOT: Valid
 

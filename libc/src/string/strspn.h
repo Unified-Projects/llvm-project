@@ -9,13 +9,12 @@
 #ifndef LLVM_LIBC_SRC_STRING_STRSPN_H
 #define LLVM_LIBC_SRC_STRING_STRSPN_H
 
-#include "src/__support/macros/config.h"
 #include <stddef.h>
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 size_t strspn(const char *src, const char *segment);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_STRING_STRSPN_H

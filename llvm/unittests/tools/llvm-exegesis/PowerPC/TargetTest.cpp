@@ -12,8 +12,7 @@
 #include <memory>
 
 #include "MCTargetDesc/PPCMCTargetDesc.h"
-#include "TestBase.h"
-#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -31,7 +30,7 @@ using testing::Not;
 
 constexpr const char kTriple[] = "powerpc64le-unknown-linux";
 
-class PowerPCTargetTest : public PPCTestBase {
+class PowerPCTargetTest : public ::testing::Test {
 protected:
   PowerPCTargetTest()
       : ExegesisTarget_(ExegesisTarget::lookup(Triple(kTriple))) {
@@ -39,6 +38,12 @@ protected:
     std::string error;
     Target_ = TargetRegistry::lookupTarget(kTriple, error);
     EXPECT_THAT(Target_, NotNull());
+  }
+  static void SetUpTestCase() {
+    LLVMInitializePowerPCTargetInfo();
+    LLVMInitializePowerPCTarget();
+    LLVMInitializePowerPCTargetMC();
+    InitializePowerPCExegesisTarget();
   }
 
   const Target *Target_;

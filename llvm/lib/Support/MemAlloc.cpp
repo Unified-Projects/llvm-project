@@ -7,21 +7,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/MemAlloc.h"
-#include <new>
 
 // These are out of line to have __cpp_aligned_new not affect ABI.
 
 LLVM_ATTRIBUTE_RETURNS_NONNULL LLVM_ATTRIBUTE_RETURNS_NOALIAS void *
 llvm::allocate_buffer(size_t Size, size_t Alignment) {
-  void *Result = ::operator new(Size,
+  return ::operator new(Size
 #ifdef __cpp_aligned_new
-                                std::align_val_t(Alignment),
+                        ,
+                        std::align_val_t(Alignment)
 #endif
-                                std::nothrow);
-  if (Result == nullptr) {
-    report_bad_alloc_error("Buffer allocation failed");
-  }
-  return Result;
+  );
 }
 
 void llvm::deallocate_buffer(void *Ptr, size_t Size, size_t Alignment) {

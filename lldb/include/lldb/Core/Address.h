@@ -9,13 +9,10 @@
 #ifndef LLDB_CORE_ADDRESS_H
 #define LLDB_CORE_ADDRESS_H
 
-#include "lldb/Utility/Stream.h"
 #include "lldb/lldb-defines.h"
 #include "lldb/lldb-forward.h"
 #include "lldb/lldb-private-enumerations.h"
 #include "lldb/lldb-types.h"
-
-#include "llvm/ADT/StringRef.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -119,7 +116,7 @@ public:
   ///
   /// Initialize with a invalid section (NULL) and an invalid offset
   /// (LLDB_INVALID_ADDRESS).
-  Address() = default;
+  Address() : m_section_wp() {}
 
   /// Copy constructor
   ///
@@ -213,10 +210,6 @@ public:
     }
   };
 
-  /// Write a description of this object to a Stream.
-  bool GetDescription(Stream &s, Target &target,
-                      lldb::DescriptionLevel level) const;
-
   /// Dump a description of this object to a Stream.
   ///
   /// Dump a description of the contents of this object to the supplied stream
@@ -232,20 +225,6 @@ public:
   /// \param[in] fallback_style
   ///     The display style for the address.
   ///
-  /// \param[in] addr_byte_size
-  ///     The address byte size for the address.
-  ///
-  /// \param[in] all_ranges
-  ///     If true, dump all valid ranges and value ranges for the variable that
-  ///     contains the address, otherwise dumping the range that contains the
-  ///     address.
-  ///
-  /// \param[in] pattern
-  ///     An optional regex pattern to match against the description. If
-  ///     specified, parts of the description matching this pattern may be
-  ///     highlighted or processed differently. If this parameter is an empty
-  ///     string or not provided, no highlighting is applied.
-  ///
   /// \return
   ///     Returns \b true if the address was able to be displayed.
   ///     File and load addresses may be unresolved and it may not be
@@ -253,11 +232,9 @@ public:
   ///     in such cases.
   ///
   /// \see Address::DumpStyle
-  bool
-  Dump(Stream *s, ExecutionContextScope *exe_scope, DumpStyle style,
-       DumpStyle fallback_style = DumpStyleInvalid,
-       uint32_t addr_byte_size = UINT32_MAX, bool all_ranges = false,
-       std::optional<Stream::HighlightSettings> settings = std::nullopt) const;
+  bool Dump(Stream *s, ExecutionContextScope *exe_scope, DumpStyle style,
+            DumpStyle fallback_style = DumpStyleInvalid,
+            uint32_t addr_byte_size = UINT32_MAX) const;
 
   AddressClass GetAddressClass() const;
 

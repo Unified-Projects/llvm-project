@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "XCoreFrameLowering.h"
+#include "XCore.h"
 #include "XCoreInstrInfo.h"
 #include "XCoreMachineFunctionInfo.h"
 #include "XCoreSubtarget.h"
@@ -22,10 +23,11 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetOptions.h"
-#include <algorithm>
+#include <algorithm> // std::sort
 
 using namespace llvm;
 
@@ -213,7 +215,7 @@ XCoreFrameLowering::XCoreFrameLowering(const XCoreSubtarget &sti)
   // Do nothing
 }
 
-bool XCoreFrameLowering::hasFPImpl(const MachineFunction &MF) const {
+bool XCoreFrameLowering::hasFP(const MachineFunction &MF) const {
   return MF.getTarget().Options.DisableFramePointerElim(MF) ||
          MF.getFrameInfo().hasVarSizedObjects();
 }
@@ -223,7 +225,8 @@ void XCoreFrameLowering::emitPrologue(MachineFunction &MF,
   assert(&MF.front() == &MBB && "Shrink-wrapping not yet supported");
   MachineBasicBlock::iterator MBBI = MBB.begin();
   MachineFrameInfo &MFI = MF.getFrameInfo();
-  const MCRegisterInfo *MRI = MF.getContext().getRegisterInfo();
+  MachineModuleInfo *MMI = &MF.getMMI();
+  const MCRegisterInfo *MRI = MMI->getContext().getRegisterInfo();
   const XCoreInstrInfo &TII = *MF.getSubtarget<XCoreSubtarget>().getInstrInfo();
   XCoreFunctionInfo *XFI = MF.getInfo<XCoreFunctionInfo>();
   // Debug location must be unknown since the first debug location is used
@@ -424,20 +427,19 @@ bool XCoreFrameLowering::spillCalleeSavedRegisters(
   if (MI != MBB.end() && !MI->isDebugInstr())
     DL = MI->getDebugLoc();
 
-  for (const CalleeSavedInfo &I : CSI) {
-    Register Reg = I.getReg();
+  for (auto it = CSI.begin(); it != CSI.end(); ++it) {
+    unsigned Reg = it->getReg();
     assert(Reg != XCore::LR && !(Reg == XCore::R10 && hasFP(*MF)) &&
            "LR & FP are always handled in emitPrologue");
 
     // Add the callee-saved register as live-in. It's killed at the spill.
     MBB.addLiveIn(Reg);
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.storeRegToStackSlot(MBB, MI, Reg, true, I.getFrameIdx(), RC, TRI,
-                            Register());
+    TII.storeRegToStackSlot(MBB, MI, Reg, true, it->getFrameIdx(), RC, TRI);
     if (emitFrameMoves) {
       auto Store = MI;
       --Store;
-      XFI->getSpillLabels().push_back(std::make_pair(Store, I));
+      XFI->getSpillLabels().push_back(std::make_pair(Store, *it));
     }
   }
   return true;
@@ -453,13 +455,12 @@ bool XCoreFrameLowering::restoreCalleeSavedRegisters(
   if (!AtStart)
     --BeforeI;
   for (const CalleeSavedInfo &CSR : CSI) {
-    Register Reg = CSR.getReg();
+    unsigned Reg = CSR.getReg();
     assert(Reg != XCore::LR && !(Reg == XCore::R10 && hasFP(*MF)) &&
            "LR & FP are always handled in emitEpilogue");
 
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.loadRegFromStackSlot(MBB, MI, Reg, CSR.getFrameIdx(), RC, TRI,
-                             Register());
+    TII.loadRegFromStackSlot(MBB, MI, Reg, CSR.getFrameIdx(), RC, TRI);
     assert(MI != MBB.begin() &&
            "loadRegFromStackSlot didn't insert any code!");
     // Insert in reverse order.  loadRegFromStackSlot can insert multiple
@@ -576,7 +577,7 @@ processFunctionBeforeFrameFinalized(MachineFunction &MF,
   unsigned Size = TRI.getSpillSize(RC);
   Align Alignment = TRI.getSpillAlign(RC);
   if (XFI->isLargeFrame(MF) || hasFP(MF))
-    RS->addScavengingFrameIndex(MFI.CreateSpillStackObject(Size, Alignment));
+    RS->addScavengingFrameIndex(MFI.CreateStackObject(Size, Alignment, false));
   if (XFI->isLargeFrame(MF) && !hasFP(MF))
-    RS->addScavengingFrameIndex(MFI.CreateSpillStackObject(Size, Alignment));
+    RS->addScavengingFrameIndex(MFI.CreateStackObject(Size, Alignment, false));
 }

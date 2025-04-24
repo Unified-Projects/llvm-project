@@ -1,4 +1,4 @@
-//===-- RISCVMCExpr.cpp - RISC-V specific MC expression classes -----------===//
+//===-- RISCVMCExpr.cpp - RISCV specific MC expression classes ------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This file contains the implementation of the assembly expression modifiers
-// accepted by the RISC-V architecture (e.g. ":lo12:", ":gottprel_g1:", ...).
+// accepted by the RISCV architecture (e.g. ":lo12:", ":gottprel_g1:", ...).
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,12 +15,12 @@
 #include "MCTargetDesc/RISCVAsmBackend.h"
 #include "RISCVFixupKinds.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCValue.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
@@ -40,6 +40,8 @@ void RISCVMCExpr::printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const {
   if (HasVariant)
     OS << '%' << getVariantKindName(getKind()) << '(';
   Expr->print(OS, MAI);
+  if (Kind == VK_RISCV_CALL_PLT)
+    OS << "@plt";
   if (HasVariant)
     OS << ')';
 }
@@ -61,7 +63,7 @@ const MCFixup *RISCVMCExpr::getPCRelHiFixup(const MCFragment **DFOut) const {
 
   uint64_t Offset = AUIPCSymbol->getOffset();
   if (DF->getContents().size() == Offset) {
-    DF = dyn_cast_or_null<MCDataFragment>(DF->getNext());
+    DF = dyn_cast_or_null<MCDataFragment>(DF->getNextNode());
     if (!DF)
       return nullptr;
     Offset = 0;
@@ -78,7 +80,6 @@ const MCFixup *RISCVMCExpr::getPCRelHiFixup(const MCFragment **DFOut) const {
     case RISCV::fixup_riscv_tls_got_hi20:
     case RISCV::fixup_riscv_tls_gd_hi20:
     case RISCV::fixup_riscv_pcrel_hi20:
-    case RISCV::fixup_riscv_tlsdesc_hi20:
       if (DFOut)
         *DFOut = DF;
       return &F;
@@ -89,7 +90,7 @@ const MCFixup *RISCVMCExpr::getPCRelHiFixup(const MCFragment **DFOut) const {
 }
 
 bool RISCVMCExpr::evaluateAsRelocatableImpl(MCValue &Res,
-                                            const MCAssembler *Asm,
+                                            const MCAsmLayout *Layout,
                                             const MCFixup *Fixup) const {
   // Explicitly drop the layout and assembler to prevent any symbolic folding in
   // the expression handling.  This is required to preserve symbolic difference
@@ -119,10 +120,6 @@ RISCVMCExpr::VariantKind RISCVMCExpr::getVariantKindForName(StringRef name) {
       .Case("tprel_add", VK_RISCV_TPREL_ADD)
       .Case("tls_ie_pcrel_hi", VK_RISCV_TLS_GOT_HI)
       .Case("tls_gd_pcrel_hi", VK_RISCV_TLS_GD_HI)
-      .Case("tlsdesc_hi", VK_RISCV_TLSDESC_HI)
-      .Case("tlsdesc_load_lo", VK_RISCV_TLSDESC_LOAD_LO)
-      .Case("tlsdesc_add_lo", VK_RISCV_TLSDESC_ADD_LO)
-      .Case("tlsdesc_call", VK_RISCV_TLSDESC_CALL)
       .Default(VK_RISCV_Invalid);
 }
 
@@ -149,14 +146,6 @@ StringRef RISCVMCExpr::getVariantKindName(VariantKind Kind) {
     return "tprel_add";
   case VK_RISCV_TLS_GOT_HI:
     return "tls_ie_pcrel_hi";
-  case VK_RISCV_TLSDESC_HI:
-    return "tlsdesc_hi";
-  case VK_RISCV_TLSDESC_LOAD_LO:
-    return "tlsdesc_load_lo";
-  case VK_RISCV_TLSDESC_ADD_LO:
-    return "tlsdesc_add_lo";
-  case VK_RISCV_TLSDESC_CALL:
-    return "tlsdesc_call";
   case VK_RISCV_TLS_GD_HI:
     return "tls_gd_pcrel_hi";
   case VK_RISCV_CALL:
@@ -205,7 +194,6 @@ void RISCVMCExpr::fixELFSymbolsInTLSFixups(MCAssembler &Asm) const {
   case VK_RISCV_TPREL_HI:
   case VK_RISCV_TLS_GOT_HI:
   case VK_RISCV_TLS_GD_HI:
-  case VK_RISCV_TLSDESC_HI:
     break;
   }
 
@@ -219,8 +207,6 @@ bool RISCVMCExpr::evaluateAsConstant(int64_t &Res) const {
       Kind == VK_RISCV_GOT_HI || Kind == VK_RISCV_TPREL_HI ||
       Kind == VK_RISCV_TPREL_LO || Kind == VK_RISCV_TPREL_ADD ||
       Kind == VK_RISCV_TLS_GOT_HI || Kind == VK_RISCV_TLS_GD_HI ||
-      Kind == VK_RISCV_TLSDESC_HI || Kind == VK_RISCV_TLSDESC_LOAD_LO ||
-      Kind == VK_RISCV_TLSDESC_ADD_LO || Kind == VK_RISCV_TLSDESC_CALL ||
       Kind == VK_RISCV_CALL || Kind == VK_RISCV_CALL_PLT)
     return false;
 

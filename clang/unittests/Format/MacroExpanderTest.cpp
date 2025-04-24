@@ -9,7 +9,7 @@ namespace format {
 
 namespace {
 
-class MacroExpanderTest : public testing::Test {
+class MacroExpanderTest : public ::testing::Test {
 public:
   MacroExpanderTest() : Lex(Allocator, Buffers) {}
   std::unique_ptr<MacroExpander>
@@ -19,32 +19,27 @@ public:
                                            Lex.Allocator, Lex.IdentTable);
   }
 
-  std::string expand(MacroExpander &Macros, StringRef Name) {
-    EXPECT_TRUE(Macros.defined(Name))
-        << "Macro not defined: \"" << Name << "\"";
-    return text(Macros.expand(Lex.id(Name), {}));
-  }
-
-  std::string expand(MacroExpander &Macros, StringRef Name,
-                     const std::vector<std::string> &Args) {
-    EXPECT_TRUE(Macros.defined(Name))
-        << "Macro not defined: \"" << Name << "\"";
+  std::string expand(MacroExpander &Macros, llvm::StringRef Name,
+                     const std::vector<std::string> &Args = {}) {
+    EXPECT_TRUE(Macros.defined(Name));
     return text(Macros.expand(Lex.id(Name), lexArgs(Args)));
   }
 
-  SmallVector<TokenList, 1> lexArgs(const std::vector<std::string> &Args) {
-    SmallVector<TokenList, 1> Result;
-    for (const auto &Arg : Args)
+  llvm::SmallVector<TokenList, 1>
+  lexArgs(const std::vector<std::string> &Args) {
+    llvm::SmallVector<TokenList, 1> Result;
+    for (const auto &Arg : Args) {
       Result.push_back(uneof(Lex.lex(Arg)));
+    }
     return Result;
   }
 
   struct MacroAttributes {
-    tok::TokenKind Kind;
+    clang::tok::TokenKind Kind;
     MacroRole Role;
     unsigned Start;
     unsigned End;
-    SmallVector<FormatToken *, 1> ExpandedFrom;
+    llvm::SmallVector<FormatToken *, 1> ExpandedFrom;
   };
 
   void expectAttributes(const TokenList &Tokens,
@@ -55,8 +50,8 @@ public:
       if (I >= Attributes.size())
         continue;
       std::string Context =
-          ("for token " + Twine(I) + ": " + Tokens[I]->Tok.getName() + " / " +
-           Tokens[I]->TokenText)
+          ("for token " + llvm::Twine(I) + ": " + Tokens[I]->Tok.getName() +
+           " / " + Tokens[I]->TokenText)
               .str();
       EXPECT_TRUE(Tokens[I]->is(Attributes[I].Kind))
           << Context << " in " << text(Tokens) << " at " << File << ":" << Line;
@@ -83,8 +78,9 @@ protected:
 TEST_F(MacroExpanderTest, SkipsDefinitionOnError) {
   auto Macros =
       create({"A(", "B(,", "C(a,", "D(a a", "E(a, a", "F(,)", "G(a;"});
-  for (const auto *Name : {"A", "B", "C", "D", "E", "F", "G"})
+  for (const auto *Name : {"A", "B", "C", "D", "E", "F", "G"}) {
     EXPECT_FALSE(Macros->defined(Name)) << "for Name " << Name;
+  }
 }
 
 TEST_F(MacroExpanderTest, ExpandsWithoutArguments) {
@@ -101,7 +97,7 @@ TEST_F(MacroExpanderTest, ExpandsWithoutArguments) {
   EXPECT_EQ("", expand(*Macros, "A"));
   EXPECT_EQ("b", expand(*Macros, "B"));
   EXPECT_EQ("c+c", expand(*Macros, "C"));
-  EXPECT_EQ("", expand(*Macros, "D", {}));
+  EXPECT_EQ("", expand(*Macros, "D"));
 }
 
 TEST_F(MacroExpanderTest, ExpandsWithArguments) {
@@ -111,6 +107,7 @@ TEST_F(MacroExpanderTest, ExpandsWithArguments) {
   });
   EXPECT_EQ("", expand(*Macros, "A", {"a"}));
   EXPECT_EQ("b1+b2+b3", expand(*Macros, "B", {"b1", "b2 + b3"}));
+  EXPECT_EQ("x+", expand(*Macros, "B", {"x"}));
 }
 
 TEST_F(MacroExpanderTest, AttributizesTokens) {
@@ -203,14 +200,6 @@ TEST_F(MacroExpanderTest, UnderstandsCppTokens) {
       {tok::semi, MR_Hidden, 0, 1, {A}},
   };
   EXPECT_ATTRIBUTES(Result, Attributes);
-}
-
-TEST_F(MacroExpanderTest, Overloads) {
-  auto Macros = create({"A=x", "A()=y", "A(a)=a", "A(a, b)=a b"});
-  EXPECT_EQ("x", expand(*Macros, "A"));
-  EXPECT_EQ("y", expand(*Macros, "A", {}));
-  EXPECT_EQ("z", expand(*Macros, "A", {"z"}));
-  EXPECT_EQ("xy", expand(*Macros, "A", {"x", "y"}));
 }
 
 } // namespace

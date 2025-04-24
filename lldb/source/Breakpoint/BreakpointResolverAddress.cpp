@@ -7,12 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Breakpoint/BreakpointResolverAddress.h"
+
+
 #include "lldb/Breakpoint/BreakpointLocation.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Core/Section.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
-#include "lldb/Utility/LLDBLog.h"
+#include "lldb/Utility/Log.h"
 #include "lldb/Utility/StreamString.h"
 
 using namespace lldb;
@@ -28,20 +30,21 @@ BreakpointResolverAddress::BreakpointResolverAddress(
 BreakpointResolverAddress::BreakpointResolverAddress(const BreakpointSP &bkpt,
                                                      const Address &addr)
     : BreakpointResolver(bkpt, BreakpointResolver::AddressResolver),
-      m_addr(addr), m_resolved_addr(LLDB_INVALID_ADDRESS) {}
+      m_addr(addr), m_resolved_addr(LLDB_INVALID_ADDRESS), m_module_filespec() {
+}
 
-BreakpointResolverSP BreakpointResolverAddress::CreateFromStructuredData(
-    const StructuredData::Dictionary &options_dict, Status &error) {
+BreakpointResolver *BreakpointResolverAddress::CreateFromStructuredData(
+    const BreakpointSP &bkpt, const StructuredData::Dictionary &options_dict,
+    Status &error) {
   llvm::StringRef module_name;
-  lldb::offset_t addr_offset;
+  lldb::addr_t addr_offset;
   FileSpec module_filespec;
   bool success;
 
   success = options_dict.GetValueForKeyAsInteger(
       GetKey(OptionNames::AddressOffset), addr_offset);
   if (!success) {
-    error = Status::FromErrorString(
-        "BRFL::CFSD: Couldn't find address offset entry.");
+    error.SetErrorString("BRFL::CFSD: Couldn't find address offset entry.");
     return nullptr;
   }
   Address address(addr_offset);
@@ -51,14 +54,12 @@ BreakpointResolverSP BreakpointResolverAddress::CreateFromStructuredData(
     success = options_dict.GetValueForKeyAsString(
         GetKey(OptionNames::ModuleName), module_name);
     if (!success) {
-      error = Status::FromErrorString(
-          "BRA::CFSD: Couldn't read module name entry.");
+      error.SetErrorString("BRA::CFSD: Couldn't read module name entry.");
       return nullptr;
     }
     module_filespec.SetFile(module_name, FileSpec::Style::native);
   }
-  return std::make_shared<BreakpointResolverAddress>(nullptr, address,
-                                                     module_filespec);
+  return new BreakpointResolverAddress(bkpt, address, module_filespec);
 }
 
 StructuredData::ObjectSP
@@ -67,11 +68,13 @@ BreakpointResolverAddress::SerializeToStructuredData() {
       new StructuredData::Dictionary());
   SectionSP section_sp = m_addr.GetSection();
   if (section_sp) {
-    if (ModuleSP module_sp = section_sp->GetModule()) {
-      const FileSpec &module_fspec = module_sp->GetFileSpec();
-      options_dict_sp->AddStringItem(GetKey(OptionNames::ModuleName),
-                                     module_fspec.GetPath().c_str());
-    }
+    ModuleSP module_sp = section_sp->GetModule();
+    ConstString module_name;
+    if (module_sp)
+      module_name.SetCString(module_name.GetCString());
+
+    options_dict_sp->AddStringItem(GetKey(OptionNames::ModuleName),
+                                   module_name.GetCString());
     options_dict_sp->AddIntegerItem(GetKey(OptionNames::AddressOffset),
                                     m_addr.GetOffset());
   } else {
@@ -140,7 +143,8 @@ Searcher::CallbackReturn BreakpointResolverAddress::SearchCallback(
       if (bp_loc_sp && !breakpoint.IsInternal()) {
         StreamString s;
         bp_loc_sp->GetDescription(&s, lldb::eDescriptionLevelVerbose);
-        Log *log = GetLog(LLDBLog::Breakpoints);
+        Log *log(
+            lldb_private::GetLogIfAllCategoriesSet(LIBLLDB_LOG_BREAKPOINTS));
         LLDB_LOGF(log, "Added location: %s\n", s.GetData());
       }
     } else {

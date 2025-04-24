@@ -34,7 +34,7 @@ public:
 
     VK_AVR_LO8_GS, ///< Corresponds to `lo8(gs())`.
     VK_AVR_HI8_GS, ///< Corresponds to `hi8(gs())`.
-    VK_AVR_GS,     ///< Corresponds to `gs()`.
+    VK_AVR_GS, ///< Corresponds to `gs()`.
   };
 
 public:
@@ -56,7 +56,7 @@ public:
   void setNegated(bool negated = true) { Negated = negated; }
 
   void printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const override;
-  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
+  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAsmLayout *Layout,
                                  const MCFixup *Fixup) const override;
 
   void visitUsedExpr(MCStreamer &streamer) const override;
@@ -84,7 +84,7 @@ private:
 private:
   explicit AVRMCExpr(VariantKind Kind, const MCExpr *Expr, bool Negated)
       : Kind(Kind), SubExpr(Expr), Negated(Negated) {}
-  ~AVRMCExpr() = default;
+  ~AVRMCExpr() {}
 };
 
 } // end namespace llvm

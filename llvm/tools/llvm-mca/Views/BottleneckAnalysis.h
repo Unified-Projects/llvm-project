@@ -146,19 +146,19 @@ public:
                         SmallVectorImpl<User> &Users) const;
 
   unsigned getRegisterPressureCycles(unsigned IID) const {
-    assert(IPI.contains(IID) && "Instruction is not tracked!");
+    assert(IPI.find(IID) != IPI.end() && "Instruction is not tracked!");
     const InstructionPressureInfo &Info = IPI.find(IID)->second;
     return Info.RegisterPressureCycles;
   }
 
   unsigned getMemoryPressureCycles(unsigned IID) const {
-    assert(IPI.contains(IID) && "Instruction is not tracked!");
+    assert(IPI.find(IID) != IPI.end() && "Instruction is not tracked!");
     const InstructionPressureInfo &Info = IPI.find(IID)->second;
     return Info.MemoryPressureCycles;
   }
 
   unsigned getResourcePressureCycles(unsigned IID) const {
-    assert(IPI.contains(IID) && "Instruction is not tracked!");
+    assert(IPI.find(IID) != IPI.end() && "Instruction is not tracked!");
     const InstructionPressureInfo &Info = IPI.find(IID)->second;
     return Info.ResourcePressureCycles;
   }
@@ -335,8 +335,7 @@ public:
 
   void printView(raw_ostream &OS) const override;
   StringRef getNameAsString() const override { return "BottleneckAnalysis"; }
-  bool isSerializable() const override { return true; }
-  json::Value toJSON() const override;
+  bool isSerializable() const override { return false; }
 
 #ifndef NDEBUG
   void dump(raw_ostream &OS, MCInstPrinter &MCIP) const { DG.dump(OS, MCIP); }

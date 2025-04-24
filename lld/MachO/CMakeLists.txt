@@ -4,7 +4,8 @@ add_public_tablegen_target(MachOOptionsTableGen)
 
 include_directories(${LLVM_MAIN_SRC_DIR}/../libunwind/include)
 
-add_lld_library(lldMachO
+add_lld_library(lldMachO2
+  Arch/ARM.cpp
   Arch/ARM64.cpp
   Arch/ARM64Common.cpp
   Arch/ARM64_32.cpp
@@ -13,7 +14,6 @@ add_lld_library(lldMachO
   Driver.cpp
   DriverUtils.cpp
   Dwarf.cpp
-  EhFrame.cpp
   ExportTrie.cpp
   ICF.cpp
   InputFiles.cpp
@@ -25,9 +25,6 @@ add_lld_library(lldMachO
   OutputSection.cpp
   OutputSegment.cpp
   Relocations.cpp
-  BPSectionOrderer.cpp
-  SectionPriorities.cpp
-  Sections.cpp
   SymbolTable.cpp
   Symbols.cpp
   SyntheticSections.cpp
@@ -39,27 +36,27 @@ add_lld_library(lldMachO
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
   BitReader
-  BitWriter
-  CGData
   Core
   DebugInfoDWARF
-  Demangle
   LTO
   MC
   ObjCARCOpts
   Object
   Option
   Passes
-  ProfileData
   Support
-  TargetParser
   TextAPI
 
   LINK_LIBS
   lldCommon
   ${LLVM_PTHREAD_LIB}
+  ${XAR_LIB}
 
   DEPENDS
   MachOOptionsTableGen
   ${tablegen_deps}
   )
+
+if(LLVM_HAVE_LIBXAR)
+  target_link_libraries(lldMachO2 PRIVATE ${XAR_LIB})
+endif()

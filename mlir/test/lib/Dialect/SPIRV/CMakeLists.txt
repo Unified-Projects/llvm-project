@@ -2,6 +2,7 @@
 add_mlir_library(MLIRSPIRVTestPasses
   TestAvailability.cpp
   TestEntryPointAbi.cpp
+  TestGLSLCanonicalization.cpp
   TestModuleCombiner.cpp
 
   EXCLUDE_FROM_LIBMLIR
@@ -9,12 +10,12 @@ add_mlir_library(MLIRSPIRVTestPasses
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/SPIRV
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/IR
-  )
-mlir_target_link_libraries(MLIRSPIRVTestPasses PUBLIC
-  MLIRGPUDialect
+
+  LINK_LIBS PUBLIC
+  MLIRGPUOps
   MLIRIR
   MLIRPass
-  MLIRSPIRVDialect
+  MLIRSPIRV
   MLIRSPIRVConversion
   MLIRSPIRVModuleCombiner
   MLIRSupport

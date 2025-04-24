@@ -12,13 +12,12 @@
 // Test that libc++ generates a warning diagnostic when the container is
 // provided a non-const callable comparator or a non-const hasher.
 
-#include <__type_traits/invoke.h>
 #include <unordered_set>
 #include <unordered_map>
 
 struct BadHash {
   template <class T>
-  std::size_t operator()(T const& t) {
+  size_t operator()(T const& t) {
     return std::hash<T>{}(t);
   }
 };
@@ -30,9 +29,9 @@ struct BadEqual {
   }
 };
 
-void f() {
-  static_assert(!std::__is_invocable_v<BadEqual const&, int const&, int const&>, "");
-  static_assert(std::__is_invocable_v<BadEqual&, int const&, int const&>, "");
+int main(int, char**) {
+  static_assert(!std::__invokable<BadEqual const&, int const&, int const&>::value, "");
+  static_assert(std::__invokable<BadEqual&, int const&, int const&>::value, "");
 
   // expected-warning@unordered_set:* 2 {{the specified comparator type does not provide a viable const call operator}}
   // expected-warning@unordered_map:* 2 {{the specified comparator type does not provide a viable const call operator}}
@@ -55,4 +54,6 @@ void f() {
     using C = std::unordered_multimap<long, int, BadHash, BadEqual>;
     C s;
   }
+
+  return 0;
 }

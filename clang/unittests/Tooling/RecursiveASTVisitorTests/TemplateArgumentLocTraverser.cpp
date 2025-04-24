@@ -1,4 +1,4 @@
-//===- TemplateArgumentLocTraverser.cpp -----------------------------------===//
+//===- unittest/Tooling/RecursiveASTVisitorTests/TemplateArgumentLocTraverser.cpp -===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -12,16 +12,18 @@ using namespace clang;
 
 namespace {
 
-class TemplateArgumentLocTraverser : public ExpectedLocationVisitor {
+class TemplateArgumentLocTraverser
+  : public ExpectedLocationVisitor<TemplateArgumentLocTraverser> {
 public:
-  bool TraverseTemplateArgumentLoc(const TemplateArgumentLoc &ArgLoc) override {
+  bool TraverseTemplateArgumentLoc(const TemplateArgumentLoc &ArgLoc) {
     std::string ArgStr;
     llvm::raw_string_ostream Stream(ArgStr);
     const TemplateArgument &Arg = ArgLoc.getArgument();
 
     Arg.print(Context->getPrintingPolicy(), Stream, /*IncludeType*/ true);
-    Match(ArgStr, ArgLoc.getLocation());
-    return ExpectedLocationVisitor::TraverseTemplateArgumentLoc(ArgLoc);
+    Match(Stream.str(), ArgLoc.getLocation());
+    return ExpectedLocationVisitor<TemplateArgumentLocTraverser>::
+      TraverseTemplateArgumentLoc(ArgLoc);
   }
 };
 

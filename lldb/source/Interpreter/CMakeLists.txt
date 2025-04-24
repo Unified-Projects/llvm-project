@@ -6,9 +6,7 @@ lldb_tablegen(InterpreterPropertiesEnum.inc -gen-lldb-property-enum-defs
   SOURCE InterpreterProperties.td
   TARGET LLDBInterpreterPropertiesEnumGen)
 
-add_subdirectory(Interfaces)
-
-add_lldb_library(lldbInterpreter NO_PLUGIN_DEPENDENCIES
+add_lldb_library(lldbInterpreter
   CommandAlias.cpp
   CommandHistory.cpp
   CommandInterpreter.cpp
@@ -20,7 +18,6 @@ add_lldb_library(lldbInterpreter NO_PLUGIN_DEPENDENCIES
   OptionGroupBoolean.cpp
   OptionGroupFile.cpp
   OptionGroupFormat.cpp
-  OptionGroupMemoryTag.cpp
   OptionGroupPythonClassWithDict.cpp
   OptionGroupOutputFile.cpp
   OptionGroupPlatform.cpp
@@ -56,7 +53,6 @@ add_lldb_library(lldbInterpreter NO_PLUGIN_DEPENDENCIES
   ScriptInterpreter.cpp
 
   LINK_LIBS
-    lldbInterpreterInterfaces
     lldbCommands
     lldbCore
     lldbDataFormatters
@@ -69,7 +65,9 @@ add_lldb_library(lldbInterpreter NO_PLUGIN_DEPENDENCIES
   )
 
 add_dependencies(lldbInterpreter
-  lldbInterpreterInterfaces
   LLDBInterpreterPropertiesGen
   LLDBInterpreterPropertiesEnumGen)
 
+if (LLDB_ENABLE_LIBEDIT)
+  target_include_directories(lldbInterpreter PRIVATE ${LibEdit_INCLUDE_DIRS})
+endif()

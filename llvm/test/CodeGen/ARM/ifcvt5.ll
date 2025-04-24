@@ -3,9 +3,9 @@
 ; RUN: llc < %s -mtriple=armv7-apple-ios -mcpu=swift     | FileCheck %s -check-prefix=SWIFT
 ; rdar://8402126
 
-@x = external global ptr		; <ptr> [#uses=1]
+@x = external global i32*		; <i32**> [#uses=1]
 
-define void @foo(i32 %a) "frame-pointer"="none" {
+define void @foo(i32 %a) "frame-pointer"="all" {
 ; A8-LABEL: foo:
 ; A8:       @ %bb.0: @ %entry
 ; A8-NEXT:    movw r1, :lower16:(L_x$non_lazy_ptr-(LPC0_0+8))
@@ -26,8 +26,8 @@ define void @foo(i32 %a) "frame-pointer"="none" {
 ; SWIFT-NEXT:    str r0, [r1]
 ; SWIFT-NEXT:    bx lr
 entry:
-	%tmp = load ptr, ptr @x		; <ptr> [#uses=1]
-	store i32 %a, ptr %tmp
+	%tmp = load i32*, i32** @x		; <i32*> [#uses=1]
+	store i32 %a, i32* %tmp
 	ret void
 }
 

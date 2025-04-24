@@ -35,6 +35,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MachineLocation.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -96,7 +97,7 @@ private:
 
 ExpandPseudo::ExpandPseudo(MachineFunction &MF_)
     : MF(MF_), MRI(MF.getRegInfo()),
-      Subtarget(MF.getSubtarget<MipsSubtarget>()),
+      Subtarget(static_cast<const MipsSubtarget &>(MF.getSubtarget())),
       TII(*static_cast<const MipsSEInstrInfo *>(Subtarget.getInstrInfo())),
       RegInfo(*Subtarget.getRegisterInfo()) {}
 
@@ -426,7 +427,8 @@ void MipsSEFrameLowering::emitPrologue(MachineFunction &MF,
   // No need to allocate space on the stack.
   if (StackSize == 0 && !MFI.adjustsStack()) return;
 
-  const MCRegisterInfo *MRI = MF.getContext().getRegisterInfo();
+  MachineModuleInfo &MMI = MF.getMMI();
+  const MCRegisterInfo *MRI = MMI.getContext().getRegisterInfo();
 
   // Adjust stack.
   TII.adjustStackPtr(SP, -StackSize, MBB, MBBI);
@@ -450,9 +452,10 @@ void MipsSEFrameLowering::emitPrologue(MachineFunction &MF,
 
     // Iterate over list of callee-saved registers and emit .cfi_offset
     // directives.
-    for (const CalleeSavedInfo &I : CSI) {
-      int64_t Offset = MFI.getObjectOffset(I.getFrameIdx());
-      Register Reg = I.getReg();
+    for (std::vector<CalleeSavedInfo>::const_iterator I = CSI.begin(),
+           E = CSI.end(); I != E; ++I) {
+      int64_t Offset = MFI.getObjectOffset(I->getFrameIdx());
+      unsigned Reg = I->getReg();
 
       // If Reg is a double precision register, emit two cfa_offsets,
       // one for each of the paired single precision registers.
@@ -506,8 +509,7 @@ void MipsSEFrameLowering::emitPrologue(MachineFunction &MF,
       if (!MBB.isLiveIn(ABI.GetEhDataReg(I)))
         MBB.addLiveIn(ABI.GetEhDataReg(I));
       TII.storeRegToStackSlot(MBB, MBBI, ABI.GetEhDataReg(I), false,
-                              MipsFI->getEhDataRegFI(I), RC, &RegInfo,
-                              Register());
+                              MipsFI->getEhDataRegFI(I), RC, &RegInfo);
     }
 
     // Emit .cfi_offset directives for eh data registers.
@@ -725,8 +727,7 @@ void MipsSEFrameLowering::emitEpilogue(MachineFunction &MF,
     // Insert instructions that restore eh data registers.
     for (int J = 0; J < 4; ++J) {
       TII.loadRegFromStackSlot(MBB, I, ABI.GetEhDataReg(J),
-                               MipsFI->getEhDataRegFI(J), RC, &RegInfo,
-                               Register());
+                               MipsFI->getEhDataRegFI(J), RC, &RegInfo);
     }
   }
 
@@ -759,7 +760,7 @@ void MipsSEFrameLowering::emitInterruptEpilogueStub(
   // Restore EPC
   STI.getInstrInfo()->loadRegFromStackSlot(MBB, MBBI, Mips::K1,
                                            MipsFI->getISRRegFI(0), PtrRC,
-                                           STI.getRegisterInfo(), Register());
+                                           STI.getRegisterInfo());
   BuildMI(MBB, MBBI, DL, STI.getInstrInfo()->get(Mips::MTC0), Mips::COP014)
       .addReg(Mips::K1)
       .addImm(0);
@@ -767,7 +768,7 @@ void MipsSEFrameLowering::emitInterruptEpilogueStub(
   // Restore Status
   STI.getInstrInfo()->loadRegFromStackSlot(MBB, MBBI, Mips::K1,
                                            MipsFI->getISRRegFI(1), PtrRC,
-                                           STI.getRegisterInfo(), Register());
+                                           STI.getRegisterInfo());
   BuildMI(MBB, MBBI, DL, STI.getInstrInfo()->get(Mips::MTC0), Mips::COP012)
       .addReg(Mips::K1)
       .addImm(0);
@@ -795,13 +796,13 @@ bool MipsSEFrameLowering::spillCalleeSavedRegisters(
   MachineFunction *MF = MBB.getParent();
   const TargetInstrInfo &TII = *STI.getInstrInfo();
 
-  for (const CalleeSavedInfo &I : CSI) {
+  for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
     // Add the callee-saved register as live-in. Do not add if the register is
     // RA and return address is taken, because it has already been added in
     // method MipsTargetLowering::lowerRETURNADDR.
     // It's killed at the spill, unless the register is RA and return address
     // is taken.
-    Register Reg = I.getReg();
+    unsigned Reg = CSI[i].getReg();
     bool IsRAAndRetAddrIsTaken = (Reg == Mips::RA || Reg == Mips::RA_64)
         && MF->getFrameInfo().isReturnAddressTaken();
     if (!IsRAAndRetAddrIsTaken)
@@ -830,8 +831,8 @@ bool MipsSEFrameLowering::spillCalleeSavedRegisters(
     // Insert the spill to the stack frame.
     bool IsKill = !IsRAAndRetAddrIsTaken;
     const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-    TII.storeRegToStackSlot(MBB, MI, Reg, IsKill, I.getFrameIdx(), RC, TRI,
-                            Register());
+    TII.storeRegToStackSlot(MBB, MI, Reg, IsKill,
+                            CSI[i].getFrameIdx(), RC, TRI);
   }
 
   return true;
@@ -892,8 +893,8 @@ void MipsSEFrameLowering::determineCalleeSaves(MachineFunction &MF,
     // it should be 32-bit.
     const TargetRegisterClass &RC = STI.isGP64bit() ?
       Mips::GPR64RegClass : Mips::GPR32RegClass;
-    int FI = MF.getFrameInfo().CreateSpillStackObject(TRI->getSpillSize(RC),
-                                                      TRI->getSpillAlign(RC));
+    int FI = MF.getFrameInfo().CreateStackObject(TRI->getSpillSize(RC),
+                                                 TRI->getSpillAlign(RC), false);
     RS->addScavengingFrameIndex(FI);
   }
 
@@ -908,8 +909,8 @@ void MipsSEFrameLowering::determineCalleeSaves(MachineFunction &MF,
 
   const TargetRegisterClass &RC =
       ABI.ArePtrs64bit() ? Mips::GPR64RegClass : Mips::GPR32RegClass;
-  int FI = MF.getFrameInfo().CreateSpillStackObject(TRI->getSpillSize(RC),
-                                                    TRI->getSpillAlign(RC));
+  int FI = MF.getFrameInfo().CreateStackObject(TRI->getSpillSize(RC),
+                                               TRI->getSpillAlign(RC), false);
   RS->addScavengingFrameIndex(FI);
 }
 

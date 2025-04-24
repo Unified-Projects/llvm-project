@@ -9,17 +9,16 @@
 #include "../ClangTidy.h"
 #include "../ClangTidyModule.h"
 #include "../ClangTidyModuleRegistry.h"
-#include "UseRangesCheck.h"
 #include "UseToStringCheck.h"
 using namespace clang::ast_matchers;
 
-namespace clang::tidy {
+namespace clang {
+namespace tidy {
 namespace boost {
 
 class BoostModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &CheckFactories) override {
-    CheckFactories.registerCheck<UseRangesCheck>("boost-use-ranges");
     CheckFactories.registerCheck<UseToStringCheck>("boost-use-to-string");
   }
 };
@@ -34,4 +33,5 @@ static ClangTidyModuleRegistry::Add<BoostModule> X("boost-module",
 // and thus register the BoostModule.
 volatile int BoostModuleAnchorSource = 0;
 
-} // namespace clang::tidy
+} // namespace tidy
+} // namespace clang

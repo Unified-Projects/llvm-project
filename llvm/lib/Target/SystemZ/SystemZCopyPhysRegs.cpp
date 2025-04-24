@@ -13,6 +13,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "SystemZMachineFunctionInfo.h"
 #include "SystemZTargetMachine.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -20,8 +21,15 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
+
+#define SYSTEMZ_COPYPHYSREGS_NAME "SystemZ Copy Physregs"
+
+namespace llvm {
+  void initializeSystemZCopyPhysRegsPass(PassRegistry&);
+}
 
 namespace {
 
@@ -32,6 +40,8 @@ public:
     : MachineFunctionPass(ID), TII(nullptr), MRI(nullptr) {
     initializeSystemZCopyPhysRegsPass(*PassRegistry::getPassRegistry());
   }
+
+  StringRef getPassName() const override { return SYSTEMZ_COPYPHYSREGS_NAME; }
 
   bool runOnMachineFunction(MachineFunction &MF) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
@@ -49,7 +59,7 @@ char SystemZCopyPhysRegs::ID = 0;
 } // end anonymous namespace
 
 INITIALIZE_PASS(SystemZCopyPhysRegs, "systemz-copy-physregs",
-                "SystemZ Copy Physregs", false, false)
+                SYSTEMZ_COPYPHYSREGS_NAME, false, false)
 
 FunctionPass *llvm::createSystemZCopyPhysRegsPass(SystemZTargetMachine &TM) {
   return new SystemZCopyPhysRegs();
@@ -98,7 +108,7 @@ bool SystemZCopyPhysRegs::visitMBB(MachineBasicBlock &MBB) {
 }
 
 bool SystemZCopyPhysRegs::runOnMachineFunction(MachineFunction &F) {
-  TII = F.getSubtarget<SystemZSubtarget>().getInstrInfo();
+  TII = static_cast<const SystemZInstrInfo *>(F.getSubtarget().getInstrInfo());
   MRI = &F.getRegInfo();
 
   bool Modified = false;

@@ -11,20 +11,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/ToolOutputFile.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Signals.h"
 using namespace llvm;
 
 static bool isStdout(StringRef Filename) { return Filename == "-"; }
 
-CleanupInstaller::CleanupInstaller(StringRef Filename)
+ToolOutputFile::CleanupInstaller::CleanupInstaller(StringRef Filename)
     : Filename(std::string(Filename)), Keep(false) {
   // Arrange for the file to be deleted if the process is killed.
   if (!isStdout(Filename))
     sys::RemoveFileOnSignal(Filename);
 }
 
-CleanupInstaller::~CleanupInstaller() {
+ToolOutputFile::CleanupInstaller::~CleanupInstaller() {
   if (isStdout(Filename))
     return;
 
@@ -46,7 +47,7 @@ ToolOutputFile::ToolOutputFile(StringRef Filename, std::error_code &EC,
     return;
   }
   OSHolder.emplace(Filename, EC, Flags);
-  OS = &*OSHolder;
+  OS = OSHolder.getPointer();
   // If open fails, no cleanup is needed.
   if (EC)
     Installer.Keep = true;
@@ -55,5 +56,5 @@ ToolOutputFile::ToolOutputFile(StringRef Filename, std::error_code &EC,
 ToolOutputFile::ToolOutputFile(StringRef Filename, int FD)
     : Installer(Filename) {
   OSHolder.emplace(FD, true);
-  OS = &*OSHolder;
+  OS = OSHolder.getPointer();
 }

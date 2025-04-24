@@ -1,7 +1,6 @@
 #include "CommandObjectSession.h"
 #include "lldb/Host/OptionParser.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
-#include "lldb/Interpreter/CommandOptionArgumentTable.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Interpreter/OptionArgParser.h"
 #include "lldb/Interpreter/OptionValue.h"
@@ -19,17 +18,25 @@ public:
       : CommandObjectParsed(interpreter, "session save",
                             "Save the current session transcripts to a file.\n"
                             "If no file if specified, transcripts will be "
-                            "saved to a temporary file.\n"
-                            "Note: transcripts will only be saved if "
-                            "interpreter.save-transcript is true.\n",
+                            "saved to a temporary file.",
                             "session save [file]") {
-    AddSimpleArgumentList(eArgTypePath, eArgRepeatOptional);
+    CommandArgumentEntry arg1;
+    arg1.emplace_back(eArgTypePath, eArgRepeatOptional);
+    m_arguments.push_back(arg1);
   }
 
   ~CommandObjectSessionSave() override = default;
 
+  void
+  HandleArgumentCompletion(CompletionRequest &request,
+                           OptionElementVector &opt_element_vector) override {
+    CommandCompletions::InvokeCommonCompletionCallbacks(
+        GetCommandInterpreter(), CommandCompletions::eDiskFileCompletion,
+        request, nullptr);
+  }
+
 protected:
-  void DoExecute(Args &args, CommandReturnObject &result) override {
+  bool DoExecute(Args &args, CommandReturnObject &result) override {
     llvm::StringRef file_path;
 
     if (!args.empty())
@@ -39,6 +46,7 @@ protected:
       result.SetStatus(eReturnStatusSuccessFinishNoResult);
     else
       result.SetStatus(eReturnStatusFailed);
+    return result.Succeeded();
   }
 };
 
@@ -54,7 +62,8 @@ public:
                             "using \"!<INDEX>\".   \"!-<OFFSET>\" will re-run "
                             "the command that is <OFFSET> commands from the end"
                             " of the list (counting the current command).",
-                            nullptr) {}
+                            nullptr),
+        m_options() {}
 
   ~CommandObjectSessionHistory() override = default;
 
@@ -64,7 +73,8 @@ protected:
   class CommandOptions : public Options {
   public:
     CommandOptions()
-        : m_start_idx(0), m_stop_idx(0), m_count(0), m_clear(false) {}
+        : Options(), m_start_idx(0), m_stop_idx(0), m_count(0), m_clear(false) {
+    }
 
     ~CommandOptions() override = default;
 
@@ -108,7 +118,7 @@ protected:
     }
 
     llvm::ArrayRef<OptionDefinition> GetDefinitions() override {
-      return llvm::ArrayRef(g_history_options);
+      return llvm::makeArrayRef(g_history_options);
     }
 
     // Instance variables to hold the values for command options.
@@ -119,7 +129,7 @@ protected:
     OptionValueBoolean m_clear;
   };
 
-  void DoExecute(Args &command, CommandReturnObject &result) override {
+  bool DoExecute(Args &command, CommandReturnObject &result) override {
     if (m_options.m_clear.GetCurrentValue() &&
         m_options.m_clear.OptionWasSet()) {
       m_interpreter.GetCommandHistory().Clear();
@@ -181,6 +191,7 @@ protected:
                      stop_idx.second);
       }
     }
+    return result.Succeeded();
   }
 
   CommandOptions m_options;

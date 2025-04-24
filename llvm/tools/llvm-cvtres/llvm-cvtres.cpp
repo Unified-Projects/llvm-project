@@ -21,6 +21,7 @@
 #include "llvm/Support/BinaryStreamError.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Process.h"
@@ -37,35 +38,36 @@ namespace {
 
 enum ID {
   OPT_INVALID = 0, // This is not an option ID.
-#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
+#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
+               HELPTEXT, METAVAR, VALUES)                                      \
+  OPT_##ID,
 #include "Opts.inc"
 #undef OPTION
 };
 
-#define OPTTABLE_STR_TABLE_CODE
+#define PREFIX(NAME, VALUE) const char *const NAME[] = VALUE;
 #include "Opts.inc"
-#undef OPTTABLE_STR_TABLE_CODE
+#undef PREFIX
 
-#define OPTTABLE_PREFIXES_TABLE_CODE
-#include "Opts.inc"
-#undef OPTTABLE_PREFIXES_TABLE_CODE
-
-using namespace llvm::opt;
-static constexpr opt::OptTable::Info InfoTable[] = {
-#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
+static const opt::OptTable::Info InfoTable[] = {
+#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
+               HELPTEXT, METAVAR, VALUES)                                      \
+  {                                                                            \
+      PREFIX,      NAME,      HELPTEXT,                                        \
+      METAVAR,     OPT_##ID,  opt::Option::KIND##Class,                        \
+      PARAM,       FLAGS,     OPT_##GROUP,                                     \
+      OPT_##ALIAS, ALIASARGS, VALUES},
 #include "Opts.inc"
 #undef OPTION
 };
 
-class CvtResOptTable : public opt::GenericOptTable {
+class CvtResOptTable : public opt::OptTable {
 public:
-  CvtResOptTable()
-      : opt::GenericOptTable(OptionStrTable, OptionPrefixesTable, InfoTable,
-                             true) {}
+  CvtResOptTable() : OptTable(InfoTable, true) {}
 };
 }
 
-[[noreturn]] static void reportError(Twine Msg) {
+static LLVM_ATTRIBUTE_NORETURN void reportError(Twine Msg) {
   errs() << Msg;
   exit(1);
 }
@@ -117,7 +119,7 @@ int main(int Argc, const char **Argv) {
 
   CvtResOptTable T;
   unsigned MAI, MAC;
-  ArrayRef<const char *> ArgsArr = ArrayRef(Argv + 1, Argc - 1);
+  ArrayRef<const char *> ArgsArr = makeArrayRef(Argv + 1, Argc - 1);
   opt::InputArgList InputArgs = T.ParseArgs(ArgsArr, MAI, MAC);
 
   if (InputArgs.hasArg(OPT_HELP)) {

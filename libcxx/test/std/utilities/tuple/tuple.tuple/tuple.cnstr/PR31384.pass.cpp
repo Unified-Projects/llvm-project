@@ -1,3 +1,4 @@
+// -*- C++ -*-
 //===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -7,9 +8,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03
-
-// FIXME: Why does this start to fail with GCC 14?
-// XFAIL: !(c++11 || c++14) && gcc-14
 
 // See https://llvm.org/PR31384.
 

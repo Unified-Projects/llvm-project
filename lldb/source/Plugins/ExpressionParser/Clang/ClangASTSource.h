@@ -49,7 +49,7 @@ public:
   ~ClangASTSource() override;
 
   /// Interface stubs.
-  clang::Decl *GetExternalDecl(clang::GlobalDeclID) override { return nullptr; }
+  clang::Decl *GetExternalDecl(uint32_t) override { return nullptr; }
   clang::Stmt *GetExternalDeclStmt(uint64_t) override { return nullptr; }
   clang::Selector GetExternalSelector(uint32_t) override {
     return clang::Selector();
@@ -59,7 +59,7 @@ public:
   GetExternalCXXBaseSpecifiers(uint64_t Offset) override {
     return nullptr;
   }
-  void MaterializeVisibleDecls(const clang::DeclContext *DC) {}
+  void MaterializeVisibleDecls(const clang::DeclContext *DC) { return; }
 
   void InstallASTContext(TypeSystemClang &ast_context);
 
@@ -83,10 +83,8 @@ public:
   ///
   /// \return
   ///     Whatever SetExternalVisibleDeclsForName returns.
-  bool
-  FindExternalVisibleDeclsByName(const clang::DeclContext *DC,
-                                 clang::DeclarationName Name,
-                                 const clang::DeclContext *OriginalDC) override;
+  bool FindExternalVisibleDeclsByName(const clang::DeclContext *DC,
+                                      clang::DeclarationName Name) override;
 
   /// Enumerate all Decls in a given lexical context.
   ///
@@ -213,10 +211,9 @@ public:
   public:
     ClangASTSourceProxy(ClangASTSource &original) : m_original(original) {}
 
-    bool FindExternalVisibleDeclsByName(
-        const clang::DeclContext *DC, clang::DeclarationName Name,
-        const clang::DeclContext *OriginalDC) override {
-      return m_original.FindExternalVisibleDeclsByName(DC, Name, OriginalDC);
+    bool FindExternalVisibleDeclsByName(const clang::DeclContext *DC,
+                                        clang::DeclarationName Name) override {
+      return m_original.FindExternalVisibleDeclsByName(DC, Name);
     }
 
     void FindExternalLexicalDecls(
@@ -354,11 +351,6 @@ public:
   /// Returns the TypeSystem that uses this ClangASTSource instance as it's
   /// ExternalASTSource.
   TypeSystemClang *GetTypeSystem() const { return m_clang_ast_context; }
-
-private:
-  bool FindObjCPropertyAndIvarDeclsWithOrigin(
-      NameSearchContext &context,
-      DeclFromUser<const clang::ObjCInterfaceDecl> &origin_iface_decl);
 
 protected:
   bool FindObjCMethodDeclsWithOrigin(

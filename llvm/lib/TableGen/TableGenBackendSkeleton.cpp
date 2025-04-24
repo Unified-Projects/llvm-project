@@ -1,4 +1,4 @@
-//===- TableGenBackendSkeleton.cpp - Skeleton TableGen backend --*- C++ -*-===//
+//===- SkeletonEmitter.cpp - Skeleton TableGen backend          -*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -10,15 +10,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/TableGen/Error.h"
+#include "llvm/TableGen/Record.h"
 #include "llvm/TableGen/TableGenBackend.h"
+#include <algorithm>
+#include <set>
+#include <string>
+#include <vector>
 
 #define DEBUG_TYPE "skeleton-emitter"
-
-namespace llvm {
-class RecordKeeper;
-class raw_ostream;
-} // namespace llvm
 
 using namespace llvm;
 
@@ -29,10 +35,10 @@ namespace {
 
 class SkeletonEmitter {
 private:
-  const RecordKeeper &Records;
+  RecordKeeper &Records;
 
 public:
-  SkeletonEmitter(const RecordKeeper &RK) : Records(RK) {}
+  SkeletonEmitter(RecordKeeper &RK) : Records(RK) {}
 
   void run(raw_ostream &OS);
 }; // emitter class
@@ -45,20 +51,14 @@ void SkeletonEmitter::run(raw_ostream &OS) {
   (void)Records; // To suppress unused variable warning; remove on use.
 }
 
-// Choose either option A or B.
+namespace llvm {
 
-//===----------------------------------------------------------------------===//
-// Option A: Register the backed as class <SkeletonEmitter>
-static TableGen::Emitter::OptClass<SkeletonEmitter>
-    X("gen-skeleton-class", "Generate example skeleton class");
+// The only thing that should be in the llvm namespace is the
+// emitter entry point function.
 
-//===----------------------------------------------------------------------===//
-// Option B: Register "EmitSkeleton" directly
-// The emitter entry may be private scope.
-static void EmitSkeleton(const RecordKeeper &RK, raw_ostream &OS) {
+void EmitSkeleton(RecordKeeper &RK, raw_ostream &OS) {
   // Instantiate the emitter class and invoke run().
   SkeletonEmitter(RK).run(OS);
 }
 
-static TableGen::Emitter::Opt Y("gen-skeleton-entry", EmitSkeleton,
-                                "Generate example skeleton entry");
+} // namespace llvm

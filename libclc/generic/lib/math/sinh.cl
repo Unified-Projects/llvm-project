@@ -21,9 +21,10 @@
  */
 
 #include <clc/clc.h>
-#include <clc/clcmacro.h>
-#include <clc/math/math.h>
-#include <clc/math/tables.h>
+
+#include "math.h"
+#include "tables.h"
+#include "../clcmacro.h"
 
 _CLC_OVERLOAD _CLC_DEF float sinh(float x)
 {
@@ -186,13 +187,5 @@ _CLC_OVERLOAD _CLC_DEF double sinh(double x)
 }
 
 _CLC_UNARY_VECTORIZE(_CLC_OVERLOAD _CLC_DEF, double, sinh, double)
-
-#endif
-
-#ifdef cl_khr_fp16
-
-#pragma OPENCL EXTENSION cl_khr_fp16 : enable
-
-_CLC_DEFINE_UNARY_BUILTIN_FP16(sinh)
 
 #endif

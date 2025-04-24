@@ -14,7 +14,6 @@
 
 #include <system_error>
 #include <cassert>
-#include <type_traits>
 
 #include "test_macros.h"
 
@@ -23,8 +22,12 @@ enum testing
     zero, one, two
 };
 
-template <>
-struct std::is_error_code_enum<testing> : public std::true_type {};
+namespace std
+{
+
+template <> struct is_error_code_enum<testing> : public std::true_type {};
+
+}
 
 std::error_code
 make_error_code(testing x)

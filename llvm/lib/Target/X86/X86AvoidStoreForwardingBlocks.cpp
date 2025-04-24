@@ -44,6 +44,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
 #include "llvm/InitializePasses.h"
@@ -359,17 +360,22 @@ findPotentialBlockers(MachineInstr *LoadInst) {
   if (BlockCount < InspectionLimit) {
     MachineBasicBlock *MBB = LoadInst->getParent();
     int LimitLeft = InspectionLimit - BlockCount;
-    for (MachineBasicBlock *PMBB : MBB->predecessors()) {
+    for (MachineBasicBlock::pred_iterator PB = MBB->pred_begin(),
+                                          PE = MBB->pred_end();
+         PB != PE; ++PB) {
+      MachineBasicBlock *PMBB = *PB;
       int PredCount = 0;
-      for (MachineInstr &PBInst : llvm::reverse(*PMBB)) {
-        if (PBInst.isMetaInstruction())
+      for (MachineBasicBlock::reverse_iterator PBInst = PMBB->rbegin(),
+                                               PME = PMBB->rend();
+           PBInst != PME; ++PBInst) {
+        if (PBInst->isMetaInstruction())
           continue;
         PredCount++;
         if (PredCount >= LimitLeft)
           break;
-        if (PBInst.getDesc().isCall())
+        if (PBInst->getDesc().isCall())
           break;
-        PotentialBlockers.push_back(&PBInst);
+        PotentialBlockers.push_back(&*PBInst);
       }
     }
   }
@@ -520,8 +526,8 @@ bool X86AvoidSFBPass::alias(const MachineMemOperand &Op1,
     return true;
 
   int64_t MinOffset = std::min(Op1.getOffset(), Op2.getOffset());
-  int64_t Overlapa = Op1.getSize().getValue() + Op1.getOffset() - MinOffset;
-  int64_t Overlapb = Op2.getSize().getValue() + Op2.getOffset() - MinOffset;
+  int64_t Overlapa = Op1.getSize() + Op1.getOffset() - MinOffset;
+  int64_t Overlapb = Op2.getSize() + Op2.getOffset() - MinOffset;
 
   return !AA->isNoAlias(
       MemoryLocation(Op1.getValue(), Overlapa, Op1.getAAInfo()),
@@ -536,8 +542,9 @@ void X86AvoidSFBPass::findPotentiallylBlockedCopies(MachineFunction &MF) {
       int DefVR = MI.getOperand(0).getReg();
       if (!MRI->hasOneNonDBGUse(DefVR))
         continue;
-      for (MachineOperand &StoreMO :
-           llvm::make_early_inc_range(MRI->use_nodbg_operands(DefVR))) {
+      for (auto UI = MRI->use_nodbg_begin(DefVR), UE = MRI->use_nodbg_end();
+           UI != UE;) {
+        MachineOperand &StoreMO = *UI++;
         MachineInstr &StoreMI = *StoreMO.getParent();
         // Skip cases where the memcpy may overlap.
         if (StoreMI.getParent() == MI.getParent() &&
@@ -687,7 +694,7 @@ bool X86AvoidSFBPass::runOnMachineFunction(MachineFunction &MF) {
           !isRelevantAddressingMode(PBInst) || !PBInst->hasOneMemOperand())
         continue;
       int64_t PBstDispImm = getDispOperand(PBInst).getImm();
-      unsigned PBstSize = (*PBInst->memoperands_begin())->getSize().getValue();
+      unsigned PBstSize = (*PBInst->memoperands_begin())->getSize();
       // This check doesn't cover all cases, but it will suffice for now.
       // TODO: take branch probability into consideration, if the blocking
       // store is in an unreached block, breaking the memcopy could lose

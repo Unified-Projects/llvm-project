@@ -13,16 +13,18 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Section.h"
-#include "lldb/Target/ABI.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/Target.h"
 
 using namespace lldb;
 using namespace lldb_private;
 
-LLDB_PLUGIN_DEFINE(ProcessTrace)
+ConstString ProcessTrace::GetPluginNameStatic() {
+  static ConstString g_name("trace");
+  return g_name;
+}
 
-llvm::StringRef ProcessTrace::GetPluginDescriptionStatic() {
+const char *ProcessTrace::GetPluginDescriptionStatic() {
   return "Trace process plug-in.";
 }
 
@@ -36,16 +38,15 @@ ProcessSP ProcessTrace::CreateInstance(TargetSP target_sp,
                                        bool can_connect) {
   if (can_connect)
     return nullptr;
-  return std::make_shared<ProcessTrace>(target_sp, listener_sp, *crash_file);
+  return std::make_shared<ProcessTrace>(target_sp, listener_sp);
 }
 
 bool ProcessTrace::CanDebug(TargetSP target_sp, bool plugin_specified_by_name) {
   return plugin_specified_by_name;
 }
 
-ProcessTrace::ProcessTrace(TargetSP target_sp, ListenerSP listener_sp,
-                           const FileSpec &core_file)
-    : PostMortemProcess(target_sp, listener_sp, core_file) {}
+ProcessTrace::ProcessTrace(TargetSP target_sp, ListenerSP listener_sp)
+    : PostMortemProcess(target_sp, listener_sp) {}
 
 ProcessTrace::~ProcessTrace() {
   Clear();
@@ -53,8 +54,12 @@ ProcessTrace::~ProcessTrace() {
   // make sure all of the broadcaster cleanup goes as planned. If we destruct
   // this class, then Process::~Process() might have problems trying to fully
   // destroy the broadcaster.
-  Finalize(true /* destructing */);
+  Finalize();
 }
+
+ConstString ProcessTrace::GetPluginName() { return GetPluginNameStatic(); }
+
+uint32_t ProcessTrace::GetPluginVersion() { return 1; }
 
 void ProcessTrace::DidAttach(ArchSpec &process_arch) {
   ListenerSP listener_sp(
@@ -66,7 +71,7 @@ void ProcessTrace::DidAttach(ArchSpec &process_arch) {
   SetPrivateState(eStateStopped);
 
   EventSP event_sp;
-  WaitForProcessToStop(std::nullopt, &event_sp, true, listener_sp);
+  WaitForProcessToStop(llvm::None, &event_sp, true, listener_sp);
 
   RestoreProcessEvents();
 
@@ -84,9 +89,6 @@ Status ProcessTrace::DoDestroy() { return Status(); }
 
 size_t ProcessTrace::ReadMemory(addr_t addr, void *buf, size_t size,
                                 Status &error) {
-  if (const ABISP &abi = GetABI())
-    addr = abi->FixAnyAddress(addr);
-
   // Don't allow the caching that lldb_private::Process::ReadMemory does since
   // we have it all cached in the trace files.
   return DoReadMemory(addr, buf, size, error);
@@ -123,7 +125,7 @@ bool ProcessTrace::GetProcessInfo(ProcessInstanceInfo &info) {
 size_t ProcessTrace::DoReadMemory(addr_t addr, void *buf, size_t size,
                                   Status &error) {
   Address resolved_address;
-  GetTarget().ResolveLoadAddress(addr, resolved_address);
+  GetTarget().GetSectionLoadList().ResolveLoadAddress(addr, resolved_address);
 
   return GetTarget().ReadMemoryFromFileCache(resolved_address, buf, size,
                                              error);

@@ -78,7 +78,6 @@ __strong CFStringRef *_documentNames;
   inner.inner_most.nestedDeeperNames[filteredPos] = 0;
   inner.inner_most.arrI[3].is1[5] = 0;
   inner.inner_most.arrI[3].is2[5] = 0;
-  return 0;
 }
 @end
 

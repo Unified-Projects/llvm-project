@@ -13,8 +13,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/R600MCTargetDesc.h"
-#include "R600.h"
+#include "AMDGPU.h"
+#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "R600Subtarget.h"
 #include "llvm/CodeGen/DFAPacketizer.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -35,10 +35,10 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
-    AU.addRequired<MachineDominatorTreeWrapperPass>();
-    AU.addPreserved<MachineDominatorTreeWrapperPass>();
-    AU.addRequired<MachineLoopInfoWrapperPass>();
-    AU.addPreserved<MachineLoopInfoWrapperPass>();
+    AU.addRequired<MachineDominatorTree>();
+    AU.addPreserved<MachineDominatorTree>();
+    AU.addRequired<MachineLoopInfo>();
+    AU.addPreserved<MachineLoopInfo>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
 
@@ -127,8 +127,8 @@ private:
       R600::OpName::src1,
       R600::OpName::src2
     };
-    for (unsigned Op : Ops) {
-      int OperandIdx = TII->getOperandIdx(MI.getOpcode(), Op);
+    for (unsigned i = 0; i < 3; i++) {
+      int OperandIdx = TII->getOperandIdx(MI.getOpcode(), Ops[i]);
       if (OperandIdx < 0)
         continue;
       Register Src = MI.getOperand(OperandIdx).getReg();
@@ -186,7 +186,8 @@ public:
     if (PredI != PredJ)
       return false;
     if (SUJ->isSucc(SUI)) {
-      for (const SDep &Dep : SUJ->Succs) {
+      for (unsigned i = 0, e = SUJ->Succs.size(); i < e; ++i) {
+        const SDep &Dep = SUJ->Succs[i];
         if (Dep.getSUnit() != SUI)
           continue;
         if (Dep.getKind() == SDep::Anti)
@@ -206,7 +207,7 @@ public:
     return !ARDef || !ARUse;
   }
 
-  // isLegalToPruneDependencies - Is it legal to prune dependency between SUI
+  // isLegalToPruneDependencies - Is it legal to prune dependece between SUI
   // and SUJ.
   bool isLegalToPruneDependencies(SUnit *SUI, SUnit *SUJ) override {
     return false;
@@ -320,7 +321,7 @@ bool R600Packetizer::runOnMachineFunction(MachineFunction &Fn) {
   const R600Subtarget &ST = Fn.getSubtarget<R600Subtarget>();
   const R600InstrInfo *TII = ST.getInstrInfo();
 
-  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfo>();
 
   // Instantiate the packetizer.
   R600PacketizerList Packetizer(Fn, ST, MLI);
@@ -342,11 +343,20 @@ bool R600Packetizer::runOnMachineFunction(MachineFunction &Fn) {
   // dependence between Insn 0 and Insn 2. This can lead to incorrect
   // packetization
   //
-  for (MachineBasicBlock &MBB : Fn) {
-    for (MachineInstr &MI : llvm::make_early_inc_range(MBB)) {
-      if (MI.isKill() || MI.getOpcode() == R600::IMPLICIT_DEF ||
-          (MI.getOpcode() == R600::CF_ALU && !MI.getOperand(8).getImm()))
-        MBB.erase(MI);
+  for (MachineFunction::iterator MBB = Fn.begin(), MBBe = Fn.end();
+       MBB != MBBe; ++MBB) {
+    MachineBasicBlock::iterator End = MBB->end();
+    MachineBasicBlock::iterator MI = MBB->begin();
+    while (MI != End) {
+      if (MI->isKill() || MI->getOpcode() == R600::IMPLICIT_DEF ||
+          (MI->getOpcode() == R600::CF_ALU && !MI->getOperand(8).getImm())) {
+        MachineBasicBlock::iterator DeleteMI = MI;
+        ++MI;
+        MBB->erase(DeleteMI);
+        End = MBB->end();
+        continue;
+      }
+      ++MI;
     }
   }
 

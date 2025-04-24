@@ -19,7 +19,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/TargetSelect.h"
@@ -79,13 +78,11 @@ int main(int argc, char *argv[]) {
   int32_t InitializersRunFlag = 0;
   int32_t DeinitializersRunFlag = 0;
 
-  ExitOnErr(J->getMainJITDylib().define(
-      absoluteSymbols({{J->mangleAndIntern("InitializersRunFlag"),
-                        {ExecutorAddr::fromPtr(&InitializersRunFlag),
-                         JITSymbolFlags::Exported}},
-                       {J->mangleAndIntern("DeinitializersRunFlag"),
-                        {ExecutorAddr::fromPtr(&DeinitializersRunFlag),
-                         JITSymbolFlags::Exported}}})));
+  ExitOnErr(J->getMainJITDylib().define(absoluteSymbols(
+      {{J->mangleAndIntern("InitializersRunFlag"),
+        JITEvaluatedSymbol::fromPointer(&InitializersRunFlag)},
+       {J->mangleAndIntern("DeinitializersRunFlag"),
+        JITEvaluatedSymbol::fromPointer(&DeinitializersRunFlag)}})));
 
   // Run static initializers.
   ExitOnErr(J->initialize(J->getMainJITDylib()));

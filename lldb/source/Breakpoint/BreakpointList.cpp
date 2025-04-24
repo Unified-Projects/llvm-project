@@ -17,16 +17,14 @@ using namespace lldb_private;
 
 static void NotifyChange(const BreakpointSP &bp, BreakpointEventType event) {
   Target &target = bp->GetTarget();
-  if (target.EventTypeHasListeners(Target::eBroadcastBitBreakpointChanged)) {
-    auto event_data_sp =
-        std::make_shared<Breakpoint::BreakpointEventData>(event, bp);
+  if (target.EventTypeHasListeners(Target::eBroadcastBitBreakpointChanged))
     target.BroadcastEvent(Target::eBroadcastBitBreakpointChanged,
-                          event_data_sp);
-  }
+                          new Breakpoint::BreakpointEventData(event, bp));
 }
 
 BreakpointList::BreakpointList(bool is_internal)
-    : m_next_break_id(0), m_is_internal(is_internal) {}
+    : m_mutex(), m_breakpoints(), m_next_break_id(0),
+      m_is_internal(is_internal) {}
 
 BreakpointList::~BreakpointList() = default;
 
@@ -103,8 +101,10 @@ void BreakpointList::RemoveAllowed(bool notify) {
       NotifyChange(bp_sp, eBreakpointEventTypeRemoved);
   }
 
-  llvm::erase_if(m_breakpoints,
-                 [&](const BreakpointSP &bp) { return bp->AllowDelete(); });
+  m_breakpoints.erase(
+      std::remove_if(m_breakpoints.begin(), m_breakpoints.end(),
+                     [&](const BreakpointSP &bp) { return bp->AllowDelete(); }),
+      m_breakpoints.end());
 }
 
 BreakpointList::bp_collection::iterator
@@ -187,12 +187,6 @@ void BreakpointList::ClearAllBreakpointSites() {
   std::lock_guard<std::recursive_mutex> guard(m_mutex);
   for (const auto &bp_sp : m_breakpoints)
     bp_sp->ClearAllBreakpointSites();
-}
-
-void BreakpointList::ResetHitCounts() {
-  std::lock_guard<std::recursive_mutex> guard(m_mutex);
-  for (const auto &bp_sp : m_breakpoints)
-    bp_sp->ResetHitCount();
 }
 
 void BreakpointList::GetListMutex(

@@ -8,12 +8,11 @@
 
 #include "lldb/Interpreter/OptionValueDictionary.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "lldb/DataFormatters/FormatManager.h"
-#include "lldb/Interpreter/OptionValueEnumeration.h"
 #include "lldb/Interpreter/OptionValueString.h"
 #include "lldb/Utility/Args.h"
 #include "lldb/Utility/State.h"
-#include "llvm/ADT/StringRef.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -33,24 +32,20 @@ void OptionValueDictionary::DumpValue(const ExecutionContext *exe_ctx,
     if (dump_mask & eDumpOptionType)
       strm.PutCString(" =");
 
+    collection::iterator pos, end = m_values.end();
+
     if (!one_line)
       strm.IndentMore();
 
-    // m_values is not guaranteed to be sorted alphabetically, so for
-    // consistentcy we will sort them here before dumping
-    std::map<llvm::StringRef, OptionValue *> sorted_values;
-    for (const auto &value : m_values) {
-      sorted_values[value.first()] = value.second.get();
-    }
-    for (const auto &value : sorted_values) {
-      OptionValue *option_value = value.second;
+    for (pos = m_values.begin(); pos != end; ++pos) {
+      OptionValue *option_value = pos->second.get();
 
       if (one_line)
         strm << ' ';
       else
         strm.EOL();
 
-      strm.Indent(value.first);
+      strm.Indent(pos->first.GetStringRef());
 
       const uint32_t extra_dump_options = m_raw_value_dump ? eDumpOptionRaw : 0;
       switch (dict_type) {
@@ -87,21 +82,13 @@ void OptionValueDictionary::DumpValue(const ExecutionContext *exe_ctx,
   }
 }
 
-llvm::json::Value
-OptionValueDictionary::ToJSON(const ExecutionContext *exe_ctx) {
-  llvm::json::Object dict;
-  for (const auto &value : m_values) {
-    dict.try_emplace(value.first(), value.second->ToJSON(exe_ctx));
-  }
-  return dict;
-}
-
 size_t OptionValueDictionary::GetArgs(Args &args) const {
   args.Clear();
-  for (const auto &value : m_values) {
+  collection::const_iterator pos, end = m_values.end();
+  for (pos = m_values.begin(); pos != end; ++pos) {
     StreamString strm;
-    strm.Printf("%s=", value.first().data());
-    value.second->DumpValue(nullptr, strm, eDumpOptionValue | eDumpOptionRaw);
+    strm.Printf("%s=", pos->first.GetCString());
+    pos->second->DumpValue(nullptr, strm, eDumpOptionValue | eDumpOptionRaw);
     args.AppendArgument(strm.GetString());
   }
   return args.GetArgumentCount();
@@ -120,17 +107,17 @@ Status OptionValueDictionary::SetArgs(const Args &args,
   case eVarSetOperationReplace:
   case eVarSetOperationAssign:
     if (argc == 0) {
-      error = Status::FromErrorString(
+      error.SetErrorString(
           "assign operation takes one or more key=value arguments");
       return error;
     }
     for (const auto &entry : args) {
       if (entry.ref().empty()) {
-        error = Status::FromErrorString("empty argument");
+        error.SetErrorString("empty argument");
         return error;
       }
       if (!entry.ref().contains('=')) {
-        error = Status::FromErrorString(
+        error.SetErrorString(
             "assign operation takes one or more key=value arguments");
         return error;
       }
@@ -139,7 +126,7 @@ Status OptionValueDictionary::SetArgs(const Args &args,
       std::tie(key, value) = entry.ref().split('=');
       bool key_valid = false;
       if (key.empty()) {
-        error = Status::FromErrorString("empty dictionary key");
+        error.SetErrorString("empty dictionary key");
         return error;
       }
 
@@ -166,7 +153,7 @@ Status OptionValueDictionary::SetArgs(const Args &args,
         key_valid = true;
       }
       if (!key_valid) {
-        error = Status::FromErrorStringWithFormat(
+        error.SetErrorStringWithFormat(
             "invalid key \"%s\", the key must be a bare string or "
             "surrounded by brackets with optional quotes: [<key>] or "
             "['<key>'] or [\"<key>\"]",
@@ -174,27 +161,16 @@ Status OptionValueDictionary::SetArgs(const Args &args,
         return error;
       }
 
-      if (m_type_mask == 1u << eTypeEnum) {
-        auto enum_value =
-            std::make_shared<OptionValueEnumeration>(m_enum_values, 0);
-        error = enum_value->SetValueFromString(value);
+      lldb::OptionValueSP value_sp(CreateValueFromCStringForTypeMask(
+          value.str().c_str(), m_type_mask, error));
+      if (value_sp) {
         if (error.Fail())
           return error;
         m_value_was_set = true;
-        SetValueForKey(key, enum_value, true);
+        SetValueForKey(ConstString(key), value_sp, true);
       } else {
-        lldb::OptionValueSP value_sp(CreateValueFromCStringForTypeMask(
-            value.str().c_str(), m_type_mask, error));
-        if (value_sp) {
-          if (error.Fail())
-            return error;
-          m_value_was_set = true;
-          SetValueForKey(key, value_sp, true);
-        } else {
-          error = Status::FromErrorString(
-              "dictionaries that can contain multiple types "
-              "must subclass OptionValueArray");
-        }
+        error.SetErrorString("dictionaries that can contain multiple types "
+                             "must subclass OptionValueArray");
       }
     }
     break;
@@ -202,17 +178,16 @@ Status OptionValueDictionary::SetArgs(const Args &args,
   case eVarSetOperationRemove:
     if (argc > 0) {
       for (size_t i = 0; i < argc; ++i) {
-        llvm::StringRef key(args.GetArgumentAtIndex(i));
+        ConstString key(args.GetArgumentAtIndex(i));
         if (!DeleteValueForKey(key)) {
-          error = Status::FromErrorStringWithFormat(
+          error.SetErrorStringWithFormat(
               "no value found named '%s', aborting remove operation",
-              key.data());
+              key.GetCString());
           break;
         }
       }
     } else {
-      error = Status::FromErrorString(
-          "remove operation takes one or more key arguments");
+      error.SetErrorString("remove operation takes one or more key arguments");
     }
     break;
 
@@ -236,7 +211,8 @@ Status OptionValueDictionary::SetValueFromString(llvm::StringRef value,
 
 lldb::OptionValueSP
 OptionValueDictionary::GetSubValue(const ExecutionContext *exe_ctx,
-                                   llvm::StringRef name, Status &error) const {
+                                   llvm::StringRef name, bool will_modify,
+                                   Status &error) const {
   lldb::OptionValueSP value_sp;
   if (name.empty())
     return nullptr;
@@ -244,12 +220,11 @@ OptionValueDictionary::GetSubValue(const ExecutionContext *exe_ctx,
   llvm::StringRef left, temp;
   std::tie(left, temp) = name.split('[');
   if (left.size() == name.size()) {
-    error = Status::FromErrorStringWithFormat(
-        "invalid value path '%s', %s values only "
-        "support '[<key>]' subvalues where <key> "
-        "a string value optionally delimited by "
-        "single or double quotes",
-        name.str().c_str(), GetTypeAsCString());
+    error.SetErrorStringWithFormat("invalid value path '%s', %s values only "
+      "support '[<key>]' subvalues where <key> "
+      "a string value optionally delimited by "
+      "single or double quotes",
+      name.str().c_str(), GetTypeAsCString());
     return nullptr;
   }
   assert(!temp.empty());
@@ -265,26 +240,24 @@ OptionValueDictionary::GetSubValue(const ExecutionContext *exe_ctx,
   std::tie(key, sub_name) = temp.split(']');
 
   if (!key.consume_back(quote_char) || key.empty()) {
-    error = Status::FromErrorStringWithFormat(
-        "invalid value path '%s', "
-        "key names must be formatted as ['<key>'] where <key> "
-        "is a string that doesn't contain quotes and the quote"
-        " char is optional",
-        name.str().c_str());
+    error.SetErrorStringWithFormat("invalid value path '%s', "
+      "key names must be formatted as ['<key>'] where <key> "
+      "is a string that doesn't contain quotes and the quote"
+      " char is optional", name.str().c_str());
     return nullptr;
   }
 
-  value_sp = GetValueForKey(key);
+  value_sp = GetValueForKey(ConstString(key));
   if (!value_sp) {
-    error = Status::FromErrorStringWithFormat(
-        "dictionary does not contain a value for the key name '%s'",
-        key.str().c_str());
+    error.SetErrorStringWithFormat(
+      "dictionary does not contain a value for the key name '%s'",
+      key.str().c_str());
     return nullptr;
   }
 
   if (sub_name.empty())
     return value_sp;
-  return value_sp->GetSubValue(exe_ctx, sub_name, error);
+  return value_sp->GetSubValue(exe_ctx, sub_name, will_modify, error);
 }
 
 Status OptionValueDictionary::SetSubValue(const ExecutionContext *exe_ctx,
@@ -292,34 +265,34 @@ Status OptionValueDictionary::SetSubValue(const ExecutionContext *exe_ctx,
                                           llvm::StringRef name,
                                           llvm::StringRef value) {
   Status error;
-  lldb::OptionValueSP value_sp(GetSubValue(exe_ctx, name, error));
+  const bool will_modify = true;
+  lldb::OptionValueSP value_sp(GetSubValue(exe_ctx, name, will_modify, error));
   if (value_sp)
     error = value_sp->SetValueFromString(value, op);
   else {
     if (error.AsCString() == nullptr)
-      error = Status::FromErrorStringWithFormat("invalid value path '%s'",
-                                                name.str().c_str());
+      error.SetErrorStringWithFormat("invalid value path '%s'", name.str().c_str());
   }
   return error;
 }
 
 lldb::OptionValueSP
-OptionValueDictionary::GetValueForKey(llvm::StringRef key) const {
+OptionValueDictionary::GetValueForKey(ConstString key) const {
   lldb::OptionValueSP value_sp;
-  auto pos = m_values.find(key);
+  collection::const_iterator pos = m_values.find(key);
   if (pos != m_values.end())
     value_sp = pos->second;
   return value_sp;
 }
 
-bool OptionValueDictionary::SetValueForKey(llvm::StringRef key,
+bool OptionValueDictionary::SetValueForKey(ConstString key,
                                            const lldb::OptionValueSP &value_sp,
                                            bool can_replace) {
   // Make sure the value_sp object is allowed to contain values of the type
   // passed in...
   if (value_sp && (m_type_mask & value_sp->GetTypeAsMask())) {
     if (!can_replace) {
-      auto pos = m_values.find(key);
+      collection::const_iterator pos = m_values.find(key);
       if (pos != m_values.end())
         return false;
     }
@@ -329,8 +302,8 @@ bool OptionValueDictionary::SetValueForKey(llvm::StringRef key,
   return false;
 }
 
-bool OptionValueDictionary::DeleteValueForKey(llvm::StringRef key) {
-  auto pos = m_values.find(key);
+bool OptionValueDictionary::DeleteValueForKey(ConstString key) {
+  collection::iterator pos = m_values.find(key);
   if (pos != m_values.end()) {
     m_values.erase(pos);
     return true;

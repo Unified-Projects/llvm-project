@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// UNSUPPORTED: libcpp-has-no-threads
 
 // <mutex>
 
@@ -12,20 +14,30 @@
 
 // unique_lock(mutex_type& m, adopt_lock_t);
 
-#include <cassert>
-#include <memory>
 #include <mutex>
+#include <cassert>
+#include "nasty_containers.h"
 
-#include "checking_mutex.h"
+#include "test_macros.h"
 
-int main(int, char**) {
-  checking_mutex m;
-  m.lock();
-  m.last_try = checking_mutex::none;
-  std::unique_lock<checking_mutex> lk(m, std::adopt_lock_t());
-  assert(m.last_try == checking_mutex::none);
-  assert(lk.mutex() == std::addressof(m));
-  assert(lk.owns_lock());
+int main(int, char**)
+{
+    {
+    typedef std::mutex M;
+    M m;
+    m.lock();
+    std::unique_lock<M> lk(m, std::adopt_lock);
+    assert(lk.mutex() == std::addressof(m));
+    assert(lk.owns_lock() == true);
+    }
+    {
+    typedef nasty_mutex M;
+    M m;
+    m.lock();
+    std::unique_lock<M> lk(m, std::adopt_lock);
+    assert(lk.mutex() == std::addressof(m));
+    assert(lk.owns_lock() == true);
+    }
 
   return 0;
 }

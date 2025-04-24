@@ -5,6 +5,7 @@
 	.arch armv7
 	.object_arch armv4
 
+@ CHECK: .text
 @ CHECK: .arch	armv7
 @ CHECK: .object_arch	armv4
 

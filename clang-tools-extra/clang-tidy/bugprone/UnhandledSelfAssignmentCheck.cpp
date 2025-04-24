@@ -12,7 +12,9 @@
 
 using namespace clang::ast_matchers;
 
-namespace clang::tidy::bugprone {
+namespace clang {
+namespace tidy {
+namespace bugprone {
 
 UnhandledSelfAssignmentCheck::UnhandledSelfAssignmentCheck(
     StringRef Name, ClangTidyContext *Context)
@@ -74,11 +76,9 @@ void UnhandledSelfAssignmentCheck::registerMatchers(MatchFinder *Finder) {
     // Matcher for standard smart pointers.
     const auto SmartPointerType = qualType(hasUnqualifiedDesugaredType(
         recordType(hasDeclaration(classTemplateSpecializationDecl(
-            anyOf(allOf(hasAnyName("::std::shared_ptr", "::std::weak_ptr",
-                                   "::std::auto_ptr"),
-                        templateArgumentCountIs(1)),
-                  allOf(hasName("::std::unique_ptr"),
-                        templateArgumentCountIs(2))))))));
+            hasAnyName("::std::shared_ptr", "::std::unique_ptr",
+                       "::std::weak_ptr", "::std::auto_ptr"),
+            templateArgumentCountIs(1))))));
 
     // We will warn only if the class has a pointer or a C array field which
     // probably causes a problem during self-assignment (e.g. first resetting
@@ -107,4 +107,6 @@ void UnhandledSelfAssignmentCheck::check(
        "operator=() does not handle self-assignment properly");
 }
 
-} // namespace clang::tidy::bugprone
+} // namespace bugprone
+} // namespace tidy
+} // namespace clang

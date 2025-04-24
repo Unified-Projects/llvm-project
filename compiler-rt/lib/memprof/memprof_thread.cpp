@@ -25,7 +25,10 @@ namespace __memprof {
 // MemprofThreadContext implementation.
 
 void MemprofThreadContext::OnCreated(void *arg) {
-  thread = static_cast<MemprofThread *>(arg);
+  CreateThreadContextArgs *args = static_cast<CreateThreadContextArgs *>(arg);
+  if (args->stack)
+    stack_id = StackDepotPut(*args->stack);
+  thread = args->thread;
   thread->set_context(this);
 }
 
@@ -34,14 +37,14 @@ void MemprofThreadContext::OnFinished() {
   thread = nullptr;
 }
 
-alignas(16) static char thread_registry_placeholder[sizeof(ThreadRegistry)];
+static ALIGNED(16) char thread_registry_placeholder[sizeof(ThreadRegistry)];
 static ThreadRegistry *memprof_thread_registry;
 
-static Mutex mu_for_thread_context;
+static BlockingMutex mu_for_thread_context(LINKER_INITIALIZED);
 static LowLevelAllocator allocator_for_thread_context;
 
 static ThreadContextBase *GetMemprofThreadContext(u32 tid) {
-  Lock lock(&mu_for_thread_context);
+  BlockingMutexLock lock(&mu_for_thread_context);
   return new (allocator_for_thread_context) MemprofThreadContext(tid);
 }
 
@@ -76,8 +79,9 @@ MemprofThread *MemprofThread::Create(thread_callback_t start_routine, void *arg,
   MemprofThread *thread = (MemprofThread *)MmapOrDie(size, __func__);
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
-  memprofThreadRegistry().CreateThread(
-      0, detached, parent_tid, stack ? StackDepotPut(*stack) : 0, thread);
+  MemprofThreadContext::CreateThreadContextArgs args = {thread, stack};
+  memprofThreadRegistry().CreateThread(*reinterpret_cast<uptr *>(thread),
+                                       detached, parent_tid, &args);
 
   return thread;
 }
@@ -127,7 +131,7 @@ void MemprofThread::Init(const InitOptions *options) {
   int local = 0;
   VReport(1, "T%d: stack [%p,%p) size 0x%zx; local=%p\n", tid(),
           (void *)stack_bottom_, (void *)stack_top_, stack_top_ - stack_bottom_,
-          (void *)&local);
+          &local);
 }
 
 thread_return_t
@@ -165,8 +169,12 @@ MemprofThread *CreateMainThread() {
 // OS-specific implementations that need more information passed through.
 void MemprofThread::SetThreadStackAndTls(const InitOptions *options) {
   DCHECK_EQ(options, nullptr);
-  GetThreadStackAndTls(tid() == kMainTid, &stack_bottom_, &stack_top_,
-                       &tls_begin_, &tls_end_);
+  uptr tls_size = 0;
+  uptr stack_size = 0;
+  GetThreadStackAndTls(tid() == kMainTid, &stack_bottom_, &stack_size,
+                       &tls_begin_, &tls_size);
+  stack_top_ = stack_bottom_ + stack_size;
+  tls_end_ = tls_begin_ + tls_size;
   dtls_ = DTLS_Get();
 
   if (stack_top_ != stack_bottom_) {
@@ -190,7 +198,7 @@ MemprofThread *GetCurrentThread() {
 
 void SetCurrentThread(MemprofThread *t) {
   CHECK(t->context());
-  VReport(2, "SetCurrentThread: %p for thread %p\n", (void *)t->context(),
+  VReport(2, "SetCurrentThread: %p for thread %p\n", t->context(),
           (void *)GetThreadSelf());
   // Make sure we do not reset the current MemprofThread.
   CHECK_EQ(0, TSDGet());

@@ -35,23 +35,21 @@ static int ascii_strncasecmp(const char *LHS, const char *RHS, size_t Length) {
 }
 
 int StringRef::compare_insensitive(StringRef RHS) const {
-  if (int Res =
-          ascii_strncasecmp(data(), RHS.data(), std::min(size(), RHS.size())))
+  if (int Res = ascii_strncasecmp(Data, RHS.Data, std::min(Length, RHS.Length)))
     return Res;
-  if (size() == RHS.size())
+  if (Length == RHS.Length)
     return 0;
-  return size() < RHS.size() ? -1 : 1;
+  return Length < RHS.Length ? -1 : 1;
 }
 
-bool StringRef::starts_with_insensitive(StringRef Prefix) const {
-  return size() >= Prefix.size() &&
-         ascii_strncasecmp(data(), Prefix.data(), Prefix.size()) == 0;
+bool StringRef::startswith_insensitive(StringRef Prefix) const {
+  return Length >= Prefix.Length &&
+      ascii_strncasecmp(Data, Prefix.Data, Prefix.Length) == 0;
 }
 
-bool StringRef::ends_with_insensitive(StringRef Suffix) const {
-  return size() >= Suffix.size() &&
-         ascii_strncasecmp(end() - Suffix.size(), Suffix.data(),
-                           Suffix.size()) == 0;
+bool StringRef::endswith_insensitive(StringRef Suffix) const {
+  return Length >= Suffix.Length &&
+      ascii_strncasecmp(end() - Suffix.Length, Suffix.Data, Suffix.Length) == 0;
 }
 
 size_t StringRef::find_insensitive(char C, size_t From) const {
@@ -61,49 +59,43 @@ size_t StringRef::find_insensitive(char C, size_t From) const {
 
 /// compare_numeric - Compare strings, handle embedded numbers.
 int StringRef::compare_numeric(StringRef RHS) const {
-  for (size_t I = 0, E = std::min(size(), RHS.size()); I != E; ++I) {
+  for (size_t I = 0, E = std::min(Length, RHS.Length); I != E; ++I) {
     // Check for sequences of digits.
-    if (isDigit(data()[I]) && isDigit(RHS.data()[I])) {
+    if (isDigit(Data[I]) && isDigit(RHS.Data[I])) {
       // The longer sequence of numbers is considered larger.
       // This doesn't really handle prefixed zeros well.
       size_t J;
       for (J = I + 1; J != E + 1; ++J) {
-        bool ld = J < size() && isDigit(data()[J]);
-        bool rd = J < RHS.size() && isDigit(RHS.data()[J]);
+        bool ld = J < Length && isDigit(Data[J]);
+        bool rd = J < RHS.Length && isDigit(RHS.Data[J]);
         if (ld != rd)
           return rd ? -1 : 1;
         if (!rd)
           break;
       }
       // The two number sequences have the same length (J-I), just memcmp them.
-      if (int Res = compareMemory(data() + I, RHS.data() + I, J - I))
+      if (int Res = compareMemory(Data + I, RHS.Data + I, J - I))
         return Res < 0 ? -1 : 1;
       // Identical number sequences, continue search after the numbers.
       I = J - 1;
       continue;
     }
-    if (data()[I] != RHS.data()[I])
-      return (unsigned char)data()[I] < (unsigned char)RHS.data()[I] ? -1 : 1;
+    if (Data[I] != RHS.Data[I])
+      return (unsigned char)Data[I] < (unsigned char)RHS.Data[I] ? -1 : 1;
   }
-  if (size() == RHS.size())
+  if (Length == RHS.Length)
     return 0;
-  return size() < RHS.size() ? -1 : 1;
+  return Length < RHS.Length ? -1 : 1;
 }
 
 // Compute the edit distance between the two given strings.
 unsigned StringRef::edit_distance(llvm::StringRef Other,
                                   bool AllowReplacements,
                                   unsigned MaxEditDistance) const {
-  return llvm::ComputeEditDistance(ArrayRef(data(), size()),
-                                   ArrayRef(Other.data(), Other.size()),
-                                   AllowReplacements, MaxEditDistance);
-}
-
-unsigned llvm::StringRef::edit_distance_insensitive(
-    StringRef Other, bool AllowReplacements, unsigned MaxEditDistance) const {
-  return llvm::ComputeMappedEditDistance(
-      ArrayRef(data(), size()), ArrayRef(Other.data(), Other.size()),
-      llvm::toLower, AllowReplacements, MaxEditDistance);
+  return llvm::ComputeEditDistance(
+      makeArrayRef(data(), size()),
+      makeArrayRef(Other.data(), Other.size()),
+      AllowReplacements, MaxEditDistance);
 }
 
 //===----------------------------------------------------------------------===//
@@ -130,11 +122,11 @@ std::string StringRef::upper() const {
 /// \return - The index of the first occurrence of \arg Str, or npos if not
 /// found.
 size_t StringRef::find(StringRef Str, size_t From) const {
-  if (From > size())
+  if (From > Length)
     return npos;
 
-  const char *Start = data() + From;
-  size_t Size = size() - From;
+  const char *Start = Data + From;
+  size_t Size = Length - From;
 
   const char *Needle = Str.data();
   size_t N = Str.size();
@@ -144,28 +136,16 @@ size_t StringRef::find(StringRef Str, size_t From) const {
     return npos;
   if (N == 1) {
     const char *Ptr = (const char *)::memchr(Start, Needle[0], Size);
-    return Ptr == nullptr ? npos : Ptr - data();
+    return Ptr == nullptr ? npos : Ptr - Data;
   }
 
   const char *Stop = Start + (Size - N + 1);
-
-  if (N == 2) {
-    // Provide a fast path for newline finding (CRLF case) in InclusionRewriter.
-    // Not the most optimized strategy, but getting memcmp inlined should be
-    // good enough.
-    do {
-      if (std::memcmp(Start, Needle, 2) == 0)
-        return Start - data();
-      ++Start;
-    } while (Start < Stop);
-    return npos;
-  }
 
   // For short haystacks or unsupported needles fall back to the naive algorithm
   if (Size < 16 || N > 255) {
     do {
       if (std::memcmp(Start, Needle, N) == 0)
-        return Start - data();
+        return Start - Data;
       ++Start;
     } while (Start < Stop);
     return npos;
@@ -181,7 +161,7 @@ size_t StringRef::find(StringRef Str, size_t From) const {
     uint8_t Last = Start[N - 1];
     if (LLVM_UNLIKELY(Last == (uint8_t)Needle[N - 1]))
       if (std::memcmp(Start, Needle, N - 1) == 0)
-        return Start - data();
+        return Start - Data;
 
     // Otherwise skip the appropriate number of bytes.
     Start += BadCharSkip[Last];
@@ -193,7 +173,7 @@ size_t StringRef::find(StringRef Str, size_t From) const {
 size_t StringRef::find_insensitive(StringRef Str, size_t From) const {
   StringRef This = substr(From);
   while (This.size() >= Str.size()) {
-    if (This.starts_with_insensitive(Str))
+    if (This.startswith_insensitive(Str))
       return From;
     This = This.drop_front();
     ++From;
@@ -202,11 +182,11 @@ size_t StringRef::find_insensitive(StringRef Str, size_t From) const {
 }
 
 size_t StringRef::rfind_insensitive(char C, size_t From) const {
-  From = std::min(From, size());
+  From = std::min(From, Length);
   size_t i = From;
   while (i != 0) {
     --i;
-    if (toLower(data()[i]) == toLower(C))
+    if (toLower(Data[i]) == toLower(C))
       return i;
   }
   return npos;
@@ -217,14 +197,22 @@ size_t StringRef::rfind_insensitive(char C, size_t From) const {
 /// \return - The index of the last occurrence of \arg Str, or npos if not
 /// found.
 size_t StringRef::rfind(StringRef Str) const {
-  return std::string_view(*this).rfind(Str);
+  size_t N = Str.size();
+  if (N > Length)
+    return npos;
+  for (size_t i = Length - N + 1, e = 0; i != e;) {
+    --i;
+    if (substr(i, N).equals(Str))
+      return i;
+  }
+  return npos;
 }
 
 size_t StringRef::rfind_insensitive(StringRef Str) const {
   size_t N = Str.size();
-  if (N > size())
+  if (N > Length)
     return npos;
-  for (size_t i = size() - N + 1, e = 0; i != e;) {
+  for (size_t i = Length - N + 1, e = 0; i != e;) {
     --i;
     if (substr(i, N).equals_insensitive(Str))
       return i;
@@ -239,11 +227,11 @@ size_t StringRef::rfind_insensitive(StringRef Str) const {
 StringRef::size_type StringRef::find_first_of(StringRef Chars,
                                               size_t From) const {
   std::bitset<1 << CHAR_BIT> CharBits;
-  for (char C : Chars)
-    CharBits.set((unsigned char)C);
+  for (size_type i = 0; i != Chars.size(); ++i)
+    CharBits.set((unsigned char)Chars[i]);
 
-  for (size_type i = std::min(From, size()), e = size(); i != e; ++i)
-    if (CharBits.test((unsigned char)data()[i]))
+  for (size_type i = std::min(From, Length), e = Length; i != e; ++i)
+    if (CharBits.test((unsigned char)Data[i]))
       return i;
   return npos;
 }
@@ -251,7 +239,10 @@ StringRef::size_type StringRef::find_first_of(StringRef Chars,
 /// find_first_not_of - Find the first character in the string that is not
 /// \arg C or npos if not found.
 StringRef::size_type StringRef::find_first_not_of(char C, size_t From) const {
-  return std::string_view(*this).find_first_not_of(C, From);
+  for (size_type i = std::min(From, Length), e = Length; i != e; ++i)
+    if (Data[i] != C)
+      return i;
+  return npos;
 }
 
 /// find_first_not_of - Find the first character in the string that is not
@@ -261,11 +252,11 @@ StringRef::size_type StringRef::find_first_not_of(char C, size_t From) const {
 StringRef::size_type StringRef::find_first_not_of(StringRef Chars,
                                                   size_t From) const {
   std::bitset<1 << CHAR_BIT> CharBits;
-  for (char C : Chars)
-    CharBits.set((unsigned char)C);
+  for (size_type i = 0; i != Chars.size(); ++i)
+    CharBits.set((unsigned char)Chars[i]);
 
-  for (size_type i = std::min(From, size()), e = size(); i != e; ++i)
-    if (!CharBits.test((unsigned char)data()[i]))
+  for (size_type i = std::min(From, Length), e = Length; i != e; ++i)
+    if (!CharBits.test((unsigned char)Data[i]))
       return i;
   return npos;
 }
@@ -277,11 +268,11 @@ StringRef::size_type StringRef::find_first_not_of(StringRef Chars,
 StringRef::size_type StringRef::find_last_of(StringRef Chars,
                                              size_t From) const {
   std::bitset<1 << CHAR_BIT> CharBits;
-  for (char C : Chars)
-    CharBits.set((unsigned char)C);
+  for (size_type i = 0; i != Chars.size(); ++i)
+    CharBits.set((unsigned char)Chars[i]);
 
-  for (size_type i = std::min(From, size()) - 1, e = -1; i != e; --i)
-    if (CharBits.test((unsigned char)data()[i]))
+  for (size_type i = std::min(From, Length) - 1, e = -1; i != e; --i)
+    if (CharBits.test((unsigned char)Data[i]))
       return i;
   return npos;
 }
@@ -289,8 +280,8 @@ StringRef::size_type StringRef::find_last_of(StringRef Chars,
 /// find_last_not_of - Find the last character in the string that is not
 /// \arg C, or npos if not found.
 StringRef::size_type StringRef::find_last_not_of(char C, size_t From) const {
-  for (size_type i = std::min(From, size()) - 1, e = -1; i != e; --i)
-    if (data()[i] != C)
+  for (size_type i = std::min(From, Length) - 1, e = -1; i != e; --i)
+    if (Data[i] != C)
       return i;
   return npos;
 }
@@ -302,11 +293,11 @@ StringRef::size_type StringRef::find_last_not_of(char C, size_t From) const {
 StringRef::size_type StringRef::find_last_not_of(StringRef Chars,
                                                  size_t From) const {
   std::bitset<1 << CHAR_BIT> CharBits;
-  for (char C : Chars)
-    CharBits.set((unsigned char)C);
+  for (size_type i = 0, e = Chars.size(); i != e; ++i)
+    CharBits.set((unsigned char)Chars[i]);
 
-  for (size_type i = std::min(From, size()) - 1, e = -1; i != e; --i)
-    if (!CharBits.test((unsigned char)data()[i]))
+  for (size_type i = std::min(From, Length) - 1, e = -1; i != e; --i)
+    if (!CharBits.test((unsigned char)Data[i]))
       return i;
   return npos;
 }
@@ -330,7 +321,7 @@ void StringRef::split(SmallVectorImpl<StringRef> &A,
       A.push_back(S.slice(0, Idx));
 
     // Jump forward.
-    S = S.substr(Idx + Separator.size());
+    S = S.slice(Idx + Separator.size(), npos);
   }
 
   // Push the tail.
@@ -356,7 +347,7 @@ void StringRef::split(SmallVectorImpl<StringRef> &A, char Separator,
       A.push_back(S.slice(0, Idx));
 
     // Jump forward.
-    S = S.substr(Idx + 1);
+    S = S.slice(Idx + 1, npos);
   }
 
   // Push the tail.
@@ -372,16 +363,16 @@ void StringRef::split(SmallVectorImpl<StringRef> &A, char Separator,
 /// the string.
 size_t StringRef::count(StringRef Str) const {
   size_t Count = 0;
-  size_t Pos = 0;
   size_t N = Str.size();
-  // TODO: For an empty `Str` we return 0 for legacy reasons. Consider changing
-  //       this to `Length + 1` which is more in-line with the function
-  //       description.
-  if (!N)
+  if (!N || N > Length)
     return 0;
-  while ((Pos = find(Str, Pos)) != npos) {
-    ++Count;
-    Pos += N;
+  for (size_t i = 0, e = Length - N + 1; i < e;) {
+    if (substr(i, N).equals(Str)) {
+      ++Count;
+      i += N;
+    }
+    else
+      ++i;
   }
   return Count;
 }
@@ -390,14 +381,20 @@ static unsigned GetAutoSenseRadix(StringRef &Str) {
   if (Str.empty())
     return 10;
 
-  if (Str.consume_front_insensitive("0x"))
+  if (Str.startswith("0x") || Str.startswith("0X")) {
+    Str = Str.substr(2);
     return 16;
+  }
 
-  if (Str.consume_front_insensitive("0b"))
+  if (Str.startswith("0b") || Str.startswith("0B")) {
+    Str = Str.substr(2);
     return 2;
+  }
 
-  if (Str.consume_front("0o"))
+  if (Str.startswith("0o")) {
+    Str = Str.substr(2);
     return 8;
+  }
 
   if (Str[0] == '0' && Str.size() > 1 && isDigit(Str[1])) {
     Str = Str.substr(1);
@@ -460,7 +457,7 @@ bool llvm::consumeSignedInteger(StringRef &Str, unsigned Radix,
   unsigned long long ULLVal;
 
   // Handle positive strings first.
-  if (!Str.starts_with("-")) {
+  if (Str.empty() || Str.front() != '-') {
     if (consumeUnsignedInteger(Str, Radix, ULLVal) ||
         // Check for value so large it overflows a signed value.
         (long long)ULLVal < 0)
@@ -505,7 +502,7 @@ bool llvm::getAsSignedInteger(StringRef Str, unsigned Radix,
   return !Str.empty();
 }
 
-bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
+bool StringRef::getAsInteger(unsigned Radix, APInt &Result) const {
   StringRef Str = *this;
 
   // Autosense radix if not specified.
@@ -519,12 +516,12 @@ bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
 
   // Skip leading zeroes.  This can be a significant improvement if
   // it means we don't need > 64 bits.
-  Str = Str.ltrim('0');
+  while (!Str.empty() && Str.front() == '0')
+    Str = Str.substr(1);
 
   // If it was nothing but zeroes....
   if (Str.empty()) {
     Result = APInt(64, 0);
-    *this = Str;
     return false;
   }
 
@@ -557,12 +554,12 @@ bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
     else if (Str[0] >= 'A' && Str[0] <= 'Z')
       CharVal = Str[0]-'A'+10;
     else
-      break;
+      return true;
 
     // If the parsed value is larger than the integer radix, the string is
     // invalid.
     if (CharVal >= Radix)
-      break;
+      return true;
 
     // Add in this character.
     if (IsPowerOf2Radix) {
@@ -577,23 +574,7 @@ bool StringRef::consumeInteger(unsigned Radix, APInt &Result) {
     Str = Str.substr(1);
   }
 
-  // We consider the operation a failure if no characters were consumed
-  // successfully.
-  if (size() == Str.size())
-    return true;
-
-  *this = Str;
   return false;
-}
-
-bool StringRef::getAsInteger(unsigned Radix, APInt &Result) const {
-  StringRef Str = *this;
-  if (Str.consumeInteger(Radix, Result))
-    return true;
-
-  // For getAsInteger, we require the whole string to be consumed or else we
-  // consider it a failure.
-  return !Str.empty();
 }
 
 bool StringRef::getAsDouble(double &Result, bool AllowInexact) const {
@@ -615,12 +596,4 @@ bool StringRef::getAsDouble(double &Result, bool AllowInexact) const {
 // Implementation of StringRef hashing.
 hash_code llvm::hash_value(StringRef S) {
   return hash_combine_range(S.begin(), S.end());
-}
-
-unsigned DenseMapInfo<StringRef, void>::getHashValue(StringRef Val) {
-  assert(Val.data() != getEmptyKey().data() &&
-         "Cannot hash the empty key!");
-  assert(Val.data() != getTombstoneKey().data() &&
-         "Cannot hash the tombstone key!");
-  return (unsigned)(hash_value(Val));
 }

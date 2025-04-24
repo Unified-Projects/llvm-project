@@ -12,7 +12,7 @@ namespace PR13570 {
   template<typename T, typename U> struct P {};
   template<typename T> struct A {
     template<typename U> static P<T,U> isa(U);
-    decltype(isa(int())) f() { return {}; }
+    decltype(isa(int())) f() {}
   };
   template struct A<int>;
 }

@@ -3,7 +3,7 @@ set(LLVM_LINK_COMPONENTS
   Support
   )
 
-add_clang_library(clangTidyLinuxKernelModule STATIC
+add_clang_library(clangTidyLinuxKernelModule
   LinuxKernelTidyModule.cpp
   MustCheckErrsCheck.cpp
 
@@ -13,7 +13,6 @@ add_clang_library(clangTidyLinuxKernelModule STATIC
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )
 
 clang_target_link_libraries(clangTidyLinuxKernelModule

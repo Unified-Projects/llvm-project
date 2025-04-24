@@ -13,11 +13,8 @@ def  Myi32  : Operand<i32> {
   let DecoderMethod = "DecodeMyi32";
 }
 
-def HasA : Predicate<"Subtarget->hasA()">;
-def HasB : Predicate<"Subtarget->hasB()">;
-
-def ModeA : HwMode<"+a", [HasA]>;
-def ModeB : HwMode<"+b", [HasB]>;
+def ModeA : HwMode<"+a">;
+def ModeB : HwMode<"+b">;
 
 
 def fooTypeEncA : InstructionEncoding {
@@ -74,8 +71,9 @@ def baz : Instruction {
 // DECODER-DAG: Opcode: fooTypeEncA:foo
 // DECODER-DAG: Opcode: bar
 // DECODER-LABEL: DecoderTable_ModeB32[] =
-// DECODER-DAG: Opcode: fooTypeEncB:foo
-// DECODER-DAG: Opcode: fooTypeEncA:baz
+// Note that the comment says fooTypeEncA but this is actually fooTypeEncB; plumbing
+// the correct comment text through the decoder is nontrivial.
+// DECODER-DAG: Opcode: fooTypeEncA:foo
 // DECODER-DAG: Opcode: bar
 
 // ENCODER-LABEL:   static const uint64_t InstBits_ModeA[] = {

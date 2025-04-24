@@ -15,13 +15,12 @@
 
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/Error.h"
 #include <cassert>
 #include <string>
 
 namespace llvm {
 
-class TargetMachine;
+class LLVMTargetMachine;
 struct MachineSchedContext;
 class PassConfigImpl;
 class ScheduleDAGInstrs;
@@ -120,7 +119,7 @@ private:
   void setStartStopPasses();
 
 protected:
-  TargetMachine *TM;
+  LLVMTargetMachine *TM;
   PassConfigImpl *Impl = nullptr; // Internal data structures
   bool Initialized = false; // Flagged after all passes are configured.
 
@@ -131,24 +130,16 @@ protected:
   /// Default setting for -enable-tail-merge on this target.
   bool EnableTailMerge = true;
 
-  /// Enable sinking of instructions in MachineSink where a computation can be
-  /// folded into the addressing mode of a memory load/store instruction or
-  /// replace a copy.
-  bool EnableSinkAndFold = false;
-
   /// Require processing of functions such that callees are generated before
   /// callers.
   bool RequireCodeGenSCCOrder = false;
-
-  /// Enable LoopTermFold immediately after LSR
-  bool EnableLoopTermFold = false;
 
   /// Add the actual instruction selection passes. This does not include
   /// preparation passes on IR.
   bool addCoreISelPasses();
 
 public:
-  TargetPassConfig(TargetMachine &TM, PassManagerBase &PM);
+  TargetPassConfig(LLVMTargetMachine &TM, PassManagerBase &pm);
   // Dummy constructor.
   TargetPassConfig();
 
@@ -164,7 +155,7 @@ public:
   //
   void setInitialized() { Initialized = true; }
 
-  CodeGenOptLevel getOptLevel() const;
+  CodeGenOpt::Level getOptLevel() const;
 
   /// Returns true if one of the `-start-after`, `-start-before`, `-stop-after`
   /// or `-stop-before` options is set.
@@ -174,32 +165,16 @@ public:
   /// set.
   static bool willCompleteCodeGenPipeline();
 
-  /// If hasLimitedCodeGenPipeline is true, this method returns
-  /// a string with the name of the options that caused this
-  /// pipeline to be limited.
-  static std::string getLimitedCodeGenPipelineReason();
-
-  struct StartStopInfo {
-    bool StartAfter;
-    bool StopAfter;
-    unsigned StartInstanceNum;
-    unsigned StopInstanceNum;
-    StringRef StartPass;
-    StringRef StopPass;
-  };
-
-  /// Returns pass name in `-stop-before` or `-stop-after`
-  /// NOTE: New pass manager migration only
-  static Expected<StartStopInfo>
-  getStartStopInfo(PassInstrumentationCallbacks &PIC);
+  /// If hasLimitedCodeGenPipeline is true, this method
+  /// returns a string with the name of the options, separated
+  /// by \p Separator that caused this pipeline to be limited.
+  static std::string
+  getLimitedCodeGenPipelineReason(const char *Separator = "/");
 
   void setDisableVerify(bool Disable) { setOpt(DisableVerify, Disable); }
 
   bool getEnableTailMerge() const { return EnableTailMerge; }
   void setEnableTailMerge(bool Enable) { setOpt(EnableTailMerge, Enable); }
-
-  bool getEnableSinkAndFold() const { return EnableSinkAndFold; }
-  void setEnableSinkAndFold(bool Enable) { setOpt(EnableSinkAndFold, Enable); }
 
   bool requiresCodeGenSCCOrder() const { return RequireCodeGenSCCOrder; }
   void setRequiresCodeGenSCCOrder(bool Enable = true) {
@@ -212,7 +187,8 @@ public:
   void substitutePass(AnalysisID StandardID, IdentifyingPassPtr TargetID);
 
   /// Insert InsertedPassID pass after TargetPassID pass.
-  void insertPass(AnalysisID TargetPassID, IdentifyingPassPtr InsertedPassID);
+  void insertPass(AnalysisID TargetPassID, IdentifyingPassPtr InsertedPassID,
+                  bool VerifyAfter = true);
 
   /// Allow the target to enable a specific standard pass by default.
   void enablePass(AnalysisID PassID) { substitutePass(PassID, PassID); }
@@ -347,7 +323,8 @@ public:
 
   /// Add standard passes after a pass that has just been added. For example,
   /// the MachineVerifier if it is enabled.
-  void addMachinePostPasses(const std::string &Banner);
+  void addMachinePostPasses(const std::string &Banner, bool AllowVerify = true,
+                            bool AllowStrip = true);
 
   /// Check whether or not GlobalISel should abort on error.
   /// When this is disabled, GlobalISel will fall back on SDISel instead of
@@ -369,9 +346,6 @@ public:
 protected:
   // Helper to verify the analysis is really immutable.
   void setOpt(bool &Opt, bool Val);
-
-  /// Return true if register allocator is specified by -regalloc=override.
-  bool isCustomizedRegAlloc();
 
   /// Methods with trivial inline returns are convenient points in the common
   /// codegen pass pipeline where targets may insert passes. Methods with
@@ -413,8 +387,7 @@ protected:
   virtual void addFastRegAlloc();
 
   /// addOptimizedRegAlloc - Add passes related to register allocation.
-  /// CodeGenTargetMachineImpl provides standard regalloc passes for most
-  /// targets.
+  /// LLVMTargetMachine provides standard regalloc passes for most targets.
   virtual void addOptimizedRegAlloc();
 
   /// addPreRewrite - Add passes to the optimized register allocation pipeline
@@ -427,7 +400,7 @@ protected:
   /// all virtual registers.
   ///
   /// Note if the target overloads addRegAssignAndRewriteOptimized, this may not
-  /// be honored. This is also not generally used for the fast variant,
+  /// be honored. This is also not generally used for the the fast variant,
   /// where the allocation and rewriting are done in one pass.
   virtual bool addPreRewrite() {
     return false;
@@ -464,10 +437,6 @@ protected:
   /// immediately before machine code is emitted.
   virtual void addPreEmitPass() { }
 
-  /// This pass may be implemented by targets that want to run passes
-  /// immediately after basic block sections are assigned.
-  virtual void addPostBBSections() {}
-
   /// Targets may add passes immediately before machine code is emitted in this
   /// callback. This is called even later than `addPreEmitPass`.
   // FIXME: Rename `addPreEmitPass` to something more sensible given its actual
@@ -480,12 +449,16 @@ protected:
 
   /// Add a CodeGen pass at this point in the pipeline after checking overrides.
   /// Return the pass that was added, or zero if no pass was added.
-  AnalysisID addPass(AnalysisID PassID);
+  /// @p verifyAfter   if true and adding a machine function pass add an extra
+  ///                  machine verification pass afterwards.
+  AnalysisID addPass(AnalysisID PassID, bool verifyAfter = true);
 
   /// Add a pass to the PassManager if that pass is supposed to be run, as
   /// determined by the StartAfter and StopAfter options. Takes ownership of the
   /// pass.
-  void addPass(Pass *P);
+  /// @p verifyAfter   if true and adding a machine function pass add an extra
+  ///                  machine verification pass afterwards.
+  void addPass(Pass *P, bool verifyAfter = true);
 
   /// addMachinePasses helper to create the target-selected or overriden
   /// regalloc pass.
@@ -498,7 +471,7 @@ protected:
 };
 
 void registerCodeGenCallback(PassInstrumentationCallbacks &PIC,
-                             TargetMachine &);
+                             LLVMTargetMachine &);
 
 } // end namespace llvm
 

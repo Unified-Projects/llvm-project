@@ -27,12 +27,7 @@ void SleepMS() {
   struct timespec Interval;
   Interval.tv_sec = 0;
   Interval.tv_nsec = 1000000;
-#if defined(__MVS__)
-  long Microseconds = (Interval.tv_nsec + 999) / 1000;
-  usleep(Microseconds);
-#else
   nanosleep(&Interval, nullptr);
-#endif
 #endif
 }
 
@@ -50,7 +45,7 @@ TEST(Timer, Additivity) {
   T1.stopTimer();
   auto TR2 = T1.getTotalTime();
 
-  EXPECT_LT(TR1, TR2);
+  EXPECT_TRUE(TR1 < TR2);
 }
 
 TEST(Timer, CheckIfTriggered) {

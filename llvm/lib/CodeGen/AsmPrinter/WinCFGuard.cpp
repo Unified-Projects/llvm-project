@@ -15,9 +15,11 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Module.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCStreamer.h"
 
@@ -25,9 +27,9 @@
 
 using namespace llvm;
 
-WinCFGuard::WinCFGuard(AsmPrinter *A) : Asm(A) {}
+WinCFGuard::WinCFGuard(AsmPrinter *A) : AsmPrinterHandler(), Asm(A) {}
 
-WinCFGuard::~WinCFGuard() = default;
+WinCFGuard::~WinCFGuard() {}
 
 void WinCFGuard::endFunction(const MachineFunction *MF) {
 
@@ -49,32 +51,26 @@ static bool isPossibleIndirectCallTarget(const Function *F) {
     const Value *FnOrCast = Users.pop_back_val();
     for (const Use &U : FnOrCast->uses()) {
       const User *FnUser = U.getUser();
-      if (isa<BlockAddress>(FnUser)) {
-        // Block addresses are illegal to call.
+      if (isa<BlockAddress>(FnUser))
         continue;
-      }
       if (const auto *Call = dyn_cast<CallBase>(FnUser)) {
-        if ((!Call->isCallee(&U) || U.get() != F) &&
-            !Call->getFunction()->getName().ends_with("$exit_thunk")) {
-          // Passing a function pointer to a call may lead to an indirect
-          // call. As an exception, ignore ARM64EC exit thunks.
+        if (!Call->isCallee(&U))
           return true;
-        }
       } else if (isa<Instruction>(FnUser)) {
         // Consider any other instruction to be an escape. This has some weird
         // consequences like no-op intrinsics being an escape or a store *to* a
         // function address being an escape.
         return true;
-      } else if (const auto *G = dyn_cast<GlobalValue>(FnUser)) {
-        // Ignore llvm.arm64ec.symbolmap; it doesn't lower to an actual address.
-        if (G->getName() == "llvm.arm64ec.symbolmap")
-          continue;
-        // Globals (for example, vtables) are escapes.
-        return true;
-      } else if (isa<Constant>(FnUser)) {
-        // Constants which aren't a global are intermediate values; recursively
-        // analyze the users to see if they actually escape.
-        Users.push_back(FnUser);
+      } else if (const auto *C = dyn_cast<Constant>(FnUser)) {
+        // If this is a constant pointer cast of the function, don't consider
+        // this escape. Analyze the uses of the cast as well. This ensures that
+        // direct calls with mismatched prototypes don't end up in the CFG
+        // table. Consider other constants, such as vtable initializers, to
+        // escape the function.
+        if (C->stripPointerCasts() == F)
+          Users.push_back(FnUser);
+        else
+          return true;
       }
     }
   }
@@ -82,7 +78,7 @@ static bool isPossibleIndirectCallTarget(const Function *F) {
 }
 
 MCSymbol *WinCFGuard::lookupImpSymbol(const MCSymbol *Sym) {
-  if (Sym->getName().starts_with("__imp_"))
+  if (Sym->getName().startswith("__imp_"))
     return nullptr;
   return Asm->OutContext.lookupSymbol(Twine("__imp_") + Sym->getName());
 }
@@ -114,19 +110,19 @@ void WinCFGuard::endModule() {
 
   // Emit the symbol index of each GFIDs entry to form the .gfids section.
   auto &OS = *Asm->OutStreamer;
-  OS.switchSection(Asm->OutContext.getObjectFileInfo()->getGFIDsSection());
+  OS.SwitchSection(Asm->OutContext.getObjectFileInfo()->getGFIDsSection());
   for (const MCSymbol *S : GFIDsEntries)
-    OS.emitCOFFSymbolIndex(S);
+    OS.EmitCOFFSymbolIndex(S);
 
   // Emit the symbol index of each GIATs entry to form the .giats section.
-  OS.switchSection(Asm->OutContext.getObjectFileInfo()->getGIATsSection());
+  OS.SwitchSection(Asm->OutContext.getObjectFileInfo()->getGIATsSection());
   for (const MCSymbol *S : GIATsEntries) {
-    OS.emitCOFFSymbolIndex(S);
+    OS.EmitCOFFSymbolIndex(S);
   }
 
   // Emit the symbol index of each longjmp target to form the .gljmp section.
-  OS.switchSection(Asm->OutContext.getObjectFileInfo()->getGLJMPSection());
+  OS.SwitchSection(Asm->OutContext.getObjectFileInfo()->getGLJMPSection());
   for (const MCSymbol *S : LongjmpTargets) {
-    OS.emitCOFFSymbolIndex(S);
+    OS.EmitCOFFSymbolIndex(S);
   }
 }

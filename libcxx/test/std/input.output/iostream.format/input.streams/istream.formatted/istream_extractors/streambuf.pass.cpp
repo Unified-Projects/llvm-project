@@ -6,8 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// Requires 396145d in the built library.
-// XFAIL: using-built-library-before-llvm-9
+// XFAIL: use_system_cxx_lib && target={{.+}}-apple-macosx10.{{9|10|11|12|13|14}}
 
 // <istream>
 
@@ -18,7 +17,6 @@
 
 #include <istream>
 #include <cassert>
-#include <streambuf>
 
 #include "test_macros.h"
 
@@ -88,7 +86,6 @@ int main(int, char**)
         assert( is.eof());
         assert(!is.fail());
     }
-#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb(L" ");
         std::basic_istream<wchar_t> is(&sb);
@@ -105,7 +102,6 @@ int main(int, char**)
         assert( is.eof());
         assert(!is.fail());
     }
-#endif
 
     {
         testbuf<char> sb;
@@ -123,7 +119,6 @@ int main(int, char**)
         assert( is.eof());
         assert( is.fail());
     }
-#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb;
         std::basic_istream<wchar_t> is(&sb);
@@ -140,7 +135,6 @@ int main(int, char**)
         assert( is.eof());
         assert( is.fail());
     }
-#endif
 
     {
         testbuf<char> sb;
@@ -157,7 +151,6 @@ int main(int, char**)
         assert(!is.eof());
         assert( is.fail());
     }
-#ifndef TEST_HAS_NO_WIDE_CHARACTERS
     {
         testbuf<wchar_t> sb;
         std::basic_istream<wchar_t> is(&sb);
@@ -174,7 +167,6 @@ int main(int, char**)
         assert( is.fail());
     }
 #endif
-#endif // TEST_HAS_NO_EXCEPTIONS
 
     return 0;
 }

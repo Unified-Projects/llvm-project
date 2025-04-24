@@ -21,7 +21,6 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
-#include "llvm/CodeGen/MBFIWrapper.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
@@ -29,15 +28,19 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MBFIWrapper.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/CommandLine.h"
@@ -70,6 +73,8 @@ static cl::opt<bool> DisableTriangleR("disable-ifcvt-triangle-rev",
                                       cl::init(false), cl::Hidden);
 static cl::opt<bool> DisableTriangleF("disable-ifcvt-triangle-false",
                                       cl::init(false), cl::Hidden);
+static cl::opt<bool> DisableTriangleFR("disable-ifcvt-triangle-false-rev",
+                                       cl::init(false), cl::Hidden);
 static cl::opt<bool> DisableDiamond("disable-ifcvt-diamond",
                                     cl::init(false), cl::Hidden);
 static cl::opt<bool> DisableForkedDiamond("disable-ifcvt-forked-diamond",
@@ -186,16 +191,16 @@ namespace {
     std::vector<BBInfo> BBAnalysis;
     TargetSchedModel SchedModel;
 
-    const TargetLoweringBase *TLI = nullptr;
-    const TargetInstrInfo *TII = nullptr;
-    const TargetRegisterInfo *TRI = nullptr;
-    const MachineBranchProbabilityInfo *MBPI = nullptr;
-    MachineRegisterInfo *MRI = nullptr;
+    const TargetLoweringBase *TLI;
+    const TargetInstrInfo *TII;
+    const TargetRegisterInfo *TRI;
+    const MachineBranchProbabilityInfo *MBPI;
+    MachineRegisterInfo *MRI;
 
     LivePhysRegs Redefs;
 
-    bool PreRegAlloc = true;
-    bool MadeChange = false;
+    bool PreRegAlloc;
+    bool MadeChange;
     int FnNum = -1;
     std::function<bool(const MachineFunction &)> PredicateFtor;
 
@@ -208,8 +213,8 @@ namespace {
     }
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
-      AU.addRequired<MachineBranchProbabilityInfoWrapperPass>();
+      AU.addRequired<MachineBlockFrequencyInfo>();
+      AU.addRequired<MachineBranchProbabilityInfo>();
       AU.addRequired<ProfileSummaryInfoWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
@@ -431,7 +436,7 @@ char IfConverter::ID = 0;
 char &llvm::IfConverterID = IfConverter::ID;
 
 INITIALIZE_PASS_BEGIN(IfConverter, DEBUG_TYPE, "If Converter", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineBranchProbabilityInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineBranchProbabilityInfo)
 INITIALIZE_PASS_DEPENDENCY(ProfileSummaryInfoWrapperPass)
 INITIALIZE_PASS_END(IfConverter, DEBUG_TYPE, "If Converter", false, false)
 
@@ -443,9 +448,8 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   TLI = ST.getTargetLowering();
   TII = ST.getInstrInfo();
   TRI = ST.getRegisterInfo();
-  MBFIWrapper MBFI(
-      getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI());
-  MBPI = &getAnalysis<MachineBranchProbabilityInfoWrapperPass>().getMBPI();
+  MBFIWrapper MBFI(getAnalysis<MachineBlockFrequencyInfo>());
+  MBPI = &getAnalysis<MachineBranchProbabilityInfo>();
   ProfileSummaryInfo *PSI =
       &getAnalysis<ProfileSummaryInfoWrapperPass>().getPSI();
   MRI = &MF.getRegInfo();
@@ -530,6 +534,7 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
         if (DisableTriangle && !isFalse && !isRev) break;
         if (DisableTriangleR && !isFalse && isRev) break;
         if (DisableTriangleF && isFalse && !isRev) break;
+        if (DisableTriangleFR && isFalse && isRev) break;
         LLVM_DEBUG(dbgs() << "Ifcvt (Triangle");
         if (isFalse)
           LLVM_DEBUG(dbgs() << " false");
@@ -541,12 +546,13 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
         RetVal = IfConvertTriangle(BBI, Kind);
         LLVM_DEBUG(dbgs() << (RetVal ? "succeeded!" : "failed!") << "\n");
         if (RetVal) {
-          if (isFalse)
-            ++NumTriangleFalse;
-          else if (isRev)
-            ++NumTriangleRev;
-          else
-            ++NumTriangle;
+          if (isFalse) {
+            if (isRev) ++NumTriangleFRev;
+            else       ++NumTriangleFalse;
+          } else {
+            if (isRev) ++NumTriangleRev;
+            else       ++NumTriangle;
+          }
         }
         break;
       }
@@ -1205,11 +1211,11 @@ bool IfConverter::FeasibilityAnalysis(BBInfo &BBI,
 void IfConverter::AnalyzeBlock(
     MachineBasicBlock &MBB, std::vector<std::unique_ptr<IfcvtToken>> &Tokens) {
   struct BBState {
-    BBState(MachineBasicBlock &MBB) : MBB(&MBB) {}
+    BBState(MachineBasicBlock &MBB) : MBB(&MBB), SuccsAnalyzed(false) {}
     MachineBasicBlock *MBB;
 
     /// This flag is true if MBB's successors have been analyzed.
-    bool SuccsAnalyzed = false;
+    bool SuccsAnalyzed;
   };
 
   // Push MBB to the stack.
@@ -1508,9 +1514,19 @@ static void UpdatePredRedefs(MachineInstr &MI, LivePhysRegs &Redefs) {
       MIB.addReg(Reg, RegState::Implicit | RegState::Define);
       continue;
     }
-    if (any_of(TRI->subregs_inclusive(Reg),
-               [&](MCPhysReg S) { return LiveBeforeMI.count(S); }))
+    if (LiveBeforeMI.count(Reg))
       MIB.addReg(Reg, RegState::Implicit);
+    else {
+      bool HasLiveSubReg = false;
+      for (MCSubRegIterator S(Reg, TRI); S.isValid(); ++S) {
+        if (!LiveBeforeMI.count(*S))
+          continue;
+        HasLiveSubReg = true;
+        break;
+      }
+      if (HasLiveSubReg)
+        MIB.addReg(Reg, RegState::Implicit);
+    }
   }
 }
 
@@ -1834,9 +1850,9 @@ bool IfConverter::IfConvertDiamondCommon(
   }
   while (NumDups1 != 0) {
     // Since this instruction is going to be deleted, update call
-    // info state if the instruction is call instruction.
-    if (DI2->shouldUpdateAdditionalCallInfo())
-      MBB2.getParent()->eraseAdditionalCallInfo(&*DI2);
+    // site info state if the instruction is call instruction.
+    if (DI2->shouldUpdateCallSiteInfo())
+      MBB2.getParent()->eraseCallSiteInfo(&*DI2);
 
     ++DI2;
     if (DI2 == MBB2.end())
@@ -1883,9 +1899,9 @@ bool IfConverter::IfConvertDiamondCommon(
     --DI1;
 
     // Since this instruction is going to be deleted, update call
-    // info state if the instruction is call instruction.
-    if (DI1->shouldUpdateAdditionalCallInfo())
-      MBB1.getParent()->eraseAdditionalCallInfo(&*DI1);
+    // site info state if the instruction is call instruction.
+    if (DI1->shouldUpdateCallSiteInfo())
+      MBB1.getParent()->eraseCallSiteInfo(&*DI1);
 
     // skip dbg_value instructions
     if (!DI1->isDebugInstr())
@@ -1944,15 +1960,17 @@ bool IfConverter::IfConvertDiamondCommon(
         } else if (!RedefsByFalse.count(Reg)) {
           // These are defined before ctrl flow reach the 'false' instructions.
           // They cannot be modified by the 'true' instructions.
-          for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg))
-            ExtUses.insert(SubReg);
+          for (MCSubRegIterator SubRegs(Reg, TRI, /*IncludeSelf=*/true);
+               SubRegs.isValid(); ++SubRegs)
+            ExtUses.insert(*SubRegs);
         }
       }
 
       for (MCPhysReg Reg : Defs) {
         if (!ExtUses.count(Reg)) {
-          for (MCPhysReg SubReg : TRI->subregs_inclusive(Reg))
-            RedefsByFalse.insert(SubReg);
+          for (MCSubRegIterator SubRegs(Reg, TRI, /*IncludeSelf=*/true);
+               SubRegs.isValid(); ++SubRegs)
+            RedefsByFalse.insert(*SubRegs);
         }
       }
     }
@@ -2096,7 +2114,7 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
 static bool MaySpeculate(const MachineInstr &MI,
                          SmallSet<MCPhysReg, 4> &LaterRedefs) {
   bool SawStore = true;
-  if (!MI.isSafeToMove(SawStore))
+  if (!MI.isSafeToMove(nullptr, SawStore))
     return false;
 
   for (const MachineOperand &MO : MI.operands()) {
@@ -2169,9 +2187,9 @@ void IfConverter::CopyAndPredicateBlock(BBInfo &ToBBI, BBInfo &FromBBI,
       break;
 
     MachineInstr *MI = MF.CloneMachineInstr(&I);
-    // Make a copy of the call info.
-    if (I.isCandidateForAdditionalCallInfo())
-      MF.copyAdditionalCallInfo(&I, MI);
+    // Make a copy of the call site info.
+    if (I.isCandidateForCallSiteEntry())
+      MF.copyCallSiteInfo(&I, MI);
 
     ToBBI.BB->insert(ToBBI.BB->end(), MI);
     ToBBI.NonPredSize++;
@@ -2227,15 +2245,6 @@ void IfConverter::MergeBlocks(BBInfo &ToBBI, BBInfo &FromBBI, bool AddEdges) {
   MachineBasicBlock &FromMBB = *FromBBI.BB;
   assert(!FromMBB.hasAddressTaken() &&
          "Removing a BB whose address is taken!");
-
-  // If we're about to splice an INLINEASM_BR from FromBBI, we need to update
-  // ToBBI's successor list accordingly.
-  if (FromMBB.mayHaveInlineAsmBr())
-    for (MachineInstr &MI : FromMBB)
-      if (MI.getOpcode() == TargetOpcode::INLINEASM_BR)
-        for (MachineOperand &MO : MI.operands())
-          if (MO.isMBB() && !ToBBI.BB->isSuccessor(MO.getMBB()))
-            ToBBI.BB->addSuccessor(MO.getMBB(), BranchProbability::getZero());
 
   // In case FromMBB contains terminators (e.g. return instruction),
   // first move the non-terminator instructions, then the terminators.

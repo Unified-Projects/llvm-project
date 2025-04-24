@@ -8,6 +8,7 @@
 
 #include "lldb/Interpreter/OptionValueArray.h"
 
+#include "lldb/Host/StringConvert.h"
 #include "lldb/Utility/Args.h"
 #include "lldb/Utility/Stream.h"
 
@@ -75,14 +76,6 @@ void OptionValueArray::DumpValue(const ExecutionContext *exe_ctx, Stream &strm,
   }
 }
 
-llvm::json::Value OptionValueArray::ToJSON(const ExecutionContext *exe_ctx) {
-  llvm::json::Array json_array;
-  const uint32_t size = m_values.size();
-  for (uint32_t i = 0; i < size; ++i)
-    json_array.emplace_back(m_values[i]->ToJSON(exe_ctx));
-  return json_array;
-}
-
 Status OptionValueArray::SetValueFromString(llvm::StringRef value,
                                             VarSetOperationType op) {
   Args args(value.str());
@@ -94,12 +87,13 @@ Status OptionValueArray::SetValueFromString(llvm::StringRef value,
 
 lldb::OptionValueSP
 OptionValueArray::GetSubValue(const ExecutionContext *exe_ctx,
-                              llvm::StringRef name, Status &error) const {
+                              llvm::StringRef name, bool will_modify,
+                              Status &error) const {
   if (name.empty() || name.front() != '[') {
-    error = Status::FromErrorStringWithFormat(
-        "invalid value path '%s', %s values only support '[<index>]' subvalues "
-        "where <index> is a positive or negative array index",
-        name.str().c_str(), GetTypeAsCString());
+    error.SetErrorStringWithFormat(
+      "invalid value path '%s', %s values only support '[<index>]' subvalues "
+      "where <index> is a positive or negative array index",
+      name.str().c_str(), GetTypeAsCString());
     return nullptr;
   }
 
@@ -128,24 +122,24 @@ OptionValueArray::GetSubValue(const ExecutionContext *exe_ctx,
   if (new_idx < array_count) {
     if (m_values[new_idx]) {
       if (!sub_value.empty())
-        return m_values[new_idx]->GetSubValue(exe_ctx, sub_value, error);
+        return m_values[new_idx]->GetSubValue(exe_ctx, sub_value,
+                                              will_modify, error);
       else
         return m_values[new_idx];
     }
   } else {
     if (array_count == 0)
-      error = Status::FromErrorStringWithFormat(
+      error.SetErrorStringWithFormat(
           "index %i is not valid for an empty array", idx);
     else if (idx > 0)
-      error = Status::FromErrorStringWithFormat(
-          "index %i out of range, valid values are 0 through %" PRIu64, idx,
-          (uint64_t)(array_count - 1));
+      error.SetErrorStringWithFormat(
+          "index %i out of range, valid values are 0 through %" PRIu64,
+          idx, (uint64_t)(array_count - 1));
     else
-      error =
-          Status::FromErrorStringWithFormat("negative index %i out of range, "
-                                            "valid values are -1 through "
-                                            "-%" PRIu64,
-                                            idx, (uint64_t)array_count);
+      error.SetErrorStringWithFormat("negative index %i out of range, "
+                                      "valid values are -1 through "
+                                      "-%" PRIu64,
+                                      idx, (uint64_t)array_count);
   }
   return OptionValueSP();
 }
@@ -154,9 +148,9 @@ size_t OptionValueArray::GetArgs(Args &args) const {
   args.Clear();
   const uint32_t size = m_values.size();
   for (uint32_t i = 0; i < size; ++i) {
-    auto string_value = m_values[i]->GetValueAs<llvm::StringRef>();
-    if (string_value)
-      args.AppendArgument(*string_value);
+    llvm::StringRef string_value = m_values[i]->GetStringValue();
+    if (!string_value.empty())
+      args.AppendArgument(string_value);
   }
 
   return args.GetArgumentCount();
@@ -167,18 +161,19 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
   const size_t argc = args.GetArgumentCount();
   switch (op) {
   case eVarSetOperationInvalid:
-    error = Status::FromErrorString("unsupported operation");
+    error.SetErrorString("unsupported operation");
     break;
 
   case eVarSetOperationInsertBefore:
   case eVarSetOperationInsertAfter:
     if (argc > 1) {
-      uint32_t idx;
+      uint32_t idx =
+          StringConvert::ToUInt32(args.GetArgumentAtIndex(0), UINT32_MAX);
       const uint32_t count = GetSize();
-      if (!llvm::to_integer(args.GetArgumentAtIndex(0), idx) || idx > count) {
-        error = Status::FromErrorStringWithFormat(
-            "invalid insert array index %s, index must be 0 through %u",
-            args.GetArgumentAtIndex(0), count);
+      if (idx > count) {
+        error.SetErrorStringWithFormat(
+            "invalid insert array index %u, index must be 0 through %u", idx,
+            count);
       } else {
         if (op == eVarSetOperationInsertAfter)
           ++idx;
@@ -193,16 +188,15 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
             else
               m_values.insert(m_values.begin() + idx, value_sp);
           } else {
-            error = Status::FromErrorString(
+            error.SetErrorString(
                 "array of complex types must subclass OptionValueArray");
             return error;
           }
         }
       }
     } else {
-      error = Status::FromErrorString(
-          "insert operation takes an array index followed by "
-          "one or more values");
+      error.SetErrorString("insert operation takes an array index followed by "
+                           "one or more values");
     }
     break;
 
@@ -213,8 +207,9 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
       bool all_indexes_valid = true;
       size_t i;
       for (i = 0; i < argc; ++i) {
-        size_t idx;
-        if (!llvm::to_integer(args.GetArgumentAtIndex(i), idx) || idx >= size) {
+        const size_t idx =
+            StringConvert::ToSInt32(args.GetArgumentAtIndex(i), INT32_MAX);
+        if (idx >= size) {
           all_indexes_valid = false;
           break;
         } else
@@ -226,7 +221,7 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
         if (num_remove_indexes) {
           // Sort and then erase in reverse so indexes are always valid
           if (num_remove_indexes > 1) {
-            llvm::sort(remove_indexes);
+            llvm::sort(remove_indexes.begin(), remove_indexes.end());
             for (std::vector<int>::const_reverse_iterator
                      pos = remove_indexes.rbegin(),
                      end = remove_indexes.rend();
@@ -239,13 +234,12 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
           }
         }
       } else {
-        error = Status::FromErrorStringWithFormat(
+        error.SetErrorStringWithFormat(
             "invalid array index '%s', aborting remove operation",
             args.GetArgumentAtIndex(i));
       }
     } else {
-      error = Status::FromErrorString(
-          "remove operation takes one or more array indices");
+      error.SetErrorString("remove operation takes one or more array indices");
     }
     break;
 
@@ -255,12 +249,13 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
 
   case eVarSetOperationReplace:
     if (argc > 1) {
-      uint32_t idx;
+      uint32_t idx =
+          StringConvert::ToUInt32(args.GetArgumentAtIndex(0), UINT32_MAX);
       const uint32_t count = GetSize();
-      if (!llvm::to_integer(args.GetArgumentAtIndex(0), idx) || idx > count) {
-        error = Status::FromErrorStringWithFormat(
-            "invalid replace array index %s, index must be 0 through %u",
-            args.GetArgumentAtIndex(0), count);
+      if (idx > count) {
+        error.SetErrorStringWithFormat(
+            "invalid replace array index %u, index must be 0 through %u", idx,
+            count);
       } else {
         for (size_t i = 1; i < argc; ++i, ++idx) {
           lldb::OptionValueSP value_sp(CreateValueFromCStringForTypeMask(
@@ -273,23 +268,22 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
             else
               m_values.push_back(value_sp);
           } else {
-            error = Status::FromErrorString(
+            error.SetErrorString(
                 "array of complex types must subclass OptionValueArray");
             return error;
           }
         }
       }
     } else {
-      error = Status::FromErrorString(
-          "replace operation takes an array index followed by "
-          "one or more values");
+      error.SetErrorString("replace operation takes an array index followed by "
+                           "one or more values");
     }
     break;
 
   case eVarSetOperationAssign:
     m_values.clear();
     // Fall through to append case
-    [[fallthrough]];
+    LLVM_FALLTHROUGH;
   case eVarSetOperationAppend:
     for (size_t i = 0; i < argc; ++i) {
       lldb::OptionValueSP value_sp(CreateValueFromCStringForTypeMask(
@@ -300,7 +294,7 @@ Status OptionValueArray::SetArgs(const Args &args, VarSetOperationType op) {
         m_value_was_set = true;
         AppendValue(value_sp);
       } else {
-        error = Status::FromErrorString(
+        error.SetErrorString(
             "array of complex types must subclass OptionValueArray");
       }
     }

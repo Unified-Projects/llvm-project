@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// UNSUPPORTED: libcpp-has-no-threads
 
 // <atomic>
 
@@ -34,9 +36,8 @@
 // typedef atomic<uintmax_t> atomic_uintmax_t;
 
 #include <atomic>
-#include <cstddef>
-#include <cstdint>
 #include <type_traits>
+#include <cstdint>
 
 #include "test_macros.h"
 

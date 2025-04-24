@@ -15,6 +15,8 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/iterator_range.h"
+#include "llvm/Analysis/DominanceFrontier.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/RegionInfo.h"
@@ -22,6 +24,7 @@
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <iterator>
@@ -34,7 +37,6 @@
 #define DEBUG_TYPE "region"
 
 namespace llvm {
-class raw_ostream;
 
 //===----------------------------------------------------------------------===//
 /// RegionBase Implementation
@@ -159,12 +161,20 @@ typename Tr::LoopT *RegionBase<Tr>::outermostLoopInRegion(LoopInfoT *LI,
 
 template <class Tr>
 typename RegionBase<Tr>::BlockT *RegionBase<Tr>::getEnteringBlock() const {
-  auto isEnteringBlock = [&](BlockT *Pred, bool AllowRepeats) -> BlockT * {
-    assert(!AllowRepeats && "Unexpected parameter value.");
-    return DT->getNode(Pred) && !contains(Pred) ? Pred : nullptr;
-  };
-  return find_singleton<BlockT>(llvm::inverse_children<BlockT *>(getEntry()),
-                                isEnteringBlock);
+  BlockT *entry = getEntry();
+  BlockT *enteringBlock = nullptr;
+
+  for (BlockT *Pred : make_range(InvBlockTraits::child_begin(entry),
+                                 InvBlockTraits::child_end(entry))) {
+    if (DT->getNode(Pred) && !contains(Pred)) {
+      if (enteringBlock)
+        return nullptr;
+
+      enteringBlock = Pred;
+    }
+  }
+
+  return enteringBlock;
 }
 
 template <class Tr>
@@ -175,7 +185,10 @@ bool RegionBase<Tr>::getExitingBlocks(
   if (!exit)
     return CoverAll;
 
-  for (BlockT *Pred : llvm::inverse_children<BlockT *>(exit)) {
+  for (PredIterTy PI = InvBlockTraits::child_begin(exit),
+                  PE = InvBlockTraits::child_end(exit);
+       PI != PE; ++PI) {
+    BlockT *Pred = *PI;
     if (contains(Pred)) {
       Exitings.push_back(Pred);
       continue;
@@ -190,15 +203,22 @@ bool RegionBase<Tr>::getExitingBlocks(
 template <class Tr>
 typename RegionBase<Tr>::BlockT *RegionBase<Tr>::getExitingBlock() const {
   BlockT *exit = getExit();
+  BlockT *exitingBlock = nullptr;
+
   if (!exit)
     return nullptr;
 
-  auto isContained = [&](BlockT *Pred, bool AllowRepeats) -> BlockT * {
-    assert(!AllowRepeats && "Unexpected parameter value.");
-    return contains(Pred) ? Pred : nullptr;
-  };
-  return find_singleton<BlockT>(llvm::inverse_children<BlockT *>(exit),
-                                isContained);
+  for (BlockT *Pred : make_range(InvBlockTraits::child_begin(exit),
+                                 InvBlockTraits::child_end(exit))) {
+    if (contains(Pred)) {
+      if (exitingBlock)
+        return nullptr;
+
+      exitingBlock = Pred;
+    }
+  }
+
+  return exitingBlock;
 }
 
 template <class Tr>
@@ -238,17 +258,17 @@ void RegionBase<Tr>::verifyBBInRegion(BlockT *BB) const {
 
   BlockT *entry = getEntry(), *exit = getExit();
 
-  for (BlockT *Succ : llvm::children<BlockT *>(BB)) {
+  for (BlockT *Succ :
+       make_range(BlockTraits::child_begin(BB), BlockTraits::child_end(BB))) {
     if (!contains(Succ) && exit != Succ)
       report_fatal_error("Broken region found: edges leaving the region must go "
                          "to the exit node!");
   }
 
   if (entry != BB) {
-    for (BlockT *Pred : llvm::inverse_children<BlockT *>(BB)) {
-      // Allow predecessors that are unreachable, as these are ignored during
-      // region analysis.
-      if (!contains(Pred) && DT->isReachableFromEntry(Pred))
+    for (BlockT *Pred : make_range(InvBlockTraits::child_begin(BB),
+                                   InvBlockTraits::child_end(BB))) {
+      if (!contains(Pred))
         report_fatal_error("Broken region found: edges entering the region must "
                            "go to the entry node!");
     }
@@ -263,7 +283,8 @@ void RegionBase<Tr>::verifyWalk(BlockT *BB, std::set<BlockT *> *visited) const {
 
   verifyBBInRegion(BB);
 
-  for (BlockT *Succ : llvm::children<BlockT *>(BB)) {
+  for (BlockT *Succ :
+       make_range(BlockTraits::child_begin(BB), BlockTraits::child_end(BB))) {
     if (Succ != exit && visited->find(Succ) == visited->end())
       verifyWalk(Succ, visited);
   }
@@ -338,11 +359,14 @@ template <class Tr>
 typename Tr::RegionNodeT *RegionBase<Tr>::getBBNode(BlockT *BB) const {
   assert(contains(BB) && "Can get BB node out of this region!");
 
-  auto [at, Inserted] = BBNodeMap.try_emplace(BB);
-  if (Inserted) {
+  typename BBNodeMapT::const_iterator at = BBNodeMap.find(BB);
+
+  if (at == BBNodeMap.end()) {
     auto Deconst = const_cast<RegionBase<Tr> *>(this);
-    at->second =
-        std::make_unique<RegionNodeT>(static_cast<RegionT *>(Deconst), BB);
+    typename BBNodeMapT::value_type V = {
+        BB,
+        std::make_unique<RegionNodeT>(static_cast<RegionT *>(Deconst), BB)};
+    at = BBNodeMap.insert(std::move(V)).first;
   }
   return at->second.get();
 }
@@ -368,10 +392,10 @@ void RegionBase<Tr>::transferChildrenTo(RegionT *To) {
 template <class Tr>
 void RegionBase<Tr>::addSubRegion(RegionT *SubRegion, bool moveChildren) {
   assert(!SubRegion->parent && "SubRegion already has a parent!");
-  assert(llvm::none_of(*this,
+  assert(llvm::find_if(*this,
                        [&](const std::unique_ptr<RegionT> &R) {
                          return R.get() == SubRegion;
-                       }) &&
+                       }) == children.end() &&
          "Subregion already exists!");
 
   SubRegion->parent = static_cast<RegionT *>(this);
@@ -441,7 +465,8 @@ typename Tr::RegionT *RegionBase<Tr>::getExpandedRegion() const {
   RegionT *R = RI->getRegionFor(exit);
 
   if (R->getEntry() != exit) {
-    for (BlockT *Pred : llvm::inverse_children<BlockT *>(getExit()))
+    for (BlockT *Pred : make_range(InvBlockTraits::child_begin(getExit()),
+                                   InvBlockTraits::child_end(getExit())))
       if (!contains(Pred))
         return nullptr;
     if (Tr::getNumSuccessors(exit) == 1)
@@ -452,7 +477,8 @@ typename Tr::RegionT *RegionBase<Tr>::getExpandedRegion() const {
   while (R->getParent() && R->getParent()->getEntry() == exit)
     R = R->getParent();
 
-  for (BlockT *Pred : llvm::inverse_children<BlockT *>(getExit())) {
+  for (BlockT *Pred : make_range(InvBlockTraits::child_begin(getExit()),
+                                 InvBlockTraits::child_end(getExit()))) {
     if (!(contains(Pred) || R->contains(Pred)))
       return nullptr;
   }
@@ -539,7 +565,8 @@ void RegionInfoBase<Tr>::verifyBBMap(const RegionT *R) const {
 template <class Tr>
 bool RegionInfoBase<Tr>::isCommonDomFrontier(BlockT *BB, BlockT *entry,
                                              BlockT *exit) const {
-  for (BlockT *P : llvm::inverse_children<BlockT *>(BB)) {
+  for (BlockT *P : make_range(InvBlockTraits::child_begin(BB),
+                              InvBlockTraits::child_end(BB))) {
     if (DT->dominates(entry, P) && !DT->dominates(exit, P))
       return false;
   }
@@ -572,7 +599,7 @@ bool RegionInfoBase<Tr>::isRegion(BlockT *entry, BlockT *exit) const {
   for (BlockT *Succ : *entrySuccs) {
     if (Succ == exit || Succ == entry)
       continue;
-    if (!exitSuccs->contains(Succ))
+    if (exitSuccs->find(Succ) == exitSuccs->end())
       return false;
     if (!isCommonDomFrontier(Succ, entry, exit))
       return false;
@@ -642,7 +669,11 @@ typename Tr::RegionT *RegionInfoBase<Tr>::createRegion(BlockT *entry,
       new RegionT(entry, exit, static_cast<RegionInfoT *>(this), DT);
   BBtoRegion.insert({entry, region});
 
+#ifdef EXPENSIVE_CHECKS
   region->verifyRegion();
+#else
+  LLVM_DEBUG(region->verifyRegion());
+#endif
 
   updateStatistics(region);
   return region;
@@ -761,12 +792,12 @@ template <class Tr>
 void RegionInfoBase<Tr>::dump() const { print(dbgs()); }
 #endif
 
-template <class Tr> void RegionInfoBase<Tr>::releaseMemory() {
+template <class Tr>
+void RegionInfoBase<Tr>::releaseMemory() {
   BBtoRegion.clear();
-  if (TopLevelRegion) {
+  if (TopLevelRegion)
     delete TopLevelRegion;
-    TopLevelRegion = nullptr;
-  }
+  TopLevelRegion = nullptr;
 }
 
 template <class Tr>
@@ -811,8 +842,7 @@ RegionInfoBase<Tr>::getMaxRegionExit(BlockT *BB) const {
     // Get the single exit of BB.
     if (R && R->getEntry() == BB)
       Exit = R->getExit();
-    else if (std::next(BlockTraits::child_begin(BB)) ==
-             BlockTraits::child_end(BB))
+    else if (++BlockTraits::child_begin(BB) == BlockTraits::child_end(BB))
       Exit = *BlockTraits::child_begin(BB);
     else // No single exit exists.
       return Exit;
@@ -823,7 +853,8 @@ RegionInfoBase<Tr>::getMaxRegionExit(BlockT *BB) const {
            ExitR->getParent()->getEntry() == Exit)
       ExitR = ExitR->getParent();
 
-    for (BlockT *Pred : llvm::inverse_children<BlockT *>(Exit)) {
+    for (BlockT *Pred : make_range(InvBlockTraits::child_begin(Exit),
+                                   InvBlockTraits::child_end(Exit))) {
       if (!R->contains(Pred) && !ExitR->contains(Pred))
         break;
     }

@@ -20,9 +20,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
-#include <optional>
 
-#include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-simplify"
 
 using namespace llvm;
@@ -39,7 +37,7 @@ namespace {
 /// that the analysis of accesses in a statement is becoming too complex. Chosen
 /// to be relatively small because all the common cases should access only few
 /// array elements per statement.
-static unsigned const SimplifyMaxDisjuncts = 4;
+static int const SimplifyMaxDisjuncts = 4;
 
 TWO_STATISTICS(ScopsProcessed, "Number of SCoPs processed");
 TWO_STATISTICS(ScopsModified, "Number of SCoPs simplified");
@@ -97,19 +95,18 @@ static isl::union_map underapproximatedAddMap(isl::union_map UMap,
 
   // Fast path: If known that we cannot exceed the disjunct limit, just add
   // them.
-  if (unsignedFromIslSize(PrevMap.n_basic_map()) +
-          unsignedFromIslSize(Map.n_basic_map()) <=
+  if (isl_map_n_basic_map(PrevMap.get()) + isl_map_n_basic_map(Map.get()) <=
       SimplifyMaxDisjuncts)
     return UMap.unite(Map);
 
   isl::map Result = isl::map::empty(PrevMap.get_space());
   for (isl::basic_map BMap : PrevMap.get_basic_map_list()) {
-    if (unsignedFromIslSize(Result.n_basic_map()) > SimplifyMaxDisjuncts)
+    if (Result.n_basic_map() > SimplifyMaxDisjuncts)
       break;
     Result = Result.unite(BMap);
   }
   for (isl::basic_map BMap : Map.get_basic_map_list()) {
-    if (unsignedFromIslSize(Result.n_basic_map()) > SimplifyMaxDisjuncts)
+    if (isl_map_n_basic_map(Result.get()) > SimplifyMaxDisjuncts)
       break;
     Result = Result.unite(BMap);
   }
@@ -121,7 +118,7 @@ static isl::union_map underapproximatedAddMap(isl::union_map UMap,
   return UResult;
 }
 
-class SimplifyImpl final {
+class SimplifyImpl {
 private:
   /// The invocation id (if there are multiple instances in the pass manager's
   /// pipeline) to determine which statistics to update.
@@ -238,8 +235,8 @@ void SimplifyImpl::removeEmptyDomainStmts() {
 
   assert(NumStmtsBefore >= S->getSize());
   EmptyDomainsRemoved = NumStmtsBefore - S->getSize();
-  POLLY_DEBUG(dbgs() << "Removed " << EmptyDomainsRemoved << " (of "
-                     << NumStmtsBefore << ") statements with empty domains \n");
+  LLVM_DEBUG(dbgs() << "Removed " << EmptyDomainsRemoved << " (of "
+                    << NumStmtsBefore << ") statements with empty domains \n");
   TotalEmptyDomainsRemoved[CallNo] += EmptyDomainsRemoved;
 }
 
@@ -281,8 +278,8 @@ void SimplifyImpl::removeOverwrites() {
       // If all of a write's elements are overwritten, remove it.
       isl::union_map AccRelUnion = AccRel;
       if (AccRelUnion.is_subset(WillBeOverwritten)) {
-        POLLY_DEBUG(dbgs() << "Removing " << MA
-                           << " which will be overwritten anyway\n");
+        LLVM_DEBUG(dbgs() << "Removing " << MA
+                          << " which will be overwritten anyway\n");
 
         Stmt.removeSingleMemoryAccess(MA);
         OverwritesRemoved++;
@@ -533,9 +530,9 @@ void SimplifyImpl::removeRedundantWrites() {
           isl::map AccRelStoredVal = isl::map::from_domain_and_range(
               AccRelWrapped, makeValueSet(StoredVal));
           if (isl::union_map(AccRelStoredVal).is_subset(Known)) {
-            POLLY_DEBUG(dbgs() << "Cleanup of " << MA << ":\n");
-            POLLY_DEBUG(dbgs() << "      Scalar: " << *StoredVal << "\n");
-            POLLY_DEBUG(dbgs() << "      AccRel: " << AccRel << "\n");
+            LLVM_DEBUG(dbgs() << "Cleanup of " << MA << ":\n");
+            LLVM_DEBUG(dbgs() << "      Scalar: " << *StoredVal << "\n");
+            LLVM_DEBUG(dbgs() << "      AccRel: " << AccRel << "\n");
 
             Stmt.removeSingleMemoryAccess(MA);
 
@@ -577,8 +574,8 @@ void SimplifyImpl::removeUnnecessaryStmts() {
   S->simplifySCoP(true);
   assert(NumStmtsBefore >= S->getSize());
   StmtsRemoved = NumStmtsBefore - S->getSize();
-  POLLY_DEBUG(dbgs() << "Removed " << StmtsRemoved << " (of " << NumStmtsBefore
-                     << ") statements\n");
+  LLVM_DEBUG(dbgs() << "Removed " << StmtsRemoved << " (of " << NumStmtsBefore
+                    << ") statements\n");
   TotalStmtsRemoved[CallNo] += StmtsRemoved;
 }
 
@@ -596,7 +593,7 @@ void SimplifyImpl::removeEmptyPartialAccesses() {
       if (!AccRel.is_empty().is_true())
         continue;
 
-      POLLY_DEBUG(
+      LLVM_DEBUG(
           dbgs() << "Removing " << MA
                  << " because it's a partial access that never occurs\n");
       DeferredRemove.push_back(MA);
@@ -629,8 +626,8 @@ void SimplifyImpl::markAndSweep(LoopInfo *LI) {
   for (MemoryAccess *MA : AllMAs) {
     if (UsedMA.count(MA))
       continue;
-    POLLY_DEBUG(dbgs() << "Removing " << MA
-                       << " because its value is not used\n");
+    LLVM_DEBUG(dbgs() << "Removing " << MA
+                      << " because its value is not used\n");
     ScopStmt *Stmt = MA->getStatement();
     Stmt->removeSingleMemoryAccess(MA);
 
@@ -651,8 +648,8 @@ void SimplifyImpl::markAndSweep(LoopInfo *LI) {
     for (Instruction *Inst : AllInsts) {
       auto It = UsedInsts.find({&Stmt, Inst});
       if (It == UsedInsts.end()) {
-        POLLY_DEBUG(dbgs() << "Removing "; Inst->print(dbgs());
-                    dbgs() << " because it is not used\n");
+        LLVM_DEBUG(dbgs() << "Removing "; Inst->print(dbgs());
+                   dbgs() << " because it is not used\n");
         DeadInstructionsRemoved++;
         TotalDeadInstructionsRemoved[CallNo]++;
         continue;
@@ -709,31 +706,31 @@ void SimplifyImpl::run(Scop &S, LoopInfo *LI) {
   this->S = &S;
   ScopsProcessed[CallNo]++;
 
-  POLLY_DEBUG(dbgs() << "Removing statements that are never executed...\n");
+  LLVM_DEBUG(dbgs() << "Removing statements that are never executed...\n");
   removeEmptyDomainStmts();
 
-  POLLY_DEBUG(dbgs() << "Removing partial writes that never happen...\n");
+  LLVM_DEBUG(dbgs() << "Removing partial writes that never happen...\n");
   removeEmptyPartialAccesses();
 
-  POLLY_DEBUG(dbgs() << "Removing overwrites...\n");
+  LLVM_DEBUG(dbgs() << "Removing overwrites...\n");
   removeOverwrites();
 
-  POLLY_DEBUG(dbgs() << "Coalesce partial writes...\n");
+  LLVM_DEBUG(dbgs() << "Coalesce partial writes...\n");
   coalesceWrites();
 
-  POLLY_DEBUG(dbgs() << "Removing redundant writes...\n");
+  LLVM_DEBUG(dbgs() << "Removing redundant writes...\n");
   removeRedundantWrites();
 
-  POLLY_DEBUG(dbgs() << "Cleanup unused accesses...\n");
+  LLVM_DEBUG(dbgs() << "Cleanup unused accesses...\n");
   markAndSweep(LI);
 
-  POLLY_DEBUG(dbgs() << "Removing statements without side effects...\n");
+  LLVM_DEBUG(dbgs() << "Removing statements without side effects...\n");
   removeUnnecessaryStmts();
 
   if (isModified())
     ScopsModified[CallNo]++;
-  POLLY_DEBUG(dbgs() << "\nFinal Scop:\n");
-  POLLY_DEBUG(dbgs() << S);
+  LLVM_DEBUG(dbgs() << "\nFinal Scop:\n");
+  LLVM_DEBUG(dbgs() << S);
 
   auto ScopStats = S.getStatistics();
   NumValueWrites[CallNo] += ScopStats.NumValueWrites;
@@ -756,21 +753,21 @@ void SimplifyImpl::printScop(raw_ostream &OS, Scop &S) const {
   printAccesses(OS);
 }
 
-class SimplifyWrapperPass final : public ScopPass {
+class SimplifyWrapperPass : public ScopPass {
 public:
   static char ID;
   int CallNo;
-  std::optional<SimplifyImpl> Impl;
+  Optional<SimplifyImpl> Impl;
 
   explicit SimplifyWrapperPass(int CallNo = 0) : ScopPass(ID), CallNo(CallNo) {}
 
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequiredTransitive<ScopInfoRegionPass>();
     AU.addRequired<LoopInfoWrapperPass>();
     AU.setPreservesAll();
   }
 
-  bool runOnScop(Scop &S) override {
+  virtual bool runOnScop(Scop &S) override {
     LoopInfo *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
     Impl.emplace(CallNo);
@@ -779,12 +776,12 @@ public:
     return false;
   }
 
-  void printScop(raw_ostream &OS, Scop &S) const override {
+  virtual void printScop(raw_ostream &OS, Scop &S) const override {
     if (Impl)
       Impl->printScop(OS, S);
   }
 
-  void releaseMemory() override { Impl.reset(); }
+  virtual void releaseMemory() override { Impl.reset(); }
 };
 
 char SimplifyWrapperPass::ID;
@@ -852,49 +849,3 @@ INITIALIZE_PASS_BEGIN(SimplifyWrapperPass, "polly-simplify", "Polly - Simplify",
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(SimplifyWrapperPass, "polly-simplify", "Polly - Simplify",
                     false, false)
-
-//===----------------------------------------------------------------------===//
-
-namespace {
-/// Print result from SimplifyWrapperPass.
-class SimplifyPrinterLegacyPass final : public ScopPass {
-public:
-  static char ID;
-
-  SimplifyPrinterLegacyPass() : SimplifyPrinterLegacyPass(outs()) {}
-  explicit SimplifyPrinterLegacyPass(llvm::raw_ostream &OS)
-      : ScopPass(ID), OS(OS) {}
-
-  bool runOnScop(Scop &S) override {
-    SimplifyWrapperPass &P = getAnalysis<SimplifyWrapperPass>();
-
-    OS << "Printing analysis '" << P.getPassName() << "' for region: '"
-       << S.getRegion().getNameStr() << "' in function '"
-       << S.getFunction().getName() << "':\n";
-    P.printScop(OS, S);
-
-    return false;
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    ScopPass::getAnalysisUsage(AU);
-    AU.addRequired<SimplifyWrapperPass>();
-    AU.setPreservesAll();
-  }
-
-private:
-  llvm::raw_ostream &OS;
-};
-
-char SimplifyPrinterLegacyPass::ID = 0;
-} // namespace
-
-Pass *polly::createSimplifyPrinterLegacyPass(raw_ostream &OS) {
-  return new SimplifyPrinterLegacyPass(OS);
-}
-
-INITIALIZE_PASS_BEGIN(SimplifyPrinterLegacyPass, "polly-print-simplify",
-                      "Polly - Print Simplify actions", false, false)
-INITIALIZE_PASS_DEPENDENCY(SimplifyWrapperPass)
-INITIALIZE_PASS_END(SimplifyPrinterLegacyPass, "polly-print-simplify",
-                    "Polly - Print Simplify actions", false, false)

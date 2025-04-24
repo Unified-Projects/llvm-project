@@ -8,7 +8,6 @@
 
 #include "lldb/Interpreter/CommandReturnObject.h"
 
-#include "lldb/Utility/DiagnosticsRendering.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/Utility/StreamString.h"
 
@@ -27,12 +26,6 @@ static llvm::raw_ostream &warning(Stream &strm) {
          << "warning: ";
 }
 
-static llvm::raw_ostream &note(Stream &strm) {
-  return llvm::WithColor(strm.AsRawOstream(), llvm::HighlightColor::Note,
-                         llvm::ColorMode::Enable)
-         << "note: ";
-}
-
 static void DumpStringToStreamWithNewline(Stream &strm, const std::string &s) {
   bool add_newline = false;
   if (!s.empty()) {
@@ -48,7 +41,7 @@ static void DumpStringToStreamWithNewline(Stream &strm, const std::string &s) {
 }
 
 CommandReturnObject::CommandReturnObject(bool colors)
-    : m_out_stream(colors), m_err_stream(colors), m_colors(colors) {}
+    : m_out_stream(colors), m_err_stream(colors) {}
 
 void CommandReturnObject::AppendErrorWithFormat(const char *format, ...) {
   SetStatus(eReturnStatusFailed);
@@ -80,18 +73,6 @@ void CommandReturnObject::AppendMessageWithFormat(const char *format, ...) {
   GetOutputStream() << sstrm.GetString();
 }
 
-void CommandReturnObject::AppendNoteWithFormat(const char *format, ...) {
-  if (!format)
-    return;
-  va_list args;
-  va_start(args, format);
-  StreamString sstrm;
-  sstrm.PrintfVarArg(format, args);
-  va_end(args);
-
-  note(GetOutputStream()) << sstrm.GetString();
-}
-
 void CommandReturnObject::AppendWarningWithFormat(const char *format, ...) {
   if (!format)
     return;
@@ -110,12 +91,6 @@ void CommandReturnObject::AppendMessage(llvm::StringRef in_string) {
   GetOutputStream() << in_string.rtrim() << '\n';
 }
 
-void CommandReturnObject::AppendNote(llvm::StringRef in_string) {
-  if (in_string.empty())
-    return;
-  note(GetOutputStream()) << in_string.rtrim() << '\n';
-}
-
 void CommandReturnObject::AppendWarning(llvm::StringRef in_string) {
   if (in_string.empty())
     return;
@@ -126,50 +101,12 @@ void CommandReturnObject::AppendError(llvm::StringRef in_string) {
   SetStatus(eReturnStatusFailed);
   if (in_string.empty())
     return;
-  // Workaround to deal with already fully formatted compiler diagnostics.
-  llvm::StringRef msg(in_string.rtrim());
-  msg.consume_front("error: ");
-  error(GetErrorStream()) << msg << '\n';
+  error(GetErrorStream()) << in_string.rtrim() << '\n';
 }
 
-void CommandReturnObject::SetError(Status error) {
-  SetError(error.takeError());
-}
-
-void CommandReturnObject::SetError(llvm::Error error) {
-  // Retrieve any diagnostics.
-  error = llvm::handleErrors(std::move(error), [&](DiagnosticError &error) {
-    SetStatus(eReturnStatusFailed);
-    m_diagnostics = error.GetDetails();
-  });
-  if (error) {
-    AppendError(llvm::toString(std::move(error)));
-  }
-}
-
-std::string CommandReturnObject::GetInlineDiagnosticString(unsigned indent) {
-  StreamString diag_stream(m_colors);
-  RenderDiagnosticDetails(diag_stream, indent, true, m_diagnostics);
-  // Duplex the diagnostics to the secondary stream (but not inlined).
-  if (auto stream_sp = m_err_stream.GetStreamAtIndex(eImmediateStreamIndex))
-    RenderDiagnosticDetails(*stream_sp, std::nullopt, false, m_diagnostics);
-
-  return diag_stream.GetString().str();
-}
-
-std::string CommandReturnObject::GetErrorString(bool with_diagnostics) {
-  StreamString stream(m_colors);
-  if (with_diagnostics)
-    RenderDiagnosticDetails(stream, std::nullopt, false, m_diagnostics);
-
-  lldb::StreamSP stream_sp(m_err_stream.GetStreamAtIndex(eStreamStringIndex));
-  if (stream_sp)
-    stream << std::static_pointer_cast<StreamString>(stream_sp)->GetString();
-  return stream.GetString().str();
-}
-
-StructuredData::ObjectSP CommandReturnObject::GetErrorData() {
-  return Serialize(m_diagnostics);
+void CommandReturnObject::SetError(const Status &error,
+                                   const char *fallback_error_cstr) {
+  AppendError(error.AsCString(fallback_error_cstr));
 }
 
 // Similar to AppendError, but do not prepend 'Status: ' to message, and don't
@@ -183,13 +120,13 @@ void CommandReturnObject::AppendRawError(llvm::StringRef in_string) {
 
 void CommandReturnObject::SetStatus(ReturnStatus status) { m_status = status; }
 
-ReturnStatus CommandReturnObject::GetStatus() const { return m_status; }
+ReturnStatus CommandReturnObject::GetStatus() { return m_status; }
 
-bool CommandReturnObject::Succeeded() const {
+bool CommandReturnObject::Succeeded() {
   return m_status <= eReturnStatusSuccessContinuingResult;
 }
 
-bool CommandReturnObject::HasResult() const {
+bool CommandReturnObject::HasResult() {
   return (m_status == eReturnStatusSuccessFinishResult ||
           m_status == eReturnStatusSuccessContinuingResult);
 }
@@ -202,14 +139,13 @@ void CommandReturnObject::Clear() {
   stream_sp = m_err_stream.GetStreamAtIndex(eStreamStringIndex);
   if (stream_sp)
     static_cast<StreamString *>(stream_sp.get())->Clear();
-  m_diagnostics.clear();
   m_status = eReturnStatusStarted;
   m_did_change_process_state = false;
   m_suppress_immediate_output = false;
   m_interactive = true;
 }
 
-bool CommandReturnObject::GetDidChangeProcessState() const {
+bool CommandReturnObject::GetDidChangeProcessState() {
   return m_did_change_process_state;
 }
 

@@ -27,7 +27,6 @@ namespace clang {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
 #include "clang/Basic/BuiltinsNEON.def"
     FirstTSBuiltin
   };
@@ -48,18 +47,7 @@ namespace clang {
   enum {
     LastNEONBuiltin = NEON::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
 #include "clang/Basic/BuiltinsSVE.def"
-    FirstTSBuiltin,
-  };
-  }
-
-  namespace SME {
-  enum {
-    LastSVEBuiltin = SVE::FirstTSBuiltin - 1,
-#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
-#include "clang/Basic/BuiltinsSME.def"
     FirstTSBuiltin,
   };
   }
@@ -71,8 +59,6 @@ namespace clang {
     LastNEONBuiltin = NEON::FirstTSBuiltin - 1,
     FirstSVEBuiltin = NEON::FirstTSBuiltin,
     LastSVEBuiltin = SVE::FirstTSBuiltin - 1,
-    FirstSMEBuiltin = SVE::FirstTSBuiltin,
-    LastSMEBuiltin = SME::FirstTSBuiltin - 1,
   #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
   #include "clang/Basic/BuiltinsAArch64.def"
     LastTSBuiltin
@@ -84,7 +70,7 @@ namespace clang {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
   #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-  #include "clang/Basic/BuiltinsBPF.inc"
+  #include "clang/Basic/BuiltinsBPF.def"
     LastTSBuiltin
   };
   }
@@ -101,12 +87,12 @@ namespace clang {
 
   /// NVPTX builtins
   namespace NVPTX {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+    enum {
+        LastTIBuiltin = clang::Builtin::FirstTSBuiltin-1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsNVPTX.inc"
-    LastTSBuiltin
-  };
+#include "clang/Basic/BuiltinsNVPTX.def"
+        LastTSBuiltin
+    };
   }
 
   /// AMDGPU builtins
@@ -119,70 +105,34 @@ namespace clang {
   };
   }
 
-  /// SPIRV builtins
-  namespace SPIRV {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
-#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsSPIRV.inc"
-    LastTSBuiltin
-  };
-  } // namespace SPIRV
-
   /// X86 builtins
   namespace X86 {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsX86.inc"
+#include "clang/Basic/BuiltinsX86.def"
     FirstX86_64Builtin,
     LastX86CommonBuiltin = FirstX86_64Builtin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsX86_64.inc"
+#include "clang/Basic/BuiltinsX86_64.def"
     LastTSBuiltin
   };
   }
 
   /// VE builtins
   namespace VE {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
-#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsVE.def"
-    LastTSBuiltin
-  };
-  }
-
-  namespace RISCVVector {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
-#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsRISCVVector.def"
-    FirstTSBuiltin,
-  };
+  enum { LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1, LastTSBuiltin };
   }
 
   /// RISCV builtins
   namespace RISCV {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
-    FirstRVVBuiltin = clang::Builtin::FirstTSBuiltin,
-    LastRVVBuiltin = RISCVVector::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsRISCV.inc"
+#include "clang/Basic/BuiltinsRISCV.def"
     LastTSBuiltin
   };
   } // namespace RISCV
-
-  /// LoongArch builtins
-  namespace LoongArch {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
-#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsLoongArch.def"
-    LastTSBuiltin
-  };
-  } // namespace LoongArch
 
   /// Flags to identify the types for overloaded Neon builtins.
   ///
@@ -208,8 +158,7 @@ namespace clang {
       Float16,
       Float32,
       Float64,
-      BFloat16,
-      MFloat8
+      BFloat16
     };
 
     NeonTypeFlags(unsigned F) : Flags(F) {}
@@ -227,36 +176,6 @@ namespace clang {
     }
     bool isUnsigned() const { return (Flags & UnsignedFlag) != 0; }
     bool isQuad() const { return (Flags & QuadFlag) != 0; }
-    unsigned getEltSizeInBits() const {
-      switch (getEltType()) {
-      case Int8:
-      case Poly8:
-      case MFloat8:
-        return 8;
-      case Int16:
-      case Float16:
-      case Poly16:
-      case BFloat16:
-        return 16;
-      case Int32:
-      case Float32:
-        return 32;
-      case Int64:
-      case Float64:
-      case Poly64:
-        return 64;
-      case Poly128:
-        return 128;
-      }
-      llvm_unreachable("Invalid NeonTypeFlag!");
-    }
-  };
-
-  // Shared between SVE/SME and NEON
-  enum ImmCheckType {
-#define LLVM_GET_ARM_INTRIN_IMMCHECKTYPES
-#include "clang/Basic/arm_immcheck_types.inc"
-#undef LLVM_GET_ARM_INTRIN_IMMCHECKTYPES
   };
 
   /// Flags to identify the types for overloaded SVE builtins.
@@ -290,11 +209,17 @@ namespace clang {
 #undef LLVM_GET_SVE_MERGETYPES
     };
 
+    enum ImmCheckType {
+#define LLVM_GET_SVE_IMMCHECKTYPES
+#include "clang/Basic/arm_sve_typeflags.inc"
+#undef LLVM_GET_SVE_IMMCHECKTYPES
+    };
+
     SVETypeFlags(uint64_t F) : Flags(F) {
-      EltTypeShift = llvm::countr_zero(EltTypeMask);
-      MemEltTypeShift = llvm::countr_zero(MemEltTypeMask);
-      MergeTypeShift = llvm::countr_zero(MergeTypeMask);
-      SplatOperandMaskShift = llvm::countr_zero(SplatOperandMask);
+      EltTypeShift = llvm::countTrailingZeros(EltTypeMask);
+      MemEltTypeShift = llvm::countTrailingZeros(MemEltTypeMask);
+      MergeTypeShift = llvm::countTrailingZeros(MergeTypeMask);
+      SplatOperandMaskShift = llvm::countTrailingZeros(SplatOperandMask);
     }
 
     EltType getEltType() const {
@@ -326,9 +251,7 @@ namespace clang {
     bool isZExtReturn() const { return Flags & IsZExtReturn; }
     bool isByteIndexed() const { return Flags & IsByteIndexed; }
     bool isOverloadNone() const { return Flags & IsOverloadNone; }
-    bool isOverloadWhileOrMultiVecCvt() const {
-      return Flags & IsOverloadWhileOrMultiVecCvt;
-    }
+    bool isOverloadWhile() const { return Flags & IsOverloadWhile; }
     bool isOverloadDefault() const { return !(Flags & OverloadKindMask); }
     bool isOverloadWhileRW() const { return Flags & IsOverloadWhileRW; }
     bool isOverloadCvt() const { return Flags & IsOverloadCvt; }
@@ -338,28 +261,23 @@ namespace clang {
     bool isInsertOp1SVALL() const { return Flags & IsInsertOp1SVALL; }
     bool isGatherPrefetch() const { return Flags & IsGatherPrefetch; }
     bool isReverseUSDOT() const { return Flags & ReverseUSDOT; }
-    bool isReverseMergeAnyBinOp() const { return Flags & ReverseMergeAnyBinOp; }
-    bool isReverseMergeAnyAccOp() const { return Flags & ReverseMergeAnyAccOp; }
     bool isUndef() const { return Flags & IsUndef; }
     bool isTupleCreate() const { return Flags & IsTupleCreate; }
     bool isTupleGet() const { return Flags & IsTupleGet; }
     bool isTupleSet() const { return Flags & IsTupleSet; }
-    bool isReadZA() const { return Flags & IsReadZA; }
-    bool isWriteZA() const { return Flags & IsWriteZA; }
-    bool setsFPMR() const { return Flags & SetsFPMR; }
-    bool isReductionQV() const { return Flags & IsReductionQV; }
+
     uint64_t getBits() const { return Flags; }
     bool isFlagSet(uint64_t Flag) const { return Flags & Flag; }
   };
 
   /// Hexagon builtins
   namespace Hexagon {
-  enum {
-    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+    enum {
+        LastTIBuiltin = clang::Builtin::FirstTSBuiltin-1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsHexagon.inc"
-    LastTSBuiltin
-  };
+#include "clang/Basic/BuiltinsHexagon.def"
+        LastTSBuiltin
+    };
   }
 
   /// MIPS builtins

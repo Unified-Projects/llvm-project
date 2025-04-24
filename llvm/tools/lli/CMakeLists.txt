@@ -12,16 +12,14 @@ set(LLVM_LINK_COMPONENTS
   MC
   MCJIT
   Object
-  OrcJIT
-  OrcDebugging
   OrcShared
+  OrcJIT
   OrcTargetProcess
   Passes
   RuntimeDyld
   SelectionDAG
   Support
   Target
-  TargetParser
   TransformUtils
   native
   )
@@ -53,9 +51,10 @@ endif( LLVM_USE_PERF )
 
 add_llvm_tool(lli
   lli.cpp
+  ExecutionUtils.cpp
 
   DEPENDS
   intrinsics_gen
-
-  EXPORT_SYMBOLS
   )
+
+export_executable_symbols(lli)

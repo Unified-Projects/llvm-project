@@ -2,10 +2,10 @@
 
 ; Test that we don't pollute the start of the file with debug sections
 
-; CHECK:      .file	"<stdin>"
-; CHECK-NEXT:  .text
+; CHECK:       .text
+; CHECK-NEXT: .file	"<stdin>"
 ; CHECK-NEXT: .globl	f
-; CHECK-NEXT: .p2align	4
+; CHECK-NEXT: .p2align	4, 0x90
 ; CHECK-NEXT: .type	f,@function
 ; CHECK-NEXT: f:                                      # @f
 

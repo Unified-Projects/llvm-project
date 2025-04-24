@@ -15,8 +15,6 @@
 // basic_stringbuf() : basic_stringbuf(ios_base::in | ios_base::out) {}               // C++20
 // explicit basic_stringbuf(ios_base::openmode which);                                // C++20
 
-// XFAIL: FROZEN-CXX03-HEADERS-FIXME
-
 #include <sstream>
 #include <cassert>
 
@@ -31,18 +29,12 @@ struct testbuf
 {
     void check()
     {
-      // LWG2995
-      //   It is implementation-defined whether the sequence pointers (eback(),
-      //   gptr(), egptr(), pbase(), pptr(), epptr()) are initialized to null
-      //   pointers.
-      // This tests the libc++ specific implementation.
-      LIBCPP_ASSERT(this->eback() != nullptr);
-      LIBCPP_ASSERT(this->gptr() != nullptr);
-      LIBCPP_ASSERT(this->egptr() != nullptr);
-      LIBCPP_ASSERT(this->pbase() != nullptr);
-      LIBCPP_ASSERT(this->pptr() != nullptr);
-      LIBCPP_ASSERT(this->epptr() != nullptr);
-      assert(this->str().empty());
+        assert(this->eback() == NULL);
+        assert(this->gptr() == NULL);
+        assert(this->egptr() == NULL);
+        assert(this->pbase() == NULL);
+        assert(this->pptr() == NULL);
+        assert(this->epptr() == NULL);
     }
 };
 
@@ -53,19 +45,17 @@ int main(int, char**)
         assert(buf.str() == "");
     }
     {
-        testbuf<char> buf;
-        buf.check();
-    }
-#ifndef TEST_HAS_NO_WIDE_CHARACTERS
-    {
         std::wstringbuf buf;
         assert(buf.str() == L"");
+    }
+    {
+        testbuf<char> buf;
+        buf.check();
     }
     {
         testbuf<wchar_t> buf;
         buf.check();
     }
-#endif
 
 #if TEST_STD_VER >= 11
     {

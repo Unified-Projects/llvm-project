@@ -10,12 +10,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TEXTAPI_PACKEDVERSION_H
-#define LLVM_TEXTAPI_PACKEDVERSION_H
+#ifndef LLVM_TEXTAPI_MACHO_PACKEDVERSION_H
+#define LLVM_TEXTAPI_MACHO_PACKEDVERSION_H
 
-#include "llvm/Support/VersionTuple.h"
 #include <cstdint>
-#include <string>
 #include <utility>
 
 namespace llvm {
@@ -29,18 +27,9 @@ class PackedVersion {
 
 public:
   constexpr PackedVersion() = default;
-  constexpr PackedVersion(uint32_t RawVersion) : Version(RawVersion) {}
+  explicit constexpr PackedVersion(uint32_t RawVersion) : Version(RawVersion) {}
   PackedVersion(unsigned Major, unsigned Minor, unsigned Subminor)
       : Version((Major << 16) | ((Minor & 0xff) << 8) | (Subminor & 0xff)) {}
-
-  PackedVersion(VersionTuple VT) {
-    unsigned Minor = 0, Subminor = 0;
-    if (auto VTMinor = VT.getMinor())
-      Minor = *VTMinor;
-    if (auto VTSub = VT.getSubminor())
-      Subminor = *VTSub;
-    *this = PackedVersion(VT.getMajor(), Minor, Subminor);
-  }
 
   bool empty() const { return Version == 0; }
 
@@ -64,8 +53,6 @@ public:
 
   uint32_t rawValue() const { return Version; }
 
-  operator std::string() const;
-
   void print(raw_ostream &OS) const;
 };
 
@@ -77,4 +64,4 @@ inline raw_ostream &operator<<(raw_ostream &OS, const PackedVersion &Version) {
 } // end namespace MachO.
 } // end namespace llvm.
 
-#endif // LLVM_TEXTAPI_PACKEDVERSION_H
+#endif // LLVM_TEXTAPI_MACHO_PACKEDVERSION_H

@@ -9,13 +9,12 @@
 #ifndef LLVM_LIBC_SRC_SIGNAL_RAISE_H
 #define LLVM_LIBC_SRC_SIGNAL_RAISE_H
 
-#include "src/__support/macros/config.h"
-#include <signal.h>
+#include "include/signal.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 int raise(int sig);
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
 #endif // LLVM_LIBC_SRC_SIGNAL_RAISE_H

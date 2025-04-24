@@ -6,36 +6,37 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIBC_TEST_SRC_TIME_TMHELPER_H
-#define LLVM_LIBC_TEST_SRC_TIME_TMHELPER_H
+#ifndef LLVM_LIBC_TEST_SRC_TIME_TM_HELPER_H
+#define LLVM_LIBC_TEST_SRC_TIME_TM_HELPER_H
 
-#include "hdr/types/struct_tm.h"
-#include "src/__support/macros/config.h"
-#include "src/time/time_constants.h"
+#include <time.h>
 
-namespace LIBC_NAMESPACE_DECL {
+#include "src/time/time_utils.h"
+
+using __llvm_libc::time_utils::TimeConstants;
+
+namespace __llvm_libc {
 namespace tmhelper {
 namespace testing {
 
 // A helper function to initialize tm data structure.
-static inline void initialize_tm_data(struct tm *tm_data, int year, int month,
-                                      int mday, int hour, int min, int sec,
-                                      int wday, int yday) {
+static inline void InitializeTmData(struct tm *tm_data, int year, int month,
+                                    int mday, int hour, int min, int sec,
+                                    int wday, int yday) {
   struct tm temp = {.tm_sec = sec,
                     .tm_min = min,
                     .tm_hour = hour,
                     .tm_mday = mday,
                     .tm_mon = month - 1, // tm_mon starts with 0 for Jan
                     // years since 1900
-                    .tm_year = year - time_constants::TIME_YEAR_BASE,
+                    .tm_year = year - TimeConstants::TimeYearBase,
                     .tm_wday = wday,
-                    .tm_yday = yday,
-                    .tm_isdst = 0};
+                    .tm_yday = yday};
   *tm_data = temp;
 }
 
 } // namespace testing
 } // namespace tmhelper
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc
 
-#endif // LLVM_LIBC_TEST_SRC_TIME_TMHELPER_H
+#endif // LLVM_LIBC_TEST_SRC_TIME_TM_HELPER_H

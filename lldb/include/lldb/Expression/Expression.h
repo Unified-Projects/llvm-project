@@ -20,6 +20,8 @@
 
 namespace lldb_private {
 
+class RecordingMemoryManager;
+
 /// \class Expression Expression.h "lldb/Expression/Expression.h" Encapsulates
 /// a single expression for use in lldb
 ///
@@ -47,8 +49,11 @@ public:
   /// expression.  Text() should contain the definition of this function.
   virtual const char *FunctionName() = 0;
 
-  /// Return the language that should be used when parsing.
-  virtual SourceLanguage Language() const { return {}; }
+  /// Return the language that should be used when parsing.  To use the
+  /// default, return eLanguageTypeUnknown.
+  virtual lldb::LanguageType Language() const {
+    return lldb::eLanguageTypeUnknown;
+  }
 
   /// Return the Materializer that the parser should use when registering
   /// external values.
@@ -56,7 +61,7 @@ public:
 
   /// Return the desired result type of the function, or eResultTypeAny if
   /// indifferent.
-  virtual ResultType DesiredResultType() const { return eResultTypeAny; }
+  virtual ResultType DesiredResultType() { return eResultTypeAny; }
 
   /// Flags
 

@@ -20,7 +20,7 @@
 #include "lldb/Utility/StructuredData.h"
 #include "lldb/Utility/UUID.h"
 
-#include "llvm/TargetParser/Triple.h"
+#include "llvm/ADT/Triple.h"
 
 namespace lldb_private {
 
@@ -56,10 +56,6 @@ public:
 
   virtual bool NeedToDoInitialImageFetch() = 0;
 
-  std::optional<lldb_private::Address> GetStartAddress() override;
-
-  static void CreateSettings(lldb_private::Debugger &debugger);
-
 protected:
   void PrivateInitialize(lldb_private::Process *process);
 
@@ -74,8 +70,6 @@ protected:
   void SetDYLDModule(lldb::ModuleSP &dyld_module_sp);
 
   lldb::ModuleSP GetDYLDModule();
-
-  void ClearDYLDModule();
 
   class Segment {
   public:
@@ -104,6 +98,8 @@ protected:
     /// The amount to slide all segments by if there is a global
     /// slide.
     lldb::addr_t slide = 0;
+    /// Modification date for this dylib.
+    lldb::addr_t mod_date = 0;
     /// Resolved path for this dylib.
     lldb_private::FileSpec file_spec;
     /// UUID for this dylib if it has one, else all zeros.
@@ -130,6 +126,7 @@ protected:
       if (!load_cmd_data_only) {
         address = LLDB_INVALID_ADDRESS;
         slide = 0;
+        mod_date = 0;
         file_spec.Clear();
         ::memset(&header, 0, sizeof(header));
       }
@@ -143,7 +140,8 @@ protected:
 
     bool operator==(const ImageInfo &rhs) const {
       return address == rhs.address && slide == rhs.slide &&
-             file_spec == rhs.file_spec && uuid == rhs.uuid &&
+             mod_date == rhs.mod_date && file_spec == rhs.file_spec &&
+             uuid == rhs.uuid &&
              memcmp(&header, &rhs.header, sizeof(header)) == 0 &&
              segments == rhs.segments && os_type == rhs.os_type &&
              os_env == rhs.os_env;
@@ -176,7 +174,7 @@ protected:
 
   bool UnloadModuleSections(lldb_private::Module *module, ImageInfo &info);
 
-  lldb::ModuleSP FindTargetModuleForImageInfo(const ImageInfo &image_info,
+  lldb::ModuleSP FindTargetModuleForImageInfo(ImageInfo &image_info,
                                               bool can_create,
                                               bool *did_create_ptr);
 
@@ -203,29 +201,20 @@ protected:
       lldb_private::StructuredData::ObjectSP image_details,
       ImageInfo::collection &image_infos);
 
-  // Finds/loads modules for a given `image_infos` and returns pairs
-  // (ImageInfo, ModuleSP).
-  // Prefer using this method rather than calling `FindTargetModuleForImageInfo`
-  // directly as this method may load the modules in parallel.
-  std::vector<std::pair<ImageInfo, lldb::ModuleSP>>
-  PreloadModulesFromImageInfos(const ImageInfo::collection &image_infos);
-
-  // If `images` contains / may contain dyld or executable image, call this
-  // method to keep our internal record keeping of the special binaries
-  // up-to-date.
-  void UpdateSpecialBinariesFromPreloadedModules(
-      std::vector<std::pair<ImageInfo, lldb::ModuleSP>> &images);
+  // If image_infos contains / may contain dyld or executable image, call this
+  // method
+  // to keep our internal record keeping of the special binaries up-to-date.
+  void
+  UpdateSpecialBinariesFromNewImageInfos(ImageInfo::collection &image_infos);
 
   // if image_info is a dyld binary, call this method
-  bool UpdateDYLDImageInfoFromNewImageInfo(ImageInfo &image_info);
+  void UpdateDYLDImageInfoFromNewImageInfo(ImageInfo &image_info);
 
   // If image_infos contains / may contain executable image, call this method
   // to keep our internal record keeping of the special dyld binary up-to-date.
   void AddExecutableModuleIfInImageInfos(ImageInfo::collection &image_infos);
 
   bool AddModulesUsingImageInfos(ImageInfo::collection &image_infos);
-  bool AddModulesUsingPreloadedModules(
-      std::vector<std::pair<ImageInfo, lldb::ModuleSP>> &images);
 
   // Whether we should use the new dyld SPI to get shared library information,
   // or read

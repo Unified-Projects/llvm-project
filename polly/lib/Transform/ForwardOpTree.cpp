@@ -40,7 +40,6 @@
 #include <cassert>
 #include <memory>
 
-#include "polly/Support/PollyDebug.h"
 #define DEBUG_TYPE "polly-optree"
 
 using namespace llvm;
@@ -172,7 +171,7 @@ struct ForwardingAction {
     Result.Decision =
         IsProfitable ? FD_CanForwardProfitably : FD_CanForwardLeaf;
     Result.Execute = [=]() {
-      POLLY_DEBUG(dbgs() << "    trivially forwarded: " << *Val << "\n");
+      LLVM_DEBUG(dbgs() << "    trivially forwarded: " << *Val << "\n");
       return true;
     };
     return Result;
@@ -198,7 +197,7 @@ struct ForwardingAction {
 /// the MemoryAccess is removed and the all the operand tree instructions are
 /// moved into the statement. All original instructions are left in the source
 /// statements. The simplification pass can clean these up.
-class ForwardOpTreeImpl final : ZoneAlgorithm {
+class ForwardOpTreeImpl : ZoneAlgorithm {
 private:
   using MemoizationTy = DenseMap<ForwardingAction::KeyTy, ForwardingAction>;
 
@@ -369,12 +368,12 @@ public:
       Known = {};
       Translator = {};
       NormalizeMap = {};
-      POLLY_DEBUG(dbgs() << "Known analysis exceeded max_operations\n");
+      LLVM_DEBUG(dbgs() << "Known analysis exceeded max_operations\n");
       return false;
     }
 
     KnownAnalyzed++;
-    POLLY_DEBUG(dbgs() << "All known: " << Known << "\n");
+    LLVM_DEBUG(dbgs() << "All known: " << Known << "\n");
 
     return true;
   }
@@ -491,7 +490,7 @@ public:
       //   do not add another MemoryAccess.
       auto ExecAction = [this, TargetStmt, LI, Access]() -> bool {
         TargetStmt->prependInstruction(LI);
-        POLLY_DEBUG(
+        LLVM_DEBUG(
             dbgs() << "    forwarded known load with preexisting MemoryAccess"
                    << Access << "\n");
         (void)Access;
@@ -529,10 +528,10 @@ public:
     if (SameVal.is_null())
       return ForwardingAction::notApplicable();
 
-    POLLY_DEBUG(dbgs() << "      expected values where " << TargetExpectedVal
-                       << "\n");
-    POLLY_DEBUG(dbgs() << "      candidate elements where " << Candidates
-                       << "\n");
+    LLVM_DEBUG(dbgs() << "      expected values where " << TargetExpectedVal
+                      << "\n");
+    LLVM_DEBUG(dbgs() << "      candidate elements where " << Candidates
+                      << "\n");
 
     // { ValInst[] }
     isl::space ValInstSpace = ExpectedVal.get_space().range();
@@ -569,8 +568,8 @@ public:
 
       // { [TargetDomain[] -> Value[]] -> [DefDomain[] -> Value] }
       LocalTranslator = DefToTarget.reverse().product(ValToVal);
-      POLLY_DEBUG(dbgs() << "      local translator is " << LocalTranslator
-                         << "\n");
+      LLVM_DEBUG(dbgs() << "      local translator is " << LocalTranslator
+                        << "\n");
 
       if (LocalTranslator.is_null())
         return ForwardingAction::notApplicable();
@@ -580,8 +579,8 @@ public:
                        LocalTranslator]() -> bool {
       TargetStmt->prependInstruction(LI);
       MemoryAccess *Access = makeReadArrayAccess(TargetStmt, LI, SameVal);
-      POLLY_DEBUG(dbgs() << "    forwarded known load with new MemoryAccess"
-                         << Access << "\n");
+      LLVM_DEBUG(dbgs() << "    forwarded known load with new MemoryAccess"
+                        << Access << "\n");
       (void)Access;
 
       if (!LocalTranslator.is_null())
@@ -644,8 +643,8 @@ public:
         Access = TargetStmt->ensureValueRead(Inst);
       Access->setNewAccessRelation(SameVal);
 
-      POLLY_DEBUG(dbgs() << "    forwarded known content of " << *Inst
-                         << " which is " << SameVal << "\n");
+      LLVM_DEBUG(dbgs() << "    forwarded known content of " << *Inst
+                        << " which is " << SameVal << "\n");
       TotalReloads++;
       NumReloads++;
       return false;
@@ -683,7 +682,7 @@ public:
     // Instruction::mayHaveSideEffects is not sufficient because it considers
     // malloc to not have side-effects. llvm::isSafeToSpeculativelyExecute is
     // not sufficient because it allows memory accesses.
-    if (mayHaveNonDefUseDependency(*UseInst))
+    if (mayBeMemoryDependent(*UseInst))
       return ForwardingAction::notApplicable();
 
     SmallVector<ForwardingAction::KeyTy, 4> Depends;
@@ -713,8 +712,8 @@ public:
       // instruction using them.
       TargetStmt->prependInstruction(UseInst);
 
-      POLLY_DEBUG(dbgs() << "    forwarded speculable instruction: " << *UseInst
-                         << "\n");
+      LLVM_DEBUG(dbgs() << "    forwarded speculable instruction: " << *UseInst
+                        << "\n");
       NumInstructionsCopied++;
       TotalInstructionsCopied++;
       return true;
@@ -766,7 +765,7 @@ public:
       if (TargetUse.getKind() == VirtualUse::Synthesizable)
         return ForwardingAction::triviallyForwardable(false, UseVal);
 
-      POLLY_DEBUG(
+      LLVM_DEBUG(
           dbgs() << "    Synthesizable would not be synthesizable anymore: "
                  << *UseVal << "\n");
       return ForwardingAction::cannotForward();
@@ -780,8 +779,8 @@ public:
       auto ExecAction = [this, TargetStmt, UseVal]() {
         TargetStmt->ensureValueRead(UseVal);
 
-        POLLY_DEBUG(dbgs() << "    forwarded read-only value " << *UseVal
-                           << "\n");
+        LLVM_DEBUG(dbgs() << "    forwarded read-only value " << *UseVal
+                          << "\n");
         NumReadOnlyCopied++;
         TotalReadOnlyCopied++;
 
@@ -802,7 +801,7 @@ public:
       // reuse the information about UseStmt for DefStmt
       DefStmt = UseStmt;
 
-      [[fallthrough]];
+      LLVM_FALLTHROUGH;
     case VirtualUse::Inter:
       Instruction *Inst = cast<Instruction>(UseVal);
 
@@ -831,8 +830,7 @@ public:
 
       // When no method is found to forward the operand tree, we effectively
       // cannot handle it.
-      POLLY_DEBUG(dbgs() << "    Cannot forward instruction: " << *Inst
-                         << "\n");
+      LLVM_DEBUG(dbgs() << "    Cannot forward instruction: " << *Inst << "\n");
       return ForwardingAction::cannotForward();
     }
 
@@ -947,7 +945,7 @@ public:
   /// Try to forward an operand tree rooted in @p RA.
   bool tryForwardTree(MemoryAccess *RA) {
     assert(RA->isLatestScalarKind());
-    POLLY_DEBUG(dbgs() << "Trying to forward operand tree " << RA << "...\n");
+    LLVM_DEBUG(dbgs() << "Trying to forward operand tree " << RA << "...\n");
 
     ScopStmt *Stmt = RA->getStatement();
     Loop *InLoop = Stmt->getSurroundingLoop();
@@ -1038,22 +1036,22 @@ static std::unique_ptr<ForwardOpTreeImpl> runForwardOpTree(Scop &S,
     Impl = std::make_unique<ForwardOpTreeImpl>(&S, &LI, MaxOpGuard);
 
     if (AnalyzeKnown) {
-      POLLY_DEBUG(dbgs() << "Prepare forwarders...\n");
+      LLVM_DEBUG(dbgs() << "Prepare forwarders...\n");
       Impl->computeKnownValues();
     }
 
-    POLLY_DEBUG(dbgs() << "Forwarding operand trees...\n");
+    LLVM_DEBUG(dbgs() << "Forwarding operand trees...\n");
     Impl->forwardOperandTrees();
 
     if (MaxOpGuard.hasQuotaExceeded()) {
-      POLLY_DEBUG(dbgs() << "Not all operations completed because of "
-                            "max_operations exceeded\n");
+      LLVM_DEBUG(dbgs() << "Not all operations completed because of "
+                           "max_operations exceeded\n");
       KnownOutOfQuota++;
     }
   }
 
-  POLLY_DEBUG(dbgs() << "\nFinal Scop:\n");
-  POLLY_DEBUG(dbgs() << S);
+  LLVM_DEBUG(dbgs() << "\nFinal Scop:\n");
+  LLVM_DEBUG(dbgs() << S);
 
   // Update statistics
   Scop::ScopStatistics ScopStats = S.getStatistics();
@@ -1103,7 +1101,7 @@ runForwardOpTreeUsingNPM(Scop &S, ScopAnalysisManager &SAM,
 /// scalar definition are redirected (We currently do not care about removing
 /// the write in this case).  This is also useful for the main DeLICM pass as
 /// there are less scalars to be mapped.
-class ForwardOpTreeWrapperPass final : public ScopPass {
+class ForwardOpTreeWrapperPass : public ScopPass {
 private:
   /// The pass implementation, also holding per-scop data.
   std::unique_ptr<ForwardOpTreeImpl> Impl;
@@ -1145,47 +1143,17 @@ public:
 }; // class ForwardOpTree
 
 char ForwardOpTreeWrapperPass::ID;
-
-/// Print result from ForwardOpTreeWrapperPass.
-class ForwardOpTreePrinterLegacyPass final : public ScopPass {
-public:
-  static char ID;
-
-  ForwardOpTreePrinterLegacyPass() : ForwardOpTreePrinterLegacyPass(outs()) {}
-  explicit ForwardOpTreePrinterLegacyPass(llvm::raw_ostream &OS)
-      : ScopPass(ID), OS(OS) {}
-
-  bool runOnScop(Scop &S) override {
-    ForwardOpTreeWrapperPass &P = getAnalysis<ForwardOpTreeWrapperPass>();
-
-    OS << "Printing analysis '" << P.getPassName() << "' for region: '"
-       << S.getRegion().getNameStr() << "' in function '"
-       << S.getFunction().getName() << "':\n";
-    P.printScop(OS, S);
-
-    return false;
-  }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    ScopPass::getAnalysisUsage(AU);
-    AU.addRequired<ForwardOpTreeWrapperPass>();
-    AU.setPreservesAll();
-  }
-
-private:
-  llvm::raw_ostream &OS;
-};
-
-char ForwardOpTreePrinterLegacyPass::ID = 0;
 } // namespace
 
 Pass *polly::createForwardOpTreeWrapperPass() {
   return new ForwardOpTreeWrapperPass();
 }
 
-Pass *polly::createForwardOpTreePrinterLegacyPass(llvm::raw_ostream &OS) {
-  return new ForwardOpTreePrinterLegacyPass(OS);
-}
+INITIALIZE_PASS_BEGIN(ForwardOpTreeWrapperPass, "polly-optree",
+                      "Polly - Forward operand tree", false, false)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_END(ForwardOpTreeWrapperPass, "polly-optree",
+                    "Polly - Forward operand tree", false, false)
 
 llvm::PreservedAnalyses ForwardOpTreePass::run(Scop &S,
                                                ScopAnalysisManager &SAM,
@@ -1199,15 +1167,3 @@ ForwardOpTreePrinterPass::run(Scop &S, ScopAnalysisManager &SAM,
                               ScopStandardAnalysisResults &SAR, SPMUpdater &U) {
   return runForwardOpTreeUsingNPM(S, SAM, SAR, U, &OS);
 }
-
-INITIALIZE_PASS_BEGIN(ForwardOpTreeWrapperPass, "polly-optree",
-                      "Polly - Forward operand tree", false, false)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_END(ForwardOpTreeWrapperPass, "polly-optree",
-                    "Polly - Forward operand tree", false, false)
-
-INITIALIZE_PASS_BEGIN(ForwardOpTreePrinterLegacyPass, "polly-print-optree",
-                      "Polly - Print forward operand tree result", false, false)
-INITIALIZE_PASS_DEPENDENCY(ForwardOpTreeWrapperPass)
-INITIALIZE_PASS_END(ForwardOpTreePrinterLegacyPass, "polly-print-optree",
-                    "Polly - Print forward operand tree result", false, false)

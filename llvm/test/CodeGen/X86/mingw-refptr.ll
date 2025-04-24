@@ -1,5 +1,4 @@
 ; RUN: llc < %s -mtriple=x86_64-w64-mingw32 | FileCheck %s -check-prefix=CHECK-X64
-; RUN: llc < %s -mtriple=x86_64-pc-cygwin | FileCheck %s -check-prefix=CHECK-X64
 ; RUN: llc < %s -mtriple=i686-w64-mingw32 | FileCheck %s -check-prefix=CHECK-X86
 ; RUN: llc < %s -mtriple=i686-w64-mingw32-none-elf | FileCheck %s -check-prefix=CHECK-X86-ELF
 
@@ -22,7 +21,7 @@ define dso_local i32 @getVar() {
 ; CHECK-X86-ELF:    movl var, %eax
 ; CHECK-X86-ELF:    retl
 entry:
-  %0 = load i32, ptr @var, align 4
+  %0 = load i32, i32* @var, align 4
   ret i32 %0
 }
 
@@ -34,7 +33,7 @@ define dso_local i32 @getDsoLocalVar() {
 ; CHECK-X86:    movl _dsolocalvar, %eax
 ; CHECK-X86:    retl
 entry:
-  %0 = load i32, ptr @dsolocalvar, align 4
+  %0 = load i32, i32* @dsolocalvar, align 4
   ret i32 %0
 }
 
@@ -46,7 +45,7 @@ define dso_local i32 @getLocalVar() {
 ; CHECK-X86:    movl _localvar, %eax
 ; CHECK-X86:    retl
 entry:
-  %0 = load i32, ptr @localvar, align 4
+  %0 = load i32, i32* @localvar, align 4
   ret i32 %0
 }
 
@@ -58,7 +57,7 @@ define dso_local i32 @getLocalCommon() {
 ; CHECK-X86:    movl _localcommon, %eax
 ; CHECK-X86:    retl
 entry:
-  %0 = load i32, ptr @localcommon, align 4
+  %0 = load i32, i32* @localcommon, align 4
   ret i32 %0
 }
 
@@ -75,7 +74,7 @@ define dso_local i32 @getExtVar() {
 ; CHECK-X86-ELF:    movl extvar, %eax
 ; CHECK-X86-ELF:    retl
 entry:
-  %0 = load i32, ptr @extvar, align 4
+  %0 = load i32, i32* @extvar, align 4
   ret i32 %0
 }
 

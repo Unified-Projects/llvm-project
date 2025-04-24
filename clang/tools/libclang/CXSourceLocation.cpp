@@ -13,7 +13,6 @@
 #include "CXSourceLocation.h"
 #include "CIndexer.h"
 #include "CLog.h"
-#include "CXFile.h"
 #include "CXLoadedDiagnostic.h"
 #include "CXString.h"
 #include "CXTranslationUnit.h"
@@ -48,18 +47,6 @@ unsigned clang_equalLocations(CXSourceLocation loc1, CXSourceLocation loc2) {
   return (loc1.ptr_data[0] == loc2.ptr_data[0] &&
           loc1.ptr_data[1] == loc2.ptr_data[1] &&
           loc1.int_data == loc2.int_data);
-}
-
-unsigned clang_isBeforeInTranslationUnit(CXSourceLocation loc1,
-                                         CXSourceLocation loc2) {
-  const SourceLocation Loc1 = SourceLocation::getFromRawEncoding(loc1.int_data);
-  const SourceLocation Loc2 = SourceLocation::getFromRawEncoding(loc2.int_data);
-
-  const SourceManager &SM =
-      *static_cast<const SourceManager *>(loc1.ptr_data[0]);
-  // Use the appropriate SourceManager method here rather than operator< because
-  // ordering is meaningful only if LHS and RHS have the same FileID.
-  return SM.isBeforeInTranslationUnit(Loc1, Loc2);
 }
 
 CXSourceRange clang_getNullRange() {
@@ -141,19 +128,19 @@ CXSourceLocation clang_getLocation(CXTranslationUnit TU,
   LogRef Log = Logger::make(__func__);
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
   ASTUnit::ConcurrencyCheck Check(*CXXUnit);
-  FileEntryRef File = *cxfile::getFileEntryRef(file);
+  const FileEntry *File = static_cast<const FileEntry *>(file);
   SourceLocation SLoc = CXXUnit->getLocation(File, line, column);
   if (SLoc.isInvalid()) {
     if (Log)
       *Log << llvm::format("(\"%s\", %d, %d) = invalid",
-                           File.getName().str().c_str(), line, column);
+                           File->getName().str().c_str(), line, column);
     return clang_getNullLocation();
   }
   
   CXSourceLocation CXLoc =
       cxloc::translateSourceLocation(CXXUnit->getASTContext(), SLoc);
   if (Log)
-    *Log << llvm::format("(\"%s\", %d, %d) = ", File.getName().str().c_str(),
+    *Log << llvm::format("(\"%s\", %d, %d) = ", File->getName().str().c_str(),
                          line, column)
          << CXLoc;
 
@@ -173,7 +160,7 @@ CXSourceLocation clang_getLocationForOffset(CXTranslationUnit TU,
   ASTUnit *CXXUnit = cxtu::getASTUnit(TU);
 
   SourceLocation SLoc 
-    = CXXUnit->getLocation(*cxfile::getFileEntryRef(file), offset);
+    = CXXUnit->getLocation(static_cast<const FileEntry *>(file), offset);
 
   if (SLoc.isInvalid())
     return clang_getNullLocation();
@@ -264,7 +251,7 @@ void clang_getExpansionLocation(CXSourceLocation location,
   }
   
   if (file)
-    *file = cxfile::makeCXFile(SM.getFileEntryRefForID(fileID));
+    *file = const_cast<FileEntry *>(SM.getFileEntryForSLocEntry(sloc));
   if (line)
     *line = SM.getExpansionLineNumber(ExpansionLoc);
   if (column)
@@ -331,7 +318,8 @@ void clang_getSpellingLocation(CXSourceLocation location,
   
   const SourceManager &SM =
   *static_cast<const SourceManager*>(location.ptr_data[0]);
-  SourceLocation SpellLoc = SM.getSpellingLoc(Loc);
+  // FIXME: This should call SourceManager::getSpellingLoc().
+  SourceLocation SpellLoc = SM.getFileLoc(Loc);
   std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(SpellLoc);
   FileID FID = LocInfo.first;
   unsigned FileOffset = LocInfo.second;
@@ -340,7 +328,7 @@ void clang_getSpellingLocation(CXSourceLocation location,
     return createNullLocation(file, line, column, offset);
   
   if (file)
-    *file = cxfile::makeCXFile(SM.getFileEntryRefForID(FID));
+    *file = const_cast<FileEntry *>(SM.getFileEntryForID(FID));
   if (line)
     *line = SM.getLineNumber(FID, FileOffset);
   if (column)
@@ -376,7 +364,7 @@ void clang_getFileLocation(CXSourceLocation location,
     return createNullLocation(file, line, column, offset);
 
   if (file)
-    *file = cxfile::makeCXFile(SM.getFileEntryRefForID(FID));
+    *file = const_cast<FileEntry *>(SM.getFileEntryForID(FID));
   if (line)
     *line = SM.getLineNumber(FID, FileOffset);
   if (column)

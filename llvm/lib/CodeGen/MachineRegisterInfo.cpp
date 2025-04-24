@@ -12,6 +12,7 @@
 
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/LowLevelType.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -41,15 +42,14 @@ static cl::opt<bool> EnableSubRegLiveness("enable-subreg-liveness", cl::Hidden,
 void MachineRegisterInfo::Delegate::anchor() {}
 
 MachineRegisterInfo::MachineRegisterInfo(MachineFunction *MF)
-    : MF(MF),
-      TracksSubRegLiveness(EnableSubRegLiveness.getNumOccurrences()
-                               ? EnableSubRegLiveness
-                               : MF->getSubtarget().enableSubRegLiveness()) {
+    : MF(MF), TracksSubRegLiveness(MF->getSubtarget().enableSubRegLiveness() &&
+                                   EnableSubRegLiveness),
+      IsUpdatedCSRsInitialized(false) {
   unsigned NumRegs = getTargetRegisterInfo()->getNumRegs();
   VRegInfo.reserve(256);
+  RegAllocHints.reserve(256);
   UsedPhysRegMask.resize(NumRegs);
   PhysRegUseDefLists.reset(new MachineOperand*[NumRegs]());
-  TheDelegates.clear();
 }
 
 /// setRegClass - Set the register class of the specified virtual register.
@@ -81,10 +81,10 @@ constrainRegClass(MachineRegisterInfo &MRI, Register Reg,
   return NewRC;
 }
 
-const TargetRegisterClass *MachineRegisterInfo::constrainRegClass(
-    Register Reg, const TargetRegisterClass *RC, unsigned MinNumRegs) {
-  if (Reg.isPhysical())
-    return nullptr;
+const TargetRegisterClass *
+MachineRegisterInfo::constrainRegClass(Register Reg,
+                                       const TargetRegisterClass *RC,
+                                       unsigned MinNumRegs) {
   return ::constrainRegClass(*this, Reg, getRegClass(Reg), RC, MinNumRegs);
 }
 
@@ -97,18 +97,18 @@ MachineRegisterInfo::constrainRegAttrs(Register Reg,
   if (RegTy.isValid() && ConstrainingRegTy.isValid() &&
       RegTy != ConstrainingRegTy)
     return false;
-  const auto &ConstrainingRegCB = getRegClassOrRegBank(ConstrainingReg);
+  const auto ConstrainingRegCB = getRegClassOrRegBank(ConstrainingReg);
   if (!ConstrainingRegCB.isNull()) {
-    const auto &RegCB = getRegClassOrRegBank(Reg);
+    const auto RegCB = getRegClassOrRegBank(Reg);
     if (RegCB.isNull())
       setRegClassOrRegBank(Reg, ConstrainingRegCB);
-    else if (isa<const TargetRegisterClass *>(RegCB) !=
-             isa<const TargetRegisterClass *>(ConstrainingRegCB))
+    else if (RegCB.is<const TargetRegisterClass *>() !=
+             ConstrainingRegCB.is<const TargetRegisterClass *>())
       return false;
-    else if (isa<const TargetRegisterClass *>(RegCB)) {
+    else if (RegCB.is<const TargetRegisterClass *>()) {
       if (!::constrainRegClass(
-              *this, Reg, cast<const TargetRegisterClass *>(RegCB),
-              cast<const TargetRegisterClass *>(ConstrainingRegCB), MinNumRegs))
+              *this, Reg, RegCB.get<const TargetRegisterClass *>(),
+              ConstrainingRegCB.get<const TargetRegisterClass *>(), MinNumRegs))
         return false;
     } else if (RegCB != ConstrainingRegCB)
       return false;
@@ -122,8 +122,8 @@ bool
 MachineRegisterInfo::recomputeRegClass(Register Reg) {
   const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
   const TargetRegisterClass *OldRC = getRegClass(Reg);
-  const TargetRegisterInfo *TRI = getTargetRegisterInfo();
-  const TargetRegisterClass *NewRC = TRI->getLargestLegalSuperClass(OldRC, *MF);
+  const TargetRegisterClass *NewRC =
+      getTargetRegisterInfo()->getLargestLegalSuperClass(OldRC, *MF);
 
   // Stop early if there is no room to grow.
   if (NewRC == OldRC)
@@ -134,7 +134,8 @@ MachineRegisterInfo::recomputeRegClass(Register Reg) {
     // Apply the effect of the given operand to NewRC.
     MachineInstr *MI = MO.getParent();
     unsigned OpNo = &MO - &MI->getOperand(0);
-    NewRC = MI->getRegClassConstraintEffect(OpNo, NewRC, TII, TRI);
+    NewRC = MI->getRegClassConstraintEffect(OpNo, NewRC, TII,
+                                            getTargetRegisterInfo());
     if (!NewRC || NewRC == OldRC)
       return false;
   }
@@ -145,6 +146,7 @@ MachineRegisterInfo::recomputeRegClass(Register Reg) {
 Register MachineRegisterInfo::createIncompleteVirtualRegister(StringRef Name) {
   Register Reg = Register::index2VirtReg(getNumVirtRegs());
   VRegInfo.grow(Reg);
+  RegAllocHints.grow(Reg);
   insertVRegByName(Name, Reg);
   return Reg;
 }
@@ -162,16 +164,8 @@ MachineRegisterInfo::createVirtualRegister(const TargetRegisterClass *RegClass,
   // New virtual register number.
   Register Reg = createIncompleteVirtualRegister(Name);
   VRegInfo[Reg].first = RegClass;
-  noteNewVirtualRegister(Reg);
-  return Reg;
-}
-
-Register MachineRegisterInfo::createVirtualRegister(VRegAttrs RegAttr,
-                                                    StringRef Name) {
-  Register Reg = createIncompleteVirtualRegister(Name);
-  VRegInfo[Reg].first = RegAttr.RCOrRB;
-  setType(Reg, RegAttr.Ty);
-  noteNewVirtualRegister(Reg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
@@ -180,7 +174,8 @@ Register MachineRegisterInfo::cloneVirtualRegister(Register VReg,
   Register Reg = createIncompleteVirtualRegister(Name);
   VRegInfo[Reg].first = VRegInfo[VReg].first;
   setType(Reg, getType(VReg));
-  noteCloneVirtualRegister(Reg, VReg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
@@ -196,7 +191,8 @@ MachineRegisterInfo::createGenericVirtualRegister(LLT Ty, StringRef Name) {
   // FIXME: Should we use a dummy register class?
   VRegInfo[Reg].first = static_cast<RegisterBank *>(nullptr);
   setType(Reg, Ty);
-  noteNewVirtualRegister(Reg);
+  if (TheDelegate)
+    TheDelegate->MRI_NoteNewVirtualRegister(Reg);
   return Reg;
 }
 
@@ -210,11 +206,7 @@ void MachineRegisterInfo::clearVirtRegs() {
     if (!VRegInfo[Reg].second)
       continue;
     verifyUseList(Reg);
-    errs() << "Remaining virtual register "
-           << printReg(Reg, getTargetRegisterInfo()) << "...\n";
-    for (MachineInstr &MI : reg_instructions(Reg))
-      errs() << "...in instruction: " << MI << "\n";
-    std::abort();
+    llvm_unreachable("Remaining virtual register operands");
   }
 #endif
   VRegInfo.clear();
@@ -391,8 +383,10 @@ void MachineRegisterInfo::replaceRegWith(Register FromReg, Register ToReg) {
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
 
   // TODO: This could be more efficient by bulk changing the operands.
-  for (MachineOperand &O : llvm::make_early_inc_range(reg_operands(FromReg))) {
-    if (ToReg.isPhysical()) {
+  for (reg_iterator I = reg_begin(FromReg), E = reg_end(); I != E; ) {
+    MachineOperand &O = *I;
+    ++I;
+    if (Register::isPhysicalRegister(ToReg)) {
       O.substPhysReg(ToReg, *TRI);
     } else {
       O.setReg(ToReg);
@@ -406,11 +400,9 @@ void MachineRegisterInfo::replaceRegWith(Register FromReg, Register ToReg) {
 MachineInstr *MachineRegisterInfo::getVRegDef(Register Reg) const {
   // Since we are in SSA form, we can use the first definition.
   def_instr_iterator I = def_instr_begin(Reg);
-  if (I == def_instr_end())
-    return nullptr;
-  assert(std::next(I) == def_instr_end() &&
-         "getVRegDef assumes at most one definition");
-  return &*I;
+  assert((I.atEnd() || std::next(I) == def_instr_end()) &&
+         "getVRegDef assumes a single definition or no definition");
+  return !I.atEnd() ? &*I : nullptr;
 }
 
 /// getUniqueVRegDef - Return the unique machine instr that defines the
@@ -430,12 +422,6 @@ bool MachineRegisterInfo::hasOneNonDBGUse(Register RegNo) const {
 
 bool MachineRegisterInfo::hasOneNonDBGUser(Register RegNo) const {
   return hasSingleElement(use_nodbg_instructions(RegNo));
-}
-
-bool MachineRegisterInfo::hasAtMostUserInstrs(Register Reg,
-                                              unsigned MaxUsers) const {
-  return hasNItemsOrLess(use_instr_nodbg_begin(Reg), use_instr_nodbg_end(),
-                         MaxUsers);
 }
 
 /// clearKillFlags - Iterate over all the uses of the given register and
@@ -506,7 +492,7 @@ MachineRegisterInfo::EmitLiveInCopies(MachineBasicBlock *EntryMBB,
 
 LaneBitmask MachineRegisterInfo::getMaxLaneMaskForVReg(Register Reg) const {
   // Lane masks are only defined for vregs.
-  assert(Reg.isVirtual());
+  assert(Register::isVirtualRegister(Reg));
   const TargetRegisterClass &TRC = *getRegClass(Reg);
   return TRC.getLaneMask();
 }
@@ -518,14 +504,14 @@ LLVM_DUMP_METHOD void MachineRegisterInfo::dumpUses(Register Reg) const {
 }
 #endif
 
-void MachineRegisterInfo::freezeReservedRegs() {
-  ReservedRegs = getTargetRegisterInfo()->getReservedRegs(*MF);
+void MachineRegisterInfo::freezeReservedRegs(const MachineFunction &MF) {
+  ReservedRegs = getTargetRegisterInfo()->getReservedRegs(MF);
   assert(ReservedRegs.size() == getTargetRegisterInfo()->getNumRegs() &&
          "Invalid ReservedRegs vector from target");
 }
 
 bool MachineRegisterInfo::isConstantPhysReg(MCRegister PhysReg) const {
-  assert(PhysReg.isPhysical());
+  assert(Register::isPhysicalRegister(PhysReg));
 
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   if (TRI->isConstantPhysReg(PhysReg))
@@ -583,7 +569,7 @@ static bool isNoReturnDef(const MachineOperand &MO) {
 
 bool MachineRegisterInfo::isPhysRegModified(MCRegister PhysReg,
                                             bool SkipNoReturnDef) const {
-  if (UsedPhysRegMask.test(PhysReg.id()))
+  if (UsedPhysRegMask.test(PhysReg))
     return true;
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   for (MCRegAliasIterator AI(PhysReg, TRI, true); AI.isValid(); ++AI) {
@@ -598,7 +584,7 @@ bool MachineRegisterInfo::isPhysRegModified(MCRegister PhysReg,
 
 bool MachineRegisterInfo::isPhysRegUsed(MCRegister PhysReg,
                                         bool SkipRegMaskTest) const {
-  if (!SkipRegMaskTest && UsedPhysRegMask.test(PhysReg.id()))
+  if (!SkipRegMaskTest && UsedPhysRegMask.test(PhysReg))
     return true;
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   for (MCRegAliasIterator AliasReg(PhysReg, TRI, true); AliasReg.isValid();
@@ -629,20 +615,14 @@ void MachineRegisterInfo::disableCalleeSavedRegister(MCRegister Reg) {
 
   // Remove the register (and its aliases from the list).
   for (MCRegAliasIterator AI(Reg, TRI, true); AI.isValid(); ++AI)
-    llvm::erase(UpdatedCSRs, *AI);
+    llvm::erase_value(UpdatedCSRs, *AI);
 }
 
 const MCPhysReg *MachineRegisterInfo::getCalleeSavedRegs() const {
   if (IsUpdatedCSRsInitialized)
     return UpdatedCSRs.data();
 
-  const MCPhysReg *Regs = getTargetRegisterInfo()->getCalleeSavedRegs(MF);
-
-  for (unsigned I = 0; Regs[I]; ++I)
-    if (MF->getSubtarget().isRegisterReservedByUser(Regs[I]))
-      MF->getRegInfo().disableCalleeSavedRegister(Regs[I]);
-
-  return Regs;
+  return getTargetRegisterInfo()->getCalleeSavedRegs(MF);
 }
 
 void MachineRegisterInfo::setCalleeSavedRegs(ArrayRef<MCPhysReg> CSRs) {
@@ -660,8 +640,16 @@ void MachineRegisterInfo::setCalleeSavedRegs(ArrayRef<MCPhysReg> CSRs) {
 bool MachineRegisterInfo::isReservedRegUnit(unsigned Unit) const {
   const TargetRegisterInfo *TRI = getTargetRegisterInfo();
   for (MCRegUnitRootIterator Root(Unit, TRI); Root.isValid(); ++Root) {
-    if (all_of(TRI->superregs_inclusive(*Root),
-               [&](MCPhysReg Super) { return isReserved(Super); }))
+    bool IsRootReserved = true;
+    for (MCSuperRegIterator Super(*Root, TRI, /*IncludeSelf=*/true);
+         Super.isValid(); ++Super) {
+      MCRegister Reg = *Super;
+      if (!isReserved(Reg)) {
+        IsRootReserved = false;
+        break;
+      }
+    }
+    if (IsRootReserved)
       return true;
   }
   return false;

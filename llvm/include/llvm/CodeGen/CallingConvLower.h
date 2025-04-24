@@ -14,13 +14,13 @@
 #ifndef LLVM_CODEGEN_CALLINGCONVLOWER_H
 #define LLVM_CODEGEN_CALLINGCONVLOWER_H
 
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/Register.h"
 #include "llvm/CodeGen/TargetCallingConv.h"
 #include "llvm/IR/CallingConv.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/Alignment.h"
-#include <variant>
 
 namespace llvm {
 
@@ -54,15 +54,14 @@ public:
   };
 
 private:
-  // Holds one of:
-  // - the register that the value is assigned to;
-  // - the memory offset at which the value resides;
-  // - additional information about pending location; the exact interpretation
-  //   of the data is target-dependent.
-  std::variant<Register, int64_t, unsigned> Data;
-
   /// ValNo - This is the value number being assigned (e.g. an argument number).
   unsigned ValNo;
+
+  /// Loc is either a stack offset or a register number.
+  unsigned Loc;
+
+  /// isMem - True if this is a memory loc, false if it is a register loc.
+  unsigned isMem : 1;
 
   /// isCustom - True if this arg/retval requires special handling.
   unsigned isCustom : 1;
@@ -75,60 +74,82 @@ private:
 
   /// LocVT - The type of the location being assigned to.
   MVT LocVT;
-
-  CCValAssign(LocInfo HTP, unsigned ValNo, MVT ValVT, MVT LocVT, bool IsCustom)
-      : ValNo(ValNo), isCustom(IsCustom), HTP(HTP), ValVT(ValVT), LocVT(LocVT) {
-  }
-
 public:
-  static CCValAssign getReg(unsigned ValNo, MVT ValVT, MCRegister Reg,
-                            MVT LocVT, LocInfo HTP, bool IsCustom = false) {
-    CCValAssign Ret(HTP, ValNo, ValVT, LocVT, IsCustom);
-    Ret.Data = Register(Reg);
+
+  static CCValAssign getReg(unsigned ValNo, MVT ValVT,
+                            unsigned RegNo, MVT LocVT,
+                            LocInfo HTP) {
+    CCValAssign Ret;
+    Ret.ValNo = ValNo;
+    Ret.Loc = RegNo;
+    Ret.isMem = false;
+    Ret.isCustom = false;
+    Ret.HTP = HTP;
+    Ret.ValVT = ValVT;
+    Ret.LocVT = LocVT;
     return Ret;
   }
 
-  static CCValAssign getCustomReg(unsigned ValNo, MVT ValVT, MCRegister Reg,
-                                  MVT LocVT, LocInfo HTP) {
-    return getReg(ValNo, ValVT, Reg, LocVT, HTP, /*IsCustom=*/true);
-  }
-
-  static CCValAssign getMem(unsigned ValNo, MVT ValVT, int64_t Offset,
-                            MVT LocVT, LocInfo HTP, bool IsCustom = false) {
-    CCValAssign Ret(HTP, ValNo, ValVT, LocVT, IsCustom);
-    Ret.Data = Offset;
+  static CCValAssign getCustomReg(unsigned ValNo, MVT ValVT,
+                                  unsigned RegNo, MVT LocVT,
+                                  LocInfo HTP) {
+    CCValAssign Ret;
+    Ret = getReg(ValNo, ValVT, RegNo, LocVT, HTP);
+    Ret.isCustom = true;
     return Ret;
   }
 
-  static CCValAssign getCustomMem(unsigned ValNo, MVT ValVT, int64_t Offset,
-                                  MVT LocVT, LocInfo HTP) {
-    return getMem(ValNo, ValVT, Offset, LocVT, HTP, /*IsCustom=*/true);
+  static CCValAssign getMem(unsigned ValNo, MVT ValVT,
+                            unsigned Offset, MVT LocVT,
+                            LocInfo HTP) {
+    CCValAssign Ret;
+    Ret.ValNo = ValNo;
+    Ret.Loc = Offset;
+    Ret.isMem = true;
+    Ret.isCustom = false;
+    Ret.HTP = HTP;
+    Ret.ValVT = ValVT;
+    Ret.LocVT = LocVT;
+    return Ret;
   }
 
+  static CCValAssign getCustomMem(unsigned ValNo, MVT ValVT,
+                                  unsigned Offset, MVT LocVT,
+                                  LocInfo HTP) {
+    CCValAssign Ret;
+    Ret = getMem(ValNo, ValVT, Offset, LocVT, HTP);
+    Ret.isCustom = true;
+    return Ret;
+  }
+
+  // There is no need to differentiate between a pending CCValAssign and other
+  // kinds, as they are stored in a different list.
   static CCValAssign getPending(unsigned ValNo, MVT ValVT, MVT LocVT,
                                 LocInfo HTP, unsigned ExtraInfo = 0) {
-    CCValAssign Ret(HTP, ValNo, ValVT, LocVT, false);
-    Ret.Data = ExtraInfo;
-    return Ret;
+    return getReg(ValNo, ValVT, ExtraInfo, LocVT, HTP);
   }
 
-  void convertToReg(MCRegister Reg) { Data = Register(Reg); }
+  void convertToReg(unsigned RegNo) {
+    Loc = RegNo;
+    isMem = false;
+  }
 
-  void convertToMem(int64_t Offset) { Data = Offset; }
+  void convertToMem(unsigned Offset) {
+    Loc = Offset;
+    isMem = true;
+  }
 
   unsigned getValNo() const { return ValNo; }
   MVT getValVT() const { return ValVT; }
 
-  bool isRegLoc() const { return std::holds_alternative<Register>(Data); }
-  bool isMemLoc() const { return std::holds_alternative<int64_t>(Data); }
-  bool isPendingLoc() const { return std::holds_alternative<unsigned>(Data); }
+  bool isRegLoc() const { return !isMem; }
+  bool isMemLoc() const { return isMem; }
 
   bool needsCustom() const { return isCustom; }
 
-  Register getLocReg() const { return std::get<Register>(Data); }
-  int64_t getLocMemOffset() const { return std::get<int64_t>(Data); }
-  unsigned getExtraInfo() const { return std::get<unsigned>(Data); }
-
+  Register getLocReg() const { assert(isRegLoc()); return Loc; }
+  unsigned getLocMemOffset() const { assert(isMemLoc()); return Loc; }
+  unsigned getExtraInfo() const { return Loc; }
   MVT getLocVT() const { return LocVT; }
 
   LocInfo getLocInfo() const { return HTP; }
@@ -176,10 +197,8 @@ private:
   const TargetRegisterInfo &TRI;
   SmallVectorImpl<CCValAssign> &Locs;
   LLVMContext &Context;
-  // True if arguments should be allocated at negative offsets.
-  bool NegativeOffsets;
 
-  uint64_t StackSize;
+  unsigned StackOffset;
   Align MaxStackArgAlign;
   SmallVector<uint32_t, 16> UsedRegs;
   SmallVector<CCValAssign, 4> PendingLocs;
@@ -228,9 +247,8 @@ private:
   unsigned InRegsParamsProcessed;
 
 public:
-  CCState(CallingConv::ID CC, bool IsVarArg, MachineFunction &MF,
-          SmallVectorImpl<CCValAssign> &Locs, LLVMContext &Context,
-          bool NegativeOffsets = false);
+  CCState(CallingConv::ID CC, bool isVarArg, MachineFunction &MF,
+          SmallVectorImpl<CCValAssign> &locs, LLVMContext &C);
 
   void addLoc(const CCValAssign &V) {
     Locs.push_back(V);
@@ -241,20 +259,23 @@ public:
   CallingConv::ID getCallingConv() const { return CallingConv; }
   bool isVarArg() const { return IsVarArg; }
 
-  /// Returns the size of the currently allocated portion of the stack.
-  uint64_t getStackSize() const { return StackSize; }
+  /// getNextStackOffset - Return the next stack offset such that all stack
+  /// slots satisfy their alignment requirements.
+  unsigned getNextStackOffset() const {
+    return StackOffset;
+  }
 
   /// getAlignedCallFrameSize - Return the size of the call frame needed to
   /// be able to store all arguments and such that the alignment requirement
   /// of each of the arguments is satisfied.
-  uint64_t getAlignedCallFrameSize() const {
-    return alignTo(StackSize, MaxStackArgAlign);
+  unsigned getAlignedCallFrameSize() const {
+    return alignTo(StackOffset, MaxStackArgAlign);
   }
 
   /// isAllocated - Return true if the specified register (or an alias) is
   /// allocated.
   bool isAllocated(MCRegister Reg) const {
-    return UsedRegs[Reg.id() / 32] & (1 << (Reg.id() & 31));
+    return UsedRegs[Reg / 32] & (1 << (Reg & 31));
   }
 
   /// AnalyzeFormalArguments - Analyze an array of argument values,
@@ -346,7 +367,7 @@ public:
   /// AllocateReg - Attempt to allocate one of the specified registers.  If none
   /// are available, return zero.  Otherwise, return the first one available,
   /// marking it and any aliases as allocated.
-  MCRegister AllocateReg(ArrayRef<MCPhysReg> Regs) {
+  MCPhysReg AllocateReg(ArrayRef<MCPhysReg> Regs) {
     unsigned FirstUnalloc = getFirstUnallocated(Regs);
     if (FirstUnalloc == Regs.size())
       return MCRegister();    // Didn't find the reg.
@@ -357,13 +378,12 @@ public:
     return Reg;
   }
 
-  /// Attempt to allocate a block of RegsRequired consecutive registers.
-  /// If this is not possible, return an empty range. Otherwise, return a
-  /// range of consecutive registers, marking the entire block as allocated.
-  ArrayRef<MCPhysReg> AllocateRegBlock(ArrayRef<MCPhysReg> Regs,
-                                       unsigned RegsRequired) {
+  /// AllocateRegBlock - Attempt to allocate a block of RegsRequired consecutive
+  /// registers. If this is not possible, return zero. Otherwise, return the first
+  /// register of the block that were allocated, marking the entire block as allocated.
+  MCPhysReg AllocateRegBlock(ArrayRef<MCPhysReg> Regs, unsigned RegsRequired) {
     if (RegsRequired > Regs.size())
-      return {};
+      return 0;
 
     for (unsigned StartIdx = 0; StartIdx <= Regs.size() - RegsRequired;
          ++StartIdx) {
@@ -380,11 +400,11 @@ public:
         for (unsigned BlockIdx = 0; BlockIdx < RegsRequired; ++BlockIdx) {
           MarkAllocated(Regs[StartIdx + BlockIdx]);
         }
-        return Regs.slice(StartIdx, RegsRequired);
+        return Regs[StartIdx];
       }
     }
     // No block was available
-    return {};
+    return 0;
   }
 
   /// Version of AllocateReg with list of registers to be shadowed.
@@ -402,28 +422,23 @@ public:
 
   /// AllocateStack - Allocate a chunk of stack space with the specified size
   /// and alignment.
-  int64_t AllocateStack(unsigned Size, Align Alignment) {
-    int64_t Offset;
-    if (NegativeOffsets) {
-      StackSize = alignTo(StackSize + Size, Alignment);
-      Offset = -StackSize;
-    } else {
-      Offset = alignTo(StackSize, Alignment);
-      StackSize = Offset + Size;
-    }
+  unsigned AllocateStack(unsigned Size, Align Alignment) {
+    StackOffset = alignTo(StackOffset, Alignment);
+    unsigned Result = StackOffset;
+    StackOffset += Size;
     MaxStackArgAlign = std::max(Alignment, MaxStackArgAlign);
     ensureMaxAlignment(Alignment);
-    return Offset;
+    return Result;
   }
 
   void ensureMaxAlignment(Align Alignment);
 
   /// Version of AllocateStack with list of extra registers to be shadowed.
   /// Note that, unlike AllocateReg, this shadows ALL of the shadow registers.
-  int64_t AllocateStack(unsigned Size, Align Alignment,
-                        ArrayRef<MCPhysReg> ShadowRegs) {
-    for (MCPhysReg Reg : ShadowRegs)
-      MarkAllocated(Reg);
+  unsigned AllocateStack(unsigned Size, Align Alignment,
+                         ArrayRef<MCPhysReg> ShadowRegs) {
+    for (unsigned i = 0; i < ShadowRegs.size(); ++i)
+      MarkAllocated(ShadowRegs[i]);
     return AllocateStack(Size, Alignment);
   }
 

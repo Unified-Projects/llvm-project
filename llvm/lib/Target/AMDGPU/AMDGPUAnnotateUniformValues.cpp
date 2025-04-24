@@ -13,11 +13,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPU.h"
-#include "AMDGPUMemoryUtils.h"
 #include "Utils/AMDGPUBaseInfo.h"
-#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/Analysis/MemorySSA.h"
-#include "llvm/Analysis/UniformityAnalysis.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/InitializePasses.h"
 
@@ -27,125 +25,128 @@ using namespace llvm;
 
 namespace {
 
-class AMDGPUAnnotateUniformValues
-    : public InstVisitor<AMDGPUAnnotateUniformValues> {
-  UniformityInfo *UA;
+class AMDGPUAnnotateUniformValues : public FunctionPass,
+                       public InstVisitor<AMDGPUAnnotateUniformValues> {
+  LegacyDivergenceAnalysis *DA;
   MemorySSA *MSSA;
-  AliasAnalysis *AA;
+  DenseMap<Value*, GetElementPtrInst*> noClobberClones;
   bool isEntryFunc;
-  bool Changed = false;
-
-  void setUniformMetadata(Instruction *I) {
-    I->setMetadata("amdgpu.uniform", MDNode::get(I->getContext(), {}));
-    Changed = true;
-  }
-
-  void setNoClobberMetadata(Instruction *I) {
-    I->setMetadata("amdgpu.noclobber", MDNode::get(I->getContext(), {}));
-    Changed = true;
-  }
 
 public:
-  AMDGPUAnnotateUniformValues(UniformityInfo &UA, MemorySSA &MSSA,
-                              AliasAnalysis &AA, const Function &F)
-      : UA(&UA), MSSA(&MSSA), AA(&AA),
-        isEntryFunc(AMDGPU::isEntryFunctionCC(F.getCallingConv())) {}
+  static char ID;
+  AMDGPUAnnotateUniformValues() :
+    FunctionPass(ID) { }
+  bool doInitialization(Module &M) override;
+  bool runOnFunction(Function &F) override;
+  StringRef getPassName() const override {
+    return "AMDGPU Annotate Uniform Values";
+  }
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<LegacyDivergenceAnalysis>();
+    AU.addRequired<MemorySSAWrapperPass>();
+    AU.setPreservesAll();
+ }
 
   void visitBranchInst(BranchInst &I);
   void visitLoadInst(LoadInst &I);
-
-  bool changed() const { return Changed; }
+  bool isClobberedInFunction(LoadInst * Load);
 };
 
 } // End anonymous namespace
 
+INITIALIZE_PASS_BEGIN(AMDGPUAnnotateUniformValues, DEBUG_TYPE,
+                      "Add AMDGPU uniform metadata", false, false)
+INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
+INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
+INITIALIZE_PASS_END(AMDGPUAnnotateUniformValues, DEBUG_TYPE,
+                    "Add AMDGPU uniform metadata", false, false)
+
+char AMDGPUAnnotateUniformValues::ID = 0;
+
+static void setUniformMetadata(Instruction *I) {
+  I->setMetadata("amdgpu.uniform", MDNode::get(I->getContext(), {}));
+}
+static void setNoClobberMetadata(Instruction *I) {
+  I->setMetadata("amdgpu.noclobber", MDNode::get(I->getContext(), {}));
+}
+
+bool AMDGPUAnnotateUniformValues::isClobberedInFunction(LoadInst * Load) {
+  const MemoryAccess *MA = MSSA->getWalker()->getClobberingMemoryAccess(Load);
+  return !MSSA->isLiveOnEntryDef(MA);
+}
+
 void AMDGPUAnnotateUniformValues::visitBranchInst(BranchInst &I) {
-  if (UA->isUniform(&I))
+  if (DA->isUniform(&I))
     setUniformMetadata(&I);
 }
 
 void AMDGPUAnnotateUniformValues::visitLoadInst(LoadInst &I) {
   Value *Ptr = I.getPointerOperand();
-  if (!UA->isUniform(Ptr))
+  if (!DA->isUniform(Ptr))
     return;
-  Instruction *PtrI = dyn_cast<Instruction>(Ptr);
-  if (PtrI)
-    setUniformMetadata(PtrI);
-
+  auto isGlobalLoad = [&](LoadInst &Load)->bool {
+    return Load.getPointerAddressSpace() == AMDGPUAS::GLOBAL_ADDRESS;
+  };
   // We're tracking up to the Function boundaries, and cannot go beyond because
   // of FunctionPass restrictions. We can ensure that is memory not clobbered
   // for memory operations that are live in to entry points only.
-  if (!isEntryFunc)
+  Instruction *PtrI = dyn_cast<Instruction>(Ptr);
+
+  if (!isEntryFunc) {
+    if (PtrI)
+      setUniformMetadata(PtrI);
     return;
-  bool GlobalLoad = I.getPointerAddressSpace() == AMDGPUAS::GLOBAL_ADDRESS;
-  if (GlobalLoad && !AMDGPU::isClobberedInFunction(&I, MSSA, AA))
-    setNoClobberMetadata(&I);
-}
-
-PreservedAnalyses
-AMDGPUAnnotateUniformValuesPass::run(Function &F,
-                                     FunctionAnalysisManager &FAM) {
-  UniformityInfo &UI = FAM.getResult<UniformityInfoAnalysis>(F);
-  MemorySSA &MSSA = FAM.getResult<MemorySSAAnalysis>(F).getMSSA();
-  AAResults &AA = FAM.getResult<AAManager>(F);
-
-  AMDGPUAnnotateUniformValues Impl(UI, MSSA, AA, F);
-  Impl.visit(F);
-
-  if (!Impl.changed())
-    return PreservedAnalyses::all();
-
-  PreservedAnalyses PA = PreservedAnalyses::none();
-  // TODO: Should preserve nearly everything
-  PA.preserveSet<CFGAnalyses>();
-  return PA;
-}
-
-class AMDGPUAnnotateUniformValuesLegacy : public FunctionPass {
-public:
-  static char ID;
-
-  AMDGPUAnnotateUniformValuesLegacy() : FunctionPass(ID) {}
-
-  bool doInitialization(Module &M) override { return false; }
-
-  bool runOnFunction(Function &F) override;
-  StringRef getPassName() const override {
-    return "AMDGPU Annotate Uniform Values";
   }
 
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<UniformityInfoWrapperPass>();
-    AU.addRequired<MemorySSAWrapperPass>();
-    AU.addRequired<AAResultsWrapperPass>();
-    AU.setPreservesAll();
+  bool NotClobbered = false;
+  bool GlobalLoad = isGlobalLoad(I);
+  if (PtrI)
+    NotClobbered = GlobalLoad && !isClobberedInFunction(&I);
+  else if (isa<Argument>(Ptr) || isa<GlobalValue>(Ptr)) {
+    if (GlobalLoad && !isClobberedInFunction(&I)) {
+      NotClobbered = true;
+      // Lookup for the existing GEP
+      if (noClobberClones.count(Ptr)) {
+        PtrI = noClobberClones[Ptr];
+      } else {
+        // Create GEP of the Value
+        Function *F = I.getParent()->getParent();
+        Value *Idx = Constant::getIntegerValue(
+          Type::getInt32Ty(Ptr->getContext()), APInt(64, 0));
+        // Insert GEP at the entry to make it dominate all uses
+        PtrI = GetElementPtrInst::Create(I.getType(), Ptr,
+                                         ArrayRef<Value *>(Idx), Twine(""),
+                                         F->getEntryBlock().getFirstNonPHI());
+      }
+      I.replaceUsesOfWith(Ptr, PtrI);
+    }
   }
-};
 
-bool AMDGPUAnnotateUniformValuesLegacy::runOnFunction(Function &F) {
+  if (PtrI) {
+    setUniformMetadata(PtrI);
+    if (NotClobbered)
+      setNoClobberMetadata(PtrI);
+  }
+}
+
+bool AMDGPUAnnotateUniformValues::doInitialization(Module &M) {
+  return false;
+}
+
+bool AMDGPUAnnotateUniformValues::runOnFunction(Function &F) {
   if (skipFunction(F))
     return false;
 
-  UniformityInfo &UI =
-      getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
-  MemorySSA &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
-  AliasAnalysis &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
+  DA = &getAnalysis<LegacyDivergenceAnalysis>();
+  MSSA = &getAnalysis<MemorySSAWrapperPass>().getMSSA();
+  isEntryFunc = AMDGPU::isEntryFunctionCC(F.getCallingConv());
 
-  AMDGPUAnnotateUniformValues Impl(UI, MSSA, AA, F);
-  Impl.visit(F);
-  return Impl.changed();
+  visit(F);
+  noClobberClones.clear();
+  return true;
 }
 
-INITIALIZE_PASS_BEGIN(AMDGPUAnnotateUniformValuesLegacy, DEBUG_TYPE,
-                      "Add AMDGPU uniform metadata", false, false)
-INITIALIZE_PASS_DEPENDENCY(UniformityInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
-INITIALIZE_PASS_END(AMDGPUAnnotateUniformValuesLegacy, DEBUG_TYPE,
-                    "Add AMDGPU uniform metadata", false, false)
-
-char AMDGPUAnnotateUniformValuesLegacy::ID = 0;
-
-FunctionPass *llvm::createAMDGPUAnnotateUniformValuesLegacy() {
-  return new AMDGPUAnnotateUniformValuesLegacy();
+FunctionPass *
+llvm::createAMDGPUAnnotateUniformValues() {
+  return new AMDGPUAnnotateUniformValues();
 }

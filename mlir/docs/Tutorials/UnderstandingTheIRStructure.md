@@ -40,8 +40,8 @@ the nested regions and print them individually:
     if (!op->getAttrs().empty()) {
       printIndent() << op->getAttrs().size() << " attributes:\n";
       for (NamedAttribute attr : op->getAttrs())
-        printIndent() << " - '" << attr.getName() << "' : '"
-                      << attr.getValue() << "'\n";
+        printIndent() << " - '" << attr.first << "' : '" << attr.second
+                      << "'\n";
     }
 
     // Recurse into each of the regions attached to the operation.
@@ -96,13 +96,13 @@ with `mlir-opt -test-print-nesting -allow-unregistered-dialect
 llvm-project/mlir/test/IR/print-ir-nesting.mlir`:
 
 ```mlir
-"builtin.module"() ( {
-  %results:4 = "dialect.op1"() {"attribute name" = 42 : i32} : () -> (i1, i16, i32, i64)
+"module"() ( {
+  %0:4 = "dialect.op1"() {"attribute name" = 42 : i32} : () -> (i1, i16, i32, i64)
   "dialect.op2"() ( {
-    "dialect.innerop1"(%results#0, %results#1) : (i1, i16) -> ()
+    "dialect.innerop1"(%0#0, %0#1) : (i1, i16) -> ()
   },  {
     "dialect.innerop2"() : () -> ()
-    "dialect.innerop3"(%results#0, %results#2, %results#3)[^bb1, ^bb2] : (i1, i32, i64) -> ()
+    "dialect.innerop3"(%0#0, %0#2, %0#3)[^bb1, ^bb2] : (i1, i32, i64) -> ()
   ^bb1(%1: i32):  // pred: ^bb0
     "dialect.innerop4"() : () -> ()
     "dialect.innerop5"() : () -> ()
@@ -116,17 +116,15 @@ llvm-project/mlir/test/IR/print-ir-nesting.mlir`:
 And will yield the following output:
 
 ```
-visiting op: 'builtin.module' with 0 operands and 0 results
+visiting op: 'module' with 0 operands and 0 results
  1 nested regions:
   Region with 1 blocks:
-    Block with 0 arguments, 0 successors, and 2 operations
+    Block with 0 arguments, 0 successors, and 3 operations
       visiting op: 'dialect.op1' with 0 operands and 4 results
       1 attributes:
        - 'attribute name' : '42 : i32'
        0 nested regions:
       visiting op: 'dialect.op2' with 0 operands and 0 results
-      1 attributes:
-       - 'other attribute' : '42 : i64'
        2 nested regions:
         Region with 1 blocks:
           Block with 0 arguments, 0 successors, and 1 operations
@@ -148,9 +146,10 @@ visiting op: 'builtin.module' with 0 operands and 0 results
              0 nested regions:
             visiting op: 'dialect.innerop7' with 0 operands and 0 results
              0 nested regions:
+       0 nested regions:
 ```
 
-## Other IR Traversal Methods
+## Other IR Traversal Methods.
 
 In many cases, unwrapping the recursive structure of the IR is cumbersome and
 you may be interested in using other helpers.
@@ -193,7 +192,7 @@ Operation, for example the following will apply the callback only on `LinalgOp`
 operations nested inside the function:
 
 ```c++
-  getFunction().walk([](LinalgOp linalgOp) {
+  getFunction.walk([](LinalgOp linalgOp) {
     // process LinalgOp `linalgOp`.
   });
 ```

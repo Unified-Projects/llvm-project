@@ -13,7 +13,6 @@
 // T is an array type of unknown bound ([dcl.array])
 
 #include <type_traits>
-#include <cstddef>
 
 #include "test_macros.h"
 
@@ -32,6 +31,9 @@ void test_array()
     test_array_imp<volatile T, B>();
     test_array_imp<const volatile T, B>();
 }
+
+typedef char array[3];
+typedef char incomplete_array[];
 
 class incomplete_type;
 
@@ -63,9 +65,8 @@ int main(int, char**)
     test_array<FunctionPtr,    false>();
 
 //  Array types
-    test_array<char[3],           false>();
-    test_array<int[0],            false>();
-    test_array<char[],            true>();
+    test_array<array,             false>();
+    test_array<incomplete_array,  true>();
     test_array<incomplete_type[], true>();
 
   return 0;

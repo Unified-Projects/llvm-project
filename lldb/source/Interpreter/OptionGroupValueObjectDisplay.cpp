@@ -62,7 +62,7 @@ static const OptionDefinition g_option_table[] = {
 
 llvm::ArrayRef<OptionDefinition>
 OptionGroupValueObjectDisplay::GetDefinitions() {
-  return llvm::ArrayRef(g_option_table);
+  return llvm::makeArrayRef(g_option_table);
 }
 
 Status OptionGroupValueObjectDisplay::SetOptionValue(
@@ -102,26 +102,24 @@ Status OptionGroupValueObjectDisplay::SetOptionValue(
   case 'D':
     if (option_arg.getAsInteger(0, max_depth)) {
       max_depth = UINT32_MAX;
-      error = Status::FromErrorStringWithFormat("invalid max depth '%s'",
-                                                option_arg.str().c_str());
-    } else {
-      max_depth_is_default = false;
+      error.SetErrorStringWithFormat("invalid max depth '%s'",
+                                     option_arg.str().c_str());
     }
     break;
 
   case 'Z':
     if (option_arg.getAsInteger(0, elem_count)) {
       elem_count = UINT32_MAX;
-      error = Status::FromErrorStringWithFormat("invalid element count '%s'",
-                                                option_arg.str().c_str());
+      error.SetErrorStringWithFormat("invalid element count '%s'",
+                                     option_arg.str().c_str());
     }
     break;
 
   case 'P':
     if (option_arg.getAsInteger(0, ptr_depth)) {
       ptr_depth = 0;
-      error = Status::FromErrorStringWithFormat("invalid pointer depth '%s'",
-                                                option_arg.str().c_str());
+      error.SetErrorStringWithFormat("invalid pointer depth '%s'",
+                                     option_arg.str().c_str());
     }
     break;
 
@@ -130,23 +128,23 @@ Status OptionGroupValueObjectDisplay::SetOptionValue(
       no_summary_depth = 1;
     else if (option_arg.getAsInteger(0, no_summary_depth)) {
       no_summary_depth = 0;
-      error = Status::FromErrorStringWithFormat("invalid pointer depth '%s'",
-                                                option_arg.str().c_str());
+      error.SetErrorStringWithFormat("invalid pointer depth '%s'",
+                                     option_arg.str().c_str());
     }
     break;
 
   case 'S':
     use_synth = OptionArgParser::ToBoolean(option_arg, true, &success);
     if (!success)
-      error = Status::FromErrorStringWithFormat("invalid synthetic-type '%s'",
-                                                option_arg.str().c_str());
+      error.SetErrorStringWithFormat("invalid synthetic-type '%s'",
+                                     option_arg.str().c_str());
     break;
 
   case 'V':
     run_validator = OptionArgParser::ToBoolean(option_arg, true, &success);
     if (!success)
-      error = Status::FromErrorStringWithFormat("invalid validate '%s'",
-                                                option_arg.str().c_str());
+      error.SetErrorStringWithFormat("invalid validate '%s'",
+                                     option_arg.str().c_str());
     break;
 
   default:
@@ -165,7 +163,6 @@ void OptionGroupValueObjectDisplay::OptionParsingStarting(
   flat_output = false;
   use_objc = false;
   max_depth = UINT32_MAX;
-  max_depth_is_default = true;
   ptr_depth = 0;
   elem_count = 0;
   use_synth = true;
@@ -175,12 +172,9 @@ void OptionGroupValueObjectDisplay::OptionParsingStarting(
 
   TargetSP target_sp =
       execution_context ? execution_context->GetTargetSP() : TargetSP();
-  if (target_sp) {
+  if (target_sp)
     use_dynamic = target_sp->GetPreferDynamicValue();
-    auto max_depth_config = target_sp->GetMaximumDepthOfChildrenToDisplay();
-    max_depth = std::get<uint32_t>(max_depth_config);
-    max_depth_is_default = std::get<bool>(max_depth_config);
-  } else {
+  else {
     // If we don't have any targets, then dynamic values won't do us much good.
     use_dynamic = lldb::eNoDynamicValues;
   }
@@ -190,12 +184,13 @@ DumpValueObjectOptions OptionGroupValueObjectDisplay::GetAsDumpOptions(
     LanguageRuntimeDescriptionDisplayVerbosity lang_descr_verbosity,
     lldb::Format format, lldb::TypeSummaryImplSP summary_sp) {
   DumpValueObjectOptions options;
-  options.SetMaximumPointerDepth(ptr_depth);
+  options.SetMaximumPointerDepth(
+      {DumpValueObjectOptions::PointerDepth::Mode::Always, ptr_depth});
   if (use_objc)
     options.SetShowSummary(false);
   else
     options.SetOmitSummaryDepth(no_summary_depth);
-  options.SetMaximumDepth(max_depth, max_depth_is_default)
+  options.SetMaximumDepth(max_depth)
       .SetShowTypes(show_types)
       .SetShowLocation(show_location)
       .SetUseObjectiveC(use_objc)

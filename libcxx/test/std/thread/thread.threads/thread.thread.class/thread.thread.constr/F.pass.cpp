@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// UNSUPPORTED: libcpp-has-no-threads
 
 // <thread>
 
@@ -12,7 +14,6 @@
 
 // template <class F, class ...Args> thread(F&& f, Args&&... args);
 
-// UNSUPPORTED: no-threads
 // UNSUPPORTED: sanitizer-new-delete
 
 #include <thread>
@@ -36,9 +37,7 @@ void* operator new(std::size_t s) TEST_THROW_SPEC(std::bad_alloc)
     } while (!throw_one.compare_exchange_weak(expected, expected - 1));
     ++outstanding_new;
     void* ret = std::malloc(s);
-    if (!ret) {
-      std::abort(); // placate MSVC's unchecked malloc warning (assert() won't silence it)
-    }
+    if (!ret) std::abort(); // placate MSVC's unchecked malloc warning
     return ret;
 }
 
@@ -137,7 +136,7 @@ void test_throwing_new_during_thread_creation() {
     for (int i=0; i <= numAllocs; ++i) {
         throw_one = i;
         f_run = false;
-        unsigned old_outstanding = outstanding_new;
+        TEST_NOT_WIN32_DLL(unsigned old_outstanding = outstanding_new);
         try {
             std::thread t(f);
             assert(i == numAllocs); // Only final iteration will not throw.
@@ -147,7 +146,9 @@ void test_throwing_new_during_thread_creation() {
             assert(i < numAllocs);
             assert(!f_run); // (2.2)
         }
-        ASSERT_WITH_LIBRARY_INTERNAL_ALLOCATIONS(old_outstanding == outstanding_new); // (2.3)
+        // In DLL builds on Windows, the overridden operators new/delete won't
+        // override calls from within the DLL, so this won't match.
+        TEST_NOT_WIN32_DLL(assert(old_outstanding == outstanding_new)); // (2.3)
     }
     f_run = false;
     throw_one = 0xFFF;

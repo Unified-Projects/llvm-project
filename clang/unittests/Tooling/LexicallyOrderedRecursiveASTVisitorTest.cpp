@@ -44,14 +44,13 @@ private:
   llvm::SmallVector<Decl *, 8> TraversalStack;
 };
 
-class DummyMatchVisitor : public ExpectedLocationVisitor {
+class DummyMatchVisitor : public ExpectedLocationVisitor<DummyMatchVisitor> {
   bool EmitDeclIndices, EmitStmtIndices;
 
 public:
   DummyMatchVisitor(bool EmitDeclIndices = false, bool EmitStmtIndices = false)
       : EmitDeclIndices(EmitDeclIndices), EmitStmtIndices(EmitStmtIndices) {}
-
-  bool VisitTranslationUnitDecl(TranslationUnitDecl *TU) override {
+  bool VisitTranslationUnitDecl(TranslationUnitDecl *TU) {
     const ASTContext &Context = TU->getASTContext();
     const SourceManager &SM = Context.getSourceManager();
     LexicallyOrderedDeclVisitor SubVisitor(*this, SM, EmitDeclIndices,
@@ -88,7 +87,7 @@ bool LexicallyOrderedDeclVisitor::VisitNamedDecl(const NamedDecl *D) {
   }
   if (EmitDeclIndices)
     OS << "@" << Index++;
-  Matcher.match(Path, D);
+  Matcher.match(OS.str(), D);
   return true;
 }
 
@@ -97,7 +96,7 @@ bool LexicallyOrderedDeclVisitor::VisitDeclRefExpr(const DeclRefExpr *D) {
   llvm::raw_string_ostream OS(Name);
   if (EmitStmtIndices)
     OS << "@" << Index++;
-  Matcher.match(Name, D);
+  Matcher.match(OS.str(), D);
   return true;
 }
 
@@ -107,7 +106,7 @@ TEST(LexicallyOrderedRecursiveASTVisitor, VisitDeclsInImplementation) {
 @end
 @implementation I
 
-void nestedFunction() { }
+int nestedFunction() { }
 
 - (void) method{ }
 

@@ -1,9 +1,7 @@
 set(LLVM_LINK_COMPONENTS
   BitReader
   BitstreamReader
-  Object
   Support
-  TargetParser
   )
 
 
@@ -22,8 +20,6 @@ add_clang_library(clangSerialization
   ModuleFileExtension.cpp
   ModuleManager.cpp
   PCHContainerOperations.cpp
-  ObjectFilePCHContainerReader.cpp
-  TemplateArgumentHasher.cpp
 
   ADDITIONAL_HEADERS
   ASTCommon.h
@@ -37,5 +33,4 @@ add_clang_library(clangSerialization
 
   DEPENDS
   omp_gen
-  ClangDriverOptions
   )

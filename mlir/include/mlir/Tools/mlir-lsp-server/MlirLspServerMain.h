@@ -10,22 +10,19 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef MLIR_TOOLS_MLIR_LSP_SERVER_MLIRLSPSERVERMAIN_H
-#define MLIR_TOOLS_MLIR_LSP_SERVER_MLIRLSPSERVERMAIN_H
-
-namespace llvm {
-struct LogicalResult;
-} // namespace llvm
+#ifndef MLIR_TOOLS_MLIRLSPSERVER_MLIRLSPSERVERMAIN_H
+#define MLIR_TOOLS_MLIRLSPSERVER_MLIRLSPSERVERMAIN_H
 
 namespace mlir {
 class DialectRegistry;
+struct LogicalResult;
 
 /// Implementation for tools like `mlir-lsp-server`.
 /// - registry should contain all the dialects that can be parsed in source IR
 /// passed to the server.
-llvm::LogicalResult MlirLspServerMain(int argc, char **argv,
-                                      DialectRegistry &registry);
+LogicalResult MlirLspServerMain(int argc, char **argv,
+                                DialectRegistry &registry);
 
-} // namespace mlir
+} // end namespace mlir
 
-#endif // MLIR_TOOLS_MLIR_LSP_SERVER_MLIRLSPSERVERMAIN_H
+#endif // MLIR_TOOLS_MLIRLSPSERVER_MLIRLSPSERVERMAIN_H

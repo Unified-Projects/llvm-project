@@ -1,4 +1,4 @@
-//===-- RISCVTargetObjectFile.h - RISC-V Object Info ------------*- C++ -*-===//
+//===-- RISCVTargetObjectFile.h - RISCV Object Info -*- C++ ---------*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -13,20 +13,13 @@
 
 namespace llvm {
 
-/// This implementation is used for RISC-V ELF targets.
+/// This implementation is used for RISCV ELF targets.
 class RISCVELFTargetObjectFile : public TargetLoweringObjectFileELF {
   MCSection *SmallDataSection;
-  MCSection *SmallRODataSection;
-  MCSection *SmallROData4Section;
-  MCSection *SmallROData8Section;
-  MCSection *SmallROData16Section;
-  MCSection *SmallROData32Section;
   MCSection *SmallBSSSection;
-  unsigned SSThreshold = 0;
+  unsigned SSThreshold = 8;
 
 public:
-  unsigned getTextSectionAlignment() const override;
-
   void Initialize(MCContext &Ctx, const TargetMachine &TM) override;
 
   /// Return true if this global address should be placed into small data/bss
@@ -47,12 +40,6 @@ public:
   void getModuleMetadata(Module &M) override;
 
   bool isInSmallSection(uint64_t Size) const;
-
-  const MCExpr *getIndirectSymViaGOTPCRel(const GlobalValue *GV,
-                                          const MCSymbol *Sym,
-                                          const MCValue &MV, int64_t Offset,
-                                          MachineModuleInfo *MMI,
-                                          MCStreamer &Streamer) const override;
 };
 
 } // end namespace llvm

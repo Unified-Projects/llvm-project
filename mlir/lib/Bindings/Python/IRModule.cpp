@@ -7,17 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "IRModule.h"
+#include "Globals.h"
+#include "PybindUtils.h"
 
-#include <optional>
 #include <vector>
 
-#include "Globals.h"
-#include "NanobindUtils.h"
-#include "mlir-c/Support.h"
-#include "mlir/Bindings/Python/Nanobind.h"
-#include "mlir-c/Bindings/Python/Interop.h" // This is expected after nanobind.
-
-namespace nb = nanobind;
+namespace py = pybind11;
 using namespace mlir;
 using namespace mlir::python;
 
@@ -30,170 +25,122 @@ PyGlobals *PyGlobals::instance = nullptr;
 PyGlobals::PyGlobals() {
   assert(!instance && "PyGlobals already constructed");
   instance = this;
-  // The default search path include {mlir.}dialects, where {mlir.} is the
-  // package prefix configured at compile time.
-  dialectSearchPrefixes.emplace_back(MAKE_MLIR_PYTHON_QUALNAME("dialects"));
 }
 
 PyGlobals::~PyGlobals() { instance = nullptr; }
 
-bool PyGlobals::loadDialectModule(llvm::StringRef dialectNamespace) {
-  {
-    nb::ft_lock_guard lock(mutex);
-    if (loadedDialectModules.contains(dialectNamespace))
-      return true;
-  }
+void PyGlobals::loadDialectModule(llvm::StringRef dialectNamespace) {
+  py::gil_scoped_acquire();
+  if (loadedDialectModulesCache.contains(dialectNamespace))
+    return;
   // Since re-entrancy is possible, make a copy of the search prefixes.
   std::vector<std::string> localSearchPrefixes = dialectSearchPrefixes;
-  nb::object loaded = nb::none();
+  py::object loaded;
   for (std::string moduleName : localSearchPrefixes) {
     moduleName.push_back('.');
     moduleName.append(dialectNamespace.data(), dialectNamespace.size());
 
     try {
-      loaded = nb::module_::import_(moduleName.c_str());
-    } catch (nb::python_error &e) {
+      py::gil_scoped_release();
+      loaded = py::module::import(moduleName.c_str());
+    } catch (py::error_already_set &e) {
       if (e.matches(PyExc_ModuleNotFoundError)) {
         continue;
+      } else {
+        throw;
       }
-      throw;
     }
     break;
   }
 
-  if (loaded.is_none())
-    return false;
   // Note: Iterator cannot be shared from prior to loading, since re-entrancy
   // may have occurred, which may do anything.
-  nb::ft_lock_guard lock(mutex);
-  loadedDialectModules.insert(dialectNamespace);
-  return true;
-}
-
-void PyGlobals::registerAttributeBuilder(const std::string &attributeKind,
-                                         nb::callable pyFunc, bool replace) {
-  nb::ft_lock_guard lock(mutex);
-  nb::object &found = attributeBuilderMap[attributeKind];
-  if (found && !replace) {
-    throw std::runtime_error((llvm::Twine("Attribute builder for '") +
-                              attributeKind +
-                              "' is already registered with func: " +
-                              nb::cast<std::string>(nb::str(found)))
-                                 .str());
-  }
-  found = std::move(pyFunc);
-}
-
-void PyGlobals::registerTypeCaster(MlirTypeID mlirTypeID,
-                                   nb::callable typeCaster, bool replace) {
-  nb::ft_lock_guard lock(mutex);
-  nb::object &found = typeCasterMap[mlirTypeID];
-  if (found && !replace)
-    throw std::runtime_error("Type caster is already registered with caster: " +
-                             nb::cast<std::string>(nb::str(found)));
-  found = std::move(typeCaster);
-}
-
-void PyGlobals::registerValueCaster(MlirTypeID mlirTypeID,
-                                    nb::callable valueCaster, bool replace) {
-  nb::ft_lock_guard lock(mutex);
-  nb::object &found = valueCasterMap[mlirTypeID];
-  if (found && !replace)
-    throw std::runtime_error("Value caster is already registered: " +
-                             nb::cast<std::string>(nb::repr(found)));
-  found = std::move(valueCaster);
+  loadedDialectModulesCache.insert(dialectNamespace);
 }
 
 void PyGlobals::registerDialectImpl(const std::string &dialectNamespace,
-                                    nb::object pyClass) {
-  nb::ft_lock_guard lock(mutex);
-  nb::object &found = dialectClassMap[dialectNamespace];
+                                    py::object pyClass) {
+  py::gil_scoped_acquire();
+  py::object &found = dialectClassMap[dialectNamespace];
   if (found) {
-    throw std::runtime_error((llvm::Twine("Dialect namespace '") +
-                              dialectNamespace + "' is already registered.")
-                                 .str());
+    throw SetPyError(PyExc_RuntimeError, llvm::Twine("Dialect namespace '") +
+                                             dialectNamespace +
+                                             "' is already registered.");
   }
   found = std::move(pyClass);
 }
 
 void PyGlobals::registerOperationImpl(const std::string &operationName,
-                                      nb::object pyClass, bool replace) {
-  nb::ft_lock_guard lock(mutex);
-  nb::object &found = operationClassMap[operationName];
-  if (found && !replace) {
-    throw std::runtime_error((llvm::Twine("Operation '") + operationName +
-                              "' is already registered.")
-                                 .str());
+                                      py::object pyClass,
+                                      py::object rawOpViewClass) {
+  py::gil_scoped_acquire();
+  py::object &found = operationClassMap[operationName];
+  if (found) {
+    throw SetPyError(PyExc_RuntimeError, llvm::Twine("Operation '") +
+                                             operationName +
+                                             "' is already registered.");
   }
   found = std::move(pyClass);
+  rawOpViewClassMap[operationName] = std::move(rawOpViewClass);
 }
 
-std::optional<nb::callable>
-PyGlobals::lookupAttributeBuilder(const std::string &attributeKind) {
-  nb::ft_lock_guard lock(mutex);
-  const auto foundIt = attributeBuilderMap.find(attributeKind);
-  if (foundIt != attributeBuilderMap.end()) {
-    assert(foundIt->second && "attribute builder is defined");
-    return foundIt->second;
-  }
-  return std::nullopt;
-}
-
-std::optional<nb::callable> PyGlobals::lookupTypeCaster(MlirTypeID mlirTypeID,
-                                                        MlirDialect dialect) {
-  // Try to load dialect module.
-  (void)loadDialectModule(unwrap(mlirDialectGetNamespace(dialect)));
-  nb::ft_lock_guard lock(mutex);
-  const auto foundIt = typeCasterMap.find(mlirTypeID);
-  if (foundIt != typeCasterMap.end()) {
-    assert(foundIt->second && "type caster is defined");
-    return foundIt->second;
-  }
-  return std::nullopt;
-}
-
-std::optional<nb::callable> PyGlobals::lookupValueCaster(MlirTypeID mlirTypeID,
-                                                         MlirDialect dialect) {
-  // Try to load dialect module.
-  (void)loadDialectModule(unwrap(mlirDialectGetNamespace(dialect)));
-  nb::ft_lock_guard lock(mutex);
-  const auto foundIt = valueCasterMap.find(mlirTypeID);
-  if (foundIt != valueCasterMap.end()) {
-    assert(foundIt->second && "value caster is defined");
-    return foundIt->second;
-  }
-  return std::nullopt;
-}
-
-std::optional<nb::object>
+llvm::Optional<py::object>
 PyGlobals::lookupDialectClass(const std::string &dialectNamespace) {
-  // Make sure dialect module is loaded.
-  if (!loadDialectModule(dialectNamespace))
-    return std::nullopt;
-  nb::ft_lock_guard lock(mutex);
+  py::gil_scoped_acquire();
+  loadDialectModule(dialectNamespace);
+  // Fast match against the class map first (common case).
   const auto foundIt = dialectClassMap.find(dialectNamespace);
   if (foundIt != dialectClassMap.end()) {
-    assert(foundIt->second && "dialect class is defined");
+    if (foundIt->second.is_none())
+      return llvm::None;
+    assert(foundIt->second && "py::object is defined");
     return foundIt->second;
   }
-  // Not found and loading did not yield a registration.
-  return std::nullopt;
+
+  // Not found and loading did not yield a registration. Negative cache.
+  dialectClassMap[dialectNamespace] = py::none();
+  return llvm::None;
 }
 
-std::optional<nb::object>
-PyGlobals::lookupOperationClass(llvm::StringRef operationName) {
-  // Make sure dialect module is loaded.
+llvm::Optional<pybind11::object>
+PyGlobals::lookupRawOpViewClass(llvm::StringRef operationName) {
+  {
+    py::gil_scoped_acquire();
+    auto foundIt = rawOpViewClassMapCache.find(operationName);
+    if (foundIt != rawOpViewClassMapCache.end()) {
+      if (foundIt->second.is_none())
+        return llvm::None;
+      assert(foundIt->second && "py::object is defined");
+      return foundIt->second;
+    }
+  }
+
+  // Not found. Load the dialect namespace.
   auto split = operationName.split('.');
   llvm::StringRef dialectNamespace = split.first;
-  if (!loadDialectModule(dialectNamespace))
-    return std::nullopt;
+  loadDialectModule(dialectNamespace);
 
-  nb::ft_lock_guard lock(mutex);
-  auto foundIt = operationClassMap.find(operationName);
-  if (foundIt != operationClassMap.end()) {
-    assert(foundIt->second && "OpView is defined");
-    return foundIt->second;
+  // Attempt to find from the canonical map and cache.
+  {
+    py::gil_scoped_acquire();
+    auto foundIt = rawOpViewClassMap.find(operationName);
+    if (foundIt != rawOpViewClassMap.end()) {
+      if (foundIt->second.is_none())
+        return llvm::None;
+      assert(foundIt->second && "py::object is defined");
+      // Positive cache.
+      rawOpViewClassMapCache[operationName] = foundIt->second;
+      return foundIt->second;
+    } else {
+      // Negative cache.
+      rawOpViewClassMap[operationName] = py::none();
+      return llvm::None;
+    }
   }
-  // Not found and loading did not yield a registration.
-  return std::nullopt;
+}
+
+void PyGlobals::clearImportCache() {
+  py::gil_scoped_acquire();
+  loadedDialectModulesCache.clear();
+  rawOpViewClassMapCache.clear();
 }

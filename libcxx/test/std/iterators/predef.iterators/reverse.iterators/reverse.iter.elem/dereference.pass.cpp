@@ -21,15 +21,12 @@
 #include <cassert>
 
 #include "test_macros.h"
-#include "test_iterators.h"
 
 class A
 {
     int data_;
 public:
     A() : data_(1) {}
-    A(const A&) = default;
-    A& operator=(const A&) = default;
     ~A() {data_ = -1;}
 
     friend bool operator==(const A& x, const A& y)
@@ -48,10 +45,6 @@ int main(int, char**)
 {
     A a;
     test(&a+1, A());
-    test(random_access_iterator<A*>(&a + 1), A());
-#if TEST_STD_VER >= 20
-    test(cpp20_random_access_iterator<A*>(&a + 1), A());
-#endif
 
 #if TEST_STD_VER > 14
     {

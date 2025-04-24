@@ -4,7 +4,7 @@
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-define void @f_fu(ptr %ret, ptr  %aa, float %b) {
+define void @f_fu(float* %ret, float*  %aa, float %b) {
 ; CHECK-LABEL: f_fu:
 ; CHECK:       ## %bb.0: ## %allocas
 ; CHECK-NEXT:    vcvttss2si %xmm0, %eax
@@ -15,14 +15,15 @@ define void @f_fu(ptr %ret, ptr  %aa, float %b) {
 ; CHECK-NEXT:    vpsrad $1, %zmm2, %zmm2
 ; CHECK-NEXT:    movw $-21846, %ax ## imm = 0xAAAA
 ; CHECK-NEXT:    kmovw %eax, %k1
-; CHECK-NEXT:    vmovdqa32 {{.*#+}} zmm1 {%k1} = [u,3,u,5,u,7,u,9,u,11,u,13,u,15,u,17]
+; CHECK-NEXT:    vmovdqa32 {{\.?LCPI[0-9]+_[0-9]+}}(%rip), %zmm1 {%k1}
 ; CHECK-NEXT:    vpaddd %zmm0, %zmm2, %zmm0
 ; CHECK-NEXT:    vpaddd %zmm1, %zmm0, %zmm0
 ; CHECK-NEXT:    vcvtdq2ps %zmm0, %zmm0
 ; CHECK-NEXT:    vmovups %zmm0, (%rdi)
 ; CHECK-NEXT:    retq
 allocas:
-  %ptr_masked_load.39 = load <16 x float>, ptr %aa, align 4
+  %ptr_cast_for_load = bitcast float* %aa to <16 x float>*
+  %ptr_masked_load.39 = load <16 x float>, <16 x float>* %ptr_cast_for_load, align 4
   %b_load_to_int32 = fptosi float %b to i32
   %b_load_to_int32_broadcast_init = insertelement <16 x i32> undef, i32 %b_load_to_int32, i32 0
   %b_load_to_int32_broadcast = shufflevector <16 x i32> %b_load_to_int32_broadcast_init, <16 x i32> undef, <16 x i32> zeroinitializer
@@ -41,6 +42,7 @@ allocas:
   %add_struct_offset_y_struct_offset33_x = add <16 x i32> %foo_test, %v1.i
 
   %val = sitofp <16 x i32> %add_struct_offset_y_struct_offset33_x to <16 x float>
-  store <16 x float> %val, ptr %ret, align 4
+  %ptrcast = bitcast float* %ret to <16 x float>*
+  store <16 x float> %val, <16 x float>* %ptrcast, align 4
   ret void
 }

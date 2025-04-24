@@ -15,11 +15,14 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/CodeGen.h"
 
 namespace llvm {
-template <typename T> class SmallVectorImpl;
 class GlobalValue;
 class LLT;
 class MachineBasicBlock;
@@ -64,28 +67,15 @@ inline unsigned ComputeLinearIndex(Type *Ty,
 ///
 void ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL, Type *Ty,
                      SmallVectorImpl<EVT> &ValueVTs,
-                     SmallVectorImpl<EVT> *MemVTs,
-                     SmallVectorImpl<TypeSize> *Offsets = nullptr,
-                     TypeSize StartingOffset = TypeSize::getZero());
+                     SmallVectorImpl<uint64_t> *Offsets = nullptr,
+                     uint64_t StartingOffset = 0);
+
+/// Variant of ComputeValueVTs that also produces the memory VTs.
 void ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL, Type *Ty,
                      SmallVectorImpl<EVT> &ValueVTs,
                      SmallVectorImpl<EVT> *MemVTs,
-                     SmallVectorImpl<uint64_t> *FixedOffsets,
-                     uint64_t StartingOffset);
-
-/// Variant of ComputeValueVTs that don't produce memory VTs.
-inline void ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
-                            Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
-                            SmallVectorImpl<TypeSize> *Offsets = nullptr,
-                            TypeSize StartingOffset = TypeSize::getZero()) {
-  ComputeValueVTs(TLI, DL, Ty, ValueVTs, nullptr, Offsets, StartingOffset);
-}
-inline void ComputeValueVTs(const TargetLowering &TLI, const DataLayout &DL,
-                            Type *Ty, SmallVectorImpl<EVT> &ValueVTs,
-                            SmallVectorImpl<uint64_t> *FixedOffsets,
-                            uint64_t StartingOffset) {
-  ComputeValueVTs(TLI, DL, Ty, ValueVTs, nullptr, FixedOffsets, StartingOffset);
-}
+                     SmallVectorImpl<uint64_t> *Offsets = nullptr,
+                     uint64_t StartingOffset = 0);
 
 /// computeValueLLTs - Given an LLVM IR type, compute a sequence of
 /// LLTs that represent all the individual underlying
@@ -114,11 +104,8 @@ ISD::CondCode getFCmpCodeWithoutNaN(ISD::CondCode CC);
 
 /// getICmpCondCode - Return the ISD condition code corresponding to
 /// the given LLVM IR integer condition code.
+///
 ISD::CondCode getICmpCondCode(ICmpInst::Predicate Pred);
-
-/// getICmpCondCode - Return the LLVM IR integer condition code
-/// corresponding to the given ISD integer condition code.
-ICmpInst::Predicate getICmpCondCode(ISD::CondCode Pred);
 
 /// Test if the given instruction is in a position to be optimized
 /// with a tail-call. This roughly means that it's in a block with
@@ -126,8 +113,7 @@ ICmpInst::Predicate getICmpCondCode(ISD::CondCode Pred);
 /// between it and the return.
 ///
 /// This function only tests target-independent requirements.
-bool isInTailCallPosition(const CallBase &Call, const TargetMachine &TM,
-                          bool ReturnsFirstArg = false);
+bool isInTailCallPosition(const CallBase &Call, const TargetMachine &TM);
 
 /// Test if given that the input instruction is in the tail call position, if
 /// there is an attribute mismatch between the caller and the callee that will
@@ -145,12 +131,7 @@ bool attributesPermitTailCall(const Function *F, const Instruction *I,
 /// optimization.
 bool returnTypeIsEligibleForTailCall(const Function *F, const Instruction *I,
                                      const ReturnInst *Ret,
-                                     const TargetLoweringBase &TLI,
-                                     bool ReturnsFirstArg = false);
-
-/// Returns true if the parent of \p CI returns CI's first argument after
-/// calling \p CI.
-bool funcReturnsFirstArgOfCall(const CallInst &CI);
+                                     const TargetLoweringBase &TLI);
 
 DenseMap<const MachineBasicBlock *, int>
 getEHScopeMembership(const MachineFunction &MF);

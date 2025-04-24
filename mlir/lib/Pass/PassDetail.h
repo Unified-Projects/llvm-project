@@ -8,11 +8,8 @@
 #ifndef MLIR_PASS_PASSDETAIL_H_
 #define MLIR_PASS_PASSDETAIL_H_
 
-#include "mlir/IR/Action.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/Support/FormatVariadic.h"
 
 namespace mlir {
 namespace detail {
@@ -32,16 +29,8 @@ public:
   void runOnOperation(bool verifyPasses);
   void runOnOperation() override;
 
-  /// Try to merge the current pass adaptor into 'rhs'. This will try to append
-  /// the pass managers of this adaptor into those within `rhs`, or return
-  /// failure if merging isn't possible. The main situation in which merging is
-  /// not possible is if one of the adaptors has an `any` pipeline that is not
-  /// compatible with a pass manager in the other adaptor. For example, if this
-  /// adaptor has a `func.func` pipeline and `rhs` has an `any` pipeline that
-  /// operates on FunctionOpInterface. In this situation the pipelines have a
-  /// conflict (they both want to run on the same operations), so we can't
-  /// merge.
-  LogicalResult tryMergeInto(MLIRContext *ctx, OpToOpPassAdaptor &rhs);
+  /// Merge the current pass adaptor into given 'rhs'.
+  void mergeInto(OpToOpPassAdaptor &rhs);
 
   /// Returns the pass managers held by this adaptor.
   MutableArrayRef<OpPassManager> getPassManagers() { return mgrs; }
@@ -77,8 +66,9 @@ private:
   /// parent pass manager, and is used to initialize any dynamic pass pipelines
   /// run by the given passes.
   static LogicalResult runPipeline(
-      OpPassManager &pm, Operation *op, AnalysisManager am, bool verifyPasses,
-      unsigned parentInitGeneration, PassInstrumentor *instrumentor = nullptr,
+      iterator_range<OpPassManager::pass_iterator> passes, Operation *op,
+      AnalysisManager am, bool verifyPasses, unsigned parentInitGeneration,
+      PassInstrumentor *instrumentor = nullptr,
       const PassInstrumentation::PipelineParentInfo *parentInfo = nullptr);
 
   /// A set of adaptors to run.
@@ -98,8 +88,9 @@ private:
 
 class PassCrashReproducerGenerator {
 public:
-  PassCrashReproducerGenerator(ReproducerStreamFactory &streamFactory,
-                               bool localReproducer);
+  PassCrashReproducerGenerator(
+      PassManager::ReproducerStreamFactory &streamFactory,
+      bool localReproducer);
   ~PassCrashReproducerGenerator();
 
   /// Initialize the generator in preparation for reproducer generation. The
@@ -128,6 +119,6 @@ private:
   std::unique_ptr<Impl> impl;
 };
 
-} // namespace detail
-} // namespace mlir
+} // end namespace detail
+} // end namespace mlir
 #endif // MLIR_PASS_PASSDETAIL_H_

@@ -193,8 +193,9 @@ public:
 
 class Location {
   template <typename CHECKER>
-  static void _checkLocation(void *checker, SVal location, bool isLoad,
-                             const Stmt *S, CheckerContext &C) {
+  static void _checkLocation(void *checker,
+                             const SVal &location, bool isLoad, const Stmt *S,
+                             CheckerContext &C) {
     ((const CHECKER *)checker)->checkLocation(location, isLoad, S, C);
   }
 
@@ -208,7 +209,8 @@ public:
 
 class Bind {
   template <typename CHECKER>
-  static void _checkBind(void *checker, SVal location, SVal val, const Stmt *S,
+  static void _checkBind(void *checker,
+                         const SVal &location, const SVal &val, const Stmt *S,
                          CheckerContext &C) {
     ((const CHECKER *)checker)->checkBind(location, val, S, C);
   }
@@ -368,12 +370,13 @@ class PointerEscape {
                                                             Kind);
 
     InvalidatedSymbols RegularEscape;
-    for (SymbolRef Sym : Escaped)
-      if (!ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
-          !ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
-        RegularEscape.insert(Sym);
+    for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
+                                            E = Escaped.end(); I != E; ++I)
+      if (!ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
+          !ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
+        RegularEscape.insert(*I);
 
     if (RegularEscape.empty())
       return State;
@@ -407,13 +410,13 @@ class ConstPointerEscape {
       return State;
 
     InvalidatedSymbols ConstEscape;
-    for (SymbolRef Sym : Escaped) {
-      if (ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
-          !ETraits->hasTrait(
-              Sym, RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
-        ConstEscape.insert(Sym);
-    }
+    for (InvalidatedSymbols::const_iterator I = Escaped.begin(),
+                                            E = Escaped.end(); I != E; ++I)
+      if (ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_PreserveContents) &&
+          !ETraits->hasTrait(*I,
+              RegionAndSymbolInvalidationTraits::TK_SuppressEscape))
+        ConstEscape.insert(*I);
 
     if (ConstEscape.empty())
       return State;
@@ -454,8 +457,10 @@ namespace eval {
 
 class Assume {
   template <typename CHECKER>
-  static ProgramStateRef _evalAssume(void *checker, ProgramStateRef state,
-                                     SVal cond, bool assumption) {
+  static ProgramStateRef _evalAssume(void *checker,
+                                         ProgramStateRef state,
+                                         const SVal &cond,
+                                         bool assumption) {
     return ((const CHECKER *)checker)->evalAssume(state, cond, assumption);
   }
 
@@ -529,9 +534,9 @@ public:
 
 template <typename EVENT>
 class EventDispatcher {
-  CheckerManager *Mgr = nullptr;
+  CheckerManager *Mgr;
 public:
-  EventDispatcher() = default;
+  EventDispatcher() : Mgr(nullptr) { }
 
   template <typename CHECKER>
   static void _register(CHECKER *checker, CheckerManager &mgr) {
@@ -556,6 +561,18 @@ struct ImplicitNullDerefEvent {
   bool IsDirectDereference;
 
   static int Tag;
+};
+
+/// A helper class which wraps a boolean value set to false by default.
+///
+/// This class should behave exactly like 'bool' except that it doesn't need to
+/// be explicitly initialized.
+struct DefaultBool {
+  bool val;
+  DefaultBool() : val(false) {}
+  /*implicit*/ operator bool&() { return val; }
+  /*implicit*/ operator const bool&() const { return val; }
+  DefaultBool &operator=(bool b) { val = b; return *this; }
 };
 
 } // end ento namespace

@@ -8,30 +8,19 @@
 
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/ADT/ilist_node.h"
-#include "llvm/CodeGen/CodeGenTargetMachineImpl.h"
-#include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineModuleInfo.h"
-#include "llvm/CodeGen/TargetFrameLowering.h"
-#include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/CodeGen/TargetLowering.h"
-#include "llvm/CodeGenTypes/LowLevelType.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSlotTracker.h"
-#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/TargetRegistry.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
 
 namespace {
-
-// Include helper functions to ease the manipulation of MachineFunctions.
-#include "MFCommon.inc"
 
 TEST(MachineOperandTest, ChangeToTargetIndexTest) {
   // Creating a MachineOperand to change it to TargetIndex
@@ -56,24 +45,20 @@ TEST(MachineOperandTest, ChangeToTargetIndexTest) {
 }
 
 TEST(MachineOperandTest, PrintRegisterMask) {
-  LLVMContext Ctx;
-  Module Mod("Module", Ctx);
-  auto MF = createMachineFunction(Ctx, Mod);
-
-  uint32_t *Dummy = MF->allocateRegMask();
-  MachineOperand MO = MachineOperand::CreateRegMask(Dummy);
+  uint32_t Dummy;
+  MachineOperand MO = MachineOperand::CreateRegMask(&Dummy);
 
   // Checking some preconditions on the newly created
   // MachineOperand.
   ASSERT_TRUE(MO.isRegMask());
-  ASSERT_TRUE(MO.getRegMask() == Dummy);
+  ASSERT_TRUE(MO.getRegMask() == &Dummy);
 
   // Print a MachineOperand containing a RegMask. Here we check that without a
   // TRI and IntrinsicInfo we still print a less detailed regmask.
   std::string str;
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "<regmask ...>");
+  ASSERT_TRUE(OS.str() == "<regmask ...>");
 }
 
 TEST(MachineOperandTest, PrintSubReg) {
@@ -94,7 +79,7 @@ TEST(MachineOperandTest, PrintSubReg) {
   std::string str;
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "$physreg1.subreg5");
+  ASSERT_TRUE(OS.str() == "$physreg1.subreg5");
 }
 
 TEST(MachineOperandTest, PrintCImm) {
@@ -116,7 +101,7 @@ TEST(MachineOperandTest, PrintCImm) {
   std::string str;
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "i128 18446744073709551616");
+  ASSERT_TRUE(OS.str() == "i128 18446744073709551616");
 }
 
 TEST(MachineOperandTest, PrintSubRegIndex) {
@@ -133,7 +118,7 @@ TEST(MachineOperandTest, PrintSubRegIndex) {
   std::string str;
   raw_string_ostream OS(str);
   MachineOperand::printSubRegIdx(OS, MO.getImm(), nullptr);
-  ASSERT_TRUE(str == "%subreg.3");
+  ASSERT_TRUE(OS.str() == "%subreg.3");
 }
 
 TEST(MachineOperandTest, PrintCPI) {
@@ -152,7 +137,7 @@ TEST(MachineOperandTest, PrintCPI) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "%const.0 + 8");
+    ASSERT_TRUE(OS.str() == "%const.0 + 8");
   }
 
   str.clear();
@@ -164,7 +149,7 @@ TEST(MachineOperandTest, PrintCPI) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "%const.0 - 12");
+    ASSERT_TRUE(OS.str() == "%const.0 - 12");
   }
 }
 
@@ -183,7 +168,7 @@ TEST(MachineOperandTest, PrintTargetIndexName) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "target-index(<unknown>) + 8");
+    ASSERT_TRUE(OS.str() == "target-index(<unknown>) + 8");
   }
 
   str.clear();
@@ -194,7 +179,7 @@ TEST(MachineOperandTest, PrintTargetIndexName) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "target-index(<unknown>) - 12");
+    ASSERT_TRUE(OS.str() == "target-index(<unknown>) - 12");
   }
 }
 
@@ -211,7 +196,7 @@ TEST(MachineOperandTest, PrintJumpTableIndex) {
   std::string str;
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "%jump-table.3");
+  ASSERT_TRUE(OS.str() == "%jump-table.3");
 }
 
 TEST(MachineOperandTest, PrintExternalSymbol) {
@@ -228,7 +213,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "&foo");
+    ASSERT_TRUE(OS.str() == "&foo");
   }
 
   str.clear();
@@ -238,7 +223,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "&foo + 12");
+    ASSERT_TRUE(OS.str() == "&foo + 12");
   }
 
   str.clear();
@@ -248,7 +233,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "&foo - 12");
+    ASSERT_TRUE(OS.str() == "&foo - 12");
   }
 }
 
@@ -274,7 +259,7 @@ TEST(MachineOperandTest, PrintGlobalAddress) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "@foo + 12");
+    ASSERT_TRUE(OS.str() == "@foo + 12");
   }
 
   str.clear();
@@ -284,7 +269,7 @@ TEST(MachineOperandTest, PrintGlobalAddress) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "@foo - 12");
+    ASSERT_TRUE(OS.str() == "@foo - 12");
   }
 }
 
@@ -302,7 +287,7 @@ TEST(MachineOperandTest, PrintRegisterLiveOut) {
   // Print a MachineOperand containing a register live out list without a TRI.
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "liveout(<unknown>)");
+  ASSERT_TRUE(OS.str() == "liveout(<unknown>)");
 }
 
 TEST(MachineOperandTest, PrintMetadata) {
@@ -328,7 +313,7 @@ TEST(MachineOperandTest, PrintMetadata) {
   MO.print(OS, MST, LLT{}, /*OpIdx*/~0U, /*PrintDef=*/false, /*IsStandalone=*/false,
            /*ShouldPrintRegisterTies=*/false, 0, /*TRI=*/nullptr,
            /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "!0");
+  ASSERT_TRUE(OS.str() == "!0");
 }
 
 TEST(MachineOperandTest, PrintMCSymbol) {
@@ -349,7 +334,7 @@ TEST(MachineOperandTest, PrintMCSymbol) {
   // Print a MachineOperand containing a metadata node.
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "<mcsymbol foo>");
+  ASSERT_TRUE(OS.str() == "<mcsymbol foo>");
 }
 
 TEST(MachineOperandTest, PrintCFI) {
@@ -366,7 +351,7 @@ TEST(MachineOperandTest, PrintCFI) {
   // attached to it.
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "<cfi directive>");
+  ASSERT_TRUE(OS.str() == "<cfi directive>");
 }
 
 TEST(MachineOperandTest, PrintIntrinsicID) {
@@ -383,7 +368,7 @@ TEST(MachineOperandTest, PrintIntrinsicID) {
     // Print a MachineOperand containing a generic intrinsic ID.
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "intrinsic(@llvm.bswap)");
+    ASSERT_TRUE(OS.str() == "intrinsic(@llvm.bswap)");
   }
 
   str.clear();
@@ -394,7 +379,7 @@ TEST(MachineOperandTest, PrintIntrinsicID) {
     // IntrinsicInfo.
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(str == "intrinsic(4294967295)");
+    ASSERT_TRUE(OS.str() == "intrinsic(4294967295)");
   }
 }
 
@@ -411,7 +396,7 @@ TEST(MachineOperandTest, PrintPredicate) {
   // Print a MachineOperand containing a int predicate ICMP_EQ.
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(str == "intpred(eq)");
+  ASSERT_TRUE(OS.str() == "intpred(eq)");
 }
 
 TEST(MachineOperandTest, HashValue) {

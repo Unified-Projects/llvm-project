@@ -13,7 +13,6 @@
 #ifndef LLVM_LIB_TABLEGEN_TGLEXER_H
 #define LLVM_LIB_TABLEGEN_TGLEXER_H
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/DataTypes.h"
@@ -22,6 +21,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace llvm {
 template <typename T> class ArrayRef;
@@ -29,161 +29,52 @@ class SourceMgr;
 class Twine;
 
 namespace tgtok {
-enum TokKind {
-  // Markers
-  Eof,
-  Error,
+  enum TokKind {
+    // Markers
+    Eof, Error,
 
-  // Tokens with no info.
-  minus,     // -
-  plus,      // +
-  l_square,  // [
-  r_square,  // ]
-  l_brace,   // {
-  r_brace,   // }
-  l_paren,   // (
-  r_paren,   // )
-  less,      // <
-  greater,   // >
-  colon,     // :
-  semi,      // ;
-  comma,     // ,
-  dot,       // .
-  equal,     // =
-  question,  // ?
-  paste,     // #
-  dotdotdot, // ...
+    // Tokens with no info.
+    minus, plus,        // - +
+    l_square, r_square, // [ ]
+    l_brace, r_brace,   // { }
+    l_paren, r_paren,   // ( )
+    less, greater,      // < >
+    colon, semi,        // : ;
+    comma, dot,         // , .
+    equal, question,    // = ?
+    paste,              // #
+    dotdotdot,          // ...
 
-  // Boolean literals.
-  TrueVal,
-  FalseVal,
+    // Reserved keywords. ('ElseKW' is named to distinguish it from the
+    // existing 'Else' that means the preprocessor #else.)
+    Assert, Bit, Bits, Class, Code, Dag, Def, Defm, Defset, Defvar, ElseKW,
+    FalseKW, Field, Foreach, If, In, Include, Int, Let, List, MultiClass,
+    String, Then, TrueKW,
 
-  // Integer value.
-  IntVal,
+    // Bang operators.
+    XConcat, XADD, XSUB, XMUL, XNOT, XAND, XOR, XXOR, XSRA, XSRL, XSHL,
+    XListConcat, XListSplat, XStrConcat, XInterleave, XSubstr, XFind, XCast,
+    XSubst, XForEach, XFilter, XFoldl, XHead, XTail, XSize, XEmpty, XIf,
+    XCond, XEq, XIsA, XDag, XNe, XLe, XLt, XGe, XGt, XSetDagOp, XGetDagOp,
 
-  // Binary constant.  Note that these are sized according to the number of
-  // bits given.
-  BinaryIntVal,
+    // Boolean literals.
+    TrueVal, FalseVal,
 
-  // Preprocessing tokens for internal usage by the lexer.
-  // They are never returned as a result of Lex().
-  Ifdef,
-  Ifndef,
-  Else,
-  Endif,
-  Define,
+    // Integer value.
+    IntVal,
 
-  // Reserved keywords. ('ElseKW' is named to distinguish it from the
-  // existing 'Else' that means the preprocessor #else.)
-  Bit,
-  Bits,
-  Code,
-  Dag,
-  ElseKW,
-  Field,
-  In,
-  Include,
-  Int,
-  List,
-  String,
-  Then,
+    // Binary constant.  Note that these are sized according to the number of
+    // bits given.
+    BinaryIntVal,
 
-  // Object start tokens.
-  OBJECT_START_FIRST,
-  Assert = OBJECT_START_FIRST,
-  Class,
-  Def,
-  Defm,
-  Defset,
-  Deftype,
-  Defvar,
-  Dump,
-  Foreach,
-  If,
-  Let,
-  MultiClass,
-  OBJECT_START_LAST = MultiClass,
+    // String valued tokens.
+    Id, StrVal, VarName, CodeFragment,
 
-  // Bang operators.
-  BANG_OPERATOR_FIRST,
-  XConcat = BANG_OPERATOR_FIRST,
-  XADD,
-  XSUB,
-  XMUL,
-  XDIV,
-  XNOT,
-  XLOG2,
-  XAND,
-  XOR,
-  XXOR,
-  XSRA,
-  XSRL,
-  XSHL,
-  XListConcat,
-  XListFlatten,
-  XListSplat,
-  XStrConcat,
-  XInterleave,
-  XSubstr,
-  XFind,
-  XCast,
-  XSubst,
-  XForEach,
-  XFilter,
-  XFoldl,
-  XHead,
-  XTail,
-  XSize,
-  XEmpty,
-  XInitialized,
-  XIf,
-  XCond,
-  XEq,
-  XIsA,
-  XDag,
-  XNe,
-  XLe,
-  XLt,
-  XGe,
-  XGt,
-  XSetDagOp,
-  XGetDagOp,
-  XExists,
-  XListRemove,
-  XToLower,
-  XToUpper,
-  XRange,
-  XGetDagArg,
-  XGetDagName,
-  XSetDagArg,
-  XSetDagName,
-  XRepr,
-  BANG_OPERATOR_LAST = XRepr,
-
-  // String valued tokens.
-  STRING_VALUE_FIRST,
-  Id = STRING_VALUE_FIRST,
-  StrVal,
-  VarName,
-  CodeFragment,
-  STRING_VALUE_LAST = CodeFragment,
-};
-
-/// isBangOperator - Return true if this is a bang operator.
-static inline bool isBangOperator(tgtok::TokKind Kind) {
-  return tgtok::BANG_OPERATOR_FIRST <= Kind && Kind <= BANG_OPERATOR_LAST;
+    // Preprocessing tokens for internal usage by the lexer.
+    // They are never returned as a result of Lex().
+    Ifdef, Ifndef, Else, Endif, Define
+  };
 }
-
-/// isObjectStart - Return true if this is a valid first token for a statement.
-static inline bool isObjectStart(tgtok::TokKind Kind) {
-  return tgtok::OBJECT_START_FIRST <= Kind && Kind <= OBJECT_START_LAST;
-}
-
-/// isStringValue - Return true if this is a string value.
-static inline bool isStringValue(tgtok::TokKind Kind) {
-  return tgtok::STRING_VALUE_FIRST <= Kind && Kind <= STRING_VALUE_LAST;
-}
-} // namespace tgtok
 
 /// TGLexer - TableGen Lexer class.
 class TGLexer {
@@ -223,7 +114,8 @@ public:
   tgtok::TokKind getCode() const { return CurCode; }
 
   const std::string &getCurStrVal() const {
-    assert(tgtok::isStringValue(CurCode) &&
+    assert((CurCode == tgtok::Id || CurCode == tgtok::StrVal ||
+            CurCode == tgtok::VarName || CurCode == tgtok::CodeFragment) &&
            "This token doesn't have a string value");
     return CurStrVal;
   }
@@ -234,11 +126,10 @@ public:
   std::pair<int64_t, unsigned> getCurBinaryIntVal() const {
     assert(CurCode == tgtok::BinaryIntVal &&
            "This token isn't a binary integer");
-    return {CurIntVal, (CurPtr - TokStart) - 2};
+    return std::make_pair(CurIntVal, (CurPtr - TokStart)-2);
   }
 
   SMLoc getLoc() const;
-  SMRange getLocRange() const;
 
 private:
   /// LexToken - Read the next token and return its code.
@@ -323,7 +214,8 @@ private:
   // preprocessing control stacks for the current file and all its
   // parent files.  The back() element is the preprocessing control
   // stack for the current file.
-  SmallVector<SmallVector<PreprocessorControlDesc>> PrepIncludeStack;
+  std::vector<std::unique_ptr<std::vector<PreprocessorControlDesc>>>
+      PrepIncludeStack;
 
   // Validate that the current preprocessing control stack is empty,
   // since we are about to exit a file, and pop the include stack.
@@ -347,13 +239,14 @@ private:
   tgtok::TokKind prepIsDirective() const;
 
   // Given a preprocessing token kind, adjusts CurPtr to the end
-  // of the preprocessing directive word.
+  // of the preprocessing directive word.  Returns true, unless
+  // an unsupported token kind is passed in.
   //
   // We use look-ahead prepIsDirective() and prepEatPreprocessorDirective()
   // to avoid adjusting CurPtr before we are sure that '#' is followed
   // by a preprocessing directive.  If it is not, then we fall back to
   // tgtok::paste interpretation of '#'.
-  void prepEatPreprocessorDirective(tgtok::TokKind Kind);
+  bool prepEatPreprocessorDirective(tgtok::TokKind Kind);
 
   // The main "exit" point from the token parsing to preprocessor.
   //
@@ -444,7 +337,7 @@ private:
   //
   // The method returns true upon reaching the first non-whitespace symbol
   // or EOF, CurPtr is set to point to this symbol.  The method returns false,
-  // if an error occurred during skipping of a C-style comment.
+  // if an error occured during skipping of a C-style comment.
   bool prepSkipLineBegin();
 
   // Skip any whitespaces or comments after a preprocessing directive.
@@ -452,7 +345,7 @@ private:
   // or end of the file.  If there is a multiline C-style comment
   // after the preprocessing directive, the method skips
   // the comment, so the final CurPtr may point to one of the next lines.
-  // The method returns false, if an error occurred during skipping
+  // The method returns false, if an error occured during skipping
   // C- or C++-style comment, or a non-whitespace symbol appears
   // after the preprocessing directive.
   //
@@ -464,6 +357,11 @@ private:
   // symbol, buffer end or non-whitespace symbol following the preprocesing
   // directive.
   bool prepSkipDirectiveEnd();
+
+  // Skip all symbols to the end of the line/file.
+  // The method adjusts CurPtr, so that it points to either new line
+  // symbol in the current line or the buffer end.
+  void prepSkipToLineEnd();
 
   // Return true, if the current preprocessor control stack is such that
   // we should allow lexer to process the next token, false - otherwise.

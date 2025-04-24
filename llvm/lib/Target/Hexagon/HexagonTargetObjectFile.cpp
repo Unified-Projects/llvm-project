@@ -41,9 +41,9 @@ static cl::opt<unsigned> SmallDataThreshold("hexagon-small-data-threshold",
 static cl::opt<bool> NoSmallDataSorting("mno-sort-sda", cl::init(false),
   cl::Hidden, cl::desc("Disable small data sections sorting"));
 
-static cl::opt<bool>
-    StaticsInSData("hexagon-statics-in-small-data", cl::Hidden,
-                   cl::desc("Allow static variables in .sdata"));
+static cl::opt<bool> StaticsInSData("hexagon-statics-in-small-data",
+  cl::init(false), cl::Hidden, cl::ZeroOrMore,
+  cl::desc("Allow static variables in .sdata"));
 
 static cl::opt<bool> TraceGVPlacement("trace-gv-placement",
   cl::Hidden, cl::init(false),
@@ -86,12 +86,13 @@ static cl::opt<bool>
 static bool isSmallDataSection(StringRef Sec) {
   // sectionName is either ".sdata" or ".sbss". Looking for an exact match
   // obviates the need for checks for section names such as ".sdatafoo".
-  if (Sec == ".sdata" || Sec == ".sbss" || Sec == ".scommon")
+  if (Sec.equals(".sdata") || Sec.equals(".sbss") || Sec.equals(".scommon"))
     return true;
   // If either ".sdata." or ".sbss." is a substring of the section name
   // then put the symbol in small data.
-  return Sec.contains(".sdata.") || Sec.contains(".sbss.") ||
-         Sec.contains(".scommon.");
+  return Sec.find(".sdata.") != StringRef::npos ||
+         Sec.find(".sbss.") != StringRef::npos ||
+         Sec.find(".scommon.") != StringRef::npos;
 }
 
 static const char *getSectionSuffixForSize(unsigned Size) {
@@ -140,7 +141,7 @@ MCSection *HexagonTargetObjectFile::SelectSectionForGlobal(
 
   // If the lookup table is used by more than one function, do not place
   // it in text section.
-  if (EmitLutInText && GO->getName().starts_with("switch.table")) {
+  if (EmitLutInText && GO->getName().startswith("switch.table")) {
     if (const Function *Fn = getLutUsedFunction(GO))
       return selectSectionForLookupTable(GO, TM, Fn);
   }
@@ -177,10 +178,10 @@ MCSection *HexagonTargetObjectFile::getExplicitSectionGlobal(
 
   if (GO->hasSection()) {
     StringRef Section = GO->getSection();
-    if (Section.contains(".access.text.group"))
+    if (Section.find(".access.text.group") != StringRef::npos)
       return getContext().getELFSection(GO->getSection(), ELF::SHT_PROGBITS,
                                         ELF::SHF_ALLOC | ELF::SHF_EXECINSTR);
-    if (Section.contains(".access.data.group"))
+    if (Section.find(".access.data.group") != StringRef::npos)
       return getContext().getELFSection(GO->getSection(), ELF::SHT_PROGBITS,
                                         ELF::SHF_WRITE | ELF::SHF_ALLOC);
   }
@@ -254,7 +255,7 @@ bool HexagonTargetObjectFile::isGlobalInSmallSection(const GlobalObject *GO,
     }
   }
 
-  unsigned Size = GVar->getDataLayout().getTypeAllocSize(GType);
+  unsigned Size = GVar->getParent()->getDataLayout().getTypeAllocSize(GType);
   if (Size == 0) {
     LLVM_DEBUG(dbgs() << "no, has size 0\n");
     return false;
@@ -317,7 +318,7 @@ unsigned HexagonTargetObjectFile::getSmallestAddressableSize(const Type *Ty,
   case Type::FloatTyID:
   case Type::DoubleTyID:
   case Type::IntegerTyID: {
-    const DataLayout &DL = GV->getDataLayout();
+    const DataLayout &DL = GV->getParent()->getDataLayout();
     // It is unfortunate that DL's function take non-const Type*.
     return DL.getTypeAllocSize(const_cast<Type*>(Ty));
   }
@@ -329,10 +330,9 @@ unsigned HexagonTargetObjectFile::getSmallestAddressableSize(const Type *Ty,
   case Type::PPC_FP128TyID:
   case Type::LabelTyID:
   case Type::MetadataTyID:
+  case Type::X86_MMXTyID:
   case Type::X86_AMXTyID:
   case Type::TokenTyID:
-  case Type::TypedPointerTyID:
-  case Type::TargetExtTyID:
     return 0;
   }
 
@@ -430,7 +430,7 @@ MCSection *HexagonTargetObjectFile::selectSmallSectionForGlobal(
 const Function *
 HexagonTargetObjectFile::getLutUsedFunction(const GlobalObject *GO) const {
   const Function *ReturnFn = nullptr;
-  for (const auto *U : GO->users()) {
+  for (auto U : GO->users()) {
     // validate each instance of user to be a live function.
     auto *I = dyn_cast<Instruction>(U);
     if (!I)

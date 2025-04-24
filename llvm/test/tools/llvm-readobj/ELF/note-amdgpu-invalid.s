@@ -26,17 +26,14 @@
 # GNU-NEXT:   Owner                Data size 	Description
 # GNU-NEXT:   AMDGPU               0x00000003	NT_AMDGPU_METADATA (AMDGPU Metadata)
 # GNU-NEXT:    description data: 12 34 56
-# GNU-NEXT:   AMDGPU               0x00000003	NT_AMDGPU_METADATA (AMDGPU Metadata)
-# GNU-NEXT:    description data: ab cd ef
 # GNU-EMPTY:
 
-# LLVM:      NoteSections [
+# LLVM:      Notes [
 # LLVM-NEXT:   NoteSection {
 # LLVM-NEXT:     Name: .note.foo
 # LLVM-NEXT:     Offset: 0x40
 # LLVM-NEXT:     Size: 0xE8
-# LLVM-NEXT:	 Notes [
-# LLVM-NEXT:     {
+# LLVM-NEXT:     Note {
 # LLVM-NEXT:       Owner: AMDGPU
 # LLVM-NEXT:       Data size: 0xD4
 # LLVM-NEXT:       Type: NT_AMDGPU_METADATA (AMDGPU Metadata)
@@ -56,14 +53,12 @@
 # LLVM-NEXT: ...
 # LLVM-EMPTY:
 # LLVM-NEXT:     }
-# LLVM-NEXT:	]
 # LLVM-NEXT:   }
 # LLVM-NEXT:  NoteSection {
 # LLVM-NEXT:    Name: .note.bar
 # LLVM-NEXT:    Offset: 0x128
-# LLVM-NEXT:    Size: 0x30
-# LLVM-NEXT:	Notes [
-# LLVM-NEXT:    {
+# LLVM-NEXT:    Size: 0x18
+# LLVM-NEXT:    Note {
 # LLVM-NEXT:      Owner: AMDGPU
 # LLVM-NEXT:      Data size: 0x3
 # LLVM-NEXT:      Type: NT_AMDGPU_METADATA (AMDGPU Metadata)
@@ -71,15 +66,6 @@
 # LLVM-NEXT:        0000: 123456                               |.4V|
 # LLVM-NEXT:      )
 # LLVM-NEXT:    }
-# LLVM-NEXT:    {
-# LLVM-NEXT:      Owner: AMDGPU
-# LLVM-NEXT:      Data size: 0x3
-# LLVM-NEXT:      Type: NT_AMDGPU_METADATA (AMDGPU Metadata)
-# LLVM-NEXT:      Description data (
-# LLVM-NEXT:        0000: ABCDEF                               |...|
-# LLVM-NEXT:      )
-# LLVM-NEXT:    }
-# LLVM-NEXT:   ]
 # LLVM-NEXT:  }
 # LLVM-NEXT:]
 
@@ -101,6 +87,7 @@ Sections:
       - Name: AMDGPU
         Type: NT_AMDGPU_METADATA
         Desc: '123456'
-      - Name: AMDGPU
-        Type: NT_AMDGPU_METADATA
-        Desc: 'abcdef'
+      # TODO: https://bugs.llvm.org/show_bug.cgi?id=49034
+      # - Name: AMDGPU
+      #   Type: NT_AMDGPU_METADATA
+      #    Desc: 'abcdef'

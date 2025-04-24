@@ -14,10 +14,10 @@
 namespace lldb_private {
 class UDPSocket : public Socket {
 public:
-  explicit UDPSocket(bool should_close);
+  UDPSocket(bool should_close, bool child_processes_inherit);
 
   static llvm::Expected<std::unique_ptr<UDPSocket>>
-  CreateConnected(llvm::StringRef name);
+  Connect(llvm::StringRef name, bool child_processes_inherit);
 
   std::string GetRemoteConnectionURI() const override;
 
@@ -27,13 +27,7 @@ private:
   size_t Send(const void *buf, const size_t num_bytes) override;
   Status Connect(llvm::StringRef name) override;
   Status Listen(llvm::StringRef name, int backlog) override;
-
-  llvm::Expected<std::vector<MainLoopBase::ReadHandleUP>>
-  Accept(MainLoopBase &loop,
-         std::function<void(std::unique_ptr<Socket> socket)> sock_cb) override {
-    return llvm::errorCodeToError(
-        std::make_error_code(std::errc::operation_not_supported));
-  }
+  Status Accept(Socket *&socket) override;
 
   SocketAddress m_sockaddr;
 };

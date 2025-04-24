@@ -26,8 +26,8 @@ enum {
 
   ADJDYNALLOC,
 
-  // Return with a glue operand. Operand 0 is the chain operand.
-  RET_GLUE,
+  // Return with a flag operand. Operand 0 is the chain operand.
+  RET_FLAG,
 
   // CALL - These operations represent an abstract call instruction, which
   // includes a bunch of information.
@@ -90,11 +90,6 @@ public:
   SDValue LowerSRL_PARTS(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
 
-  bool CanLowerReturn(CallingConv::ID CallConv, MachineFunction &MF,
-                      bool IsVarArg,
-                      const SmallVectorImpl<ISD::OutputArg> &Outs,
-                      LLVMContext &Context, const Type *RetTy) const override;
-
   Register getRegisterByName(const char *RegName, LLT VT,
                              const MachineFunction &MF) const override;
   std::pair<unsigned, const TargetRegisterClass *>
@@ -103,7 +98,7 @@ public:
   ConstraintWeight
   getSingleConstraintMatchWeight(AsmOperandInfo &Info,
                                  const char *Constraint) const override;
-  void LowerAsmOperandForConstraint(SDValue Op, StringRef Constraint,
+  void LowerAsmOperandForConstraint(SDValue Op, std::string &Constraint,
                                     std::vector<SDValue> &Ops,
                                     SelectionDAG &DAG) const override;
 
@@ -130,7 +125,7 @@ private:
                             const SDLoc &DL, SelectionDAG &DAG,
                             SmallVectorImpl<SDValue> &InVals) const;
 
-  SDValue LowerCallResult(SDValue Chain, SDValue InGlue,
+  SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
                           CallingConv::ID CallConv, bool IsVarArg,
                           const SmallVectorImpl<ISD::InputArg> &Ins,
                           const SDLoc &DL, SelectionDAG &DAG,

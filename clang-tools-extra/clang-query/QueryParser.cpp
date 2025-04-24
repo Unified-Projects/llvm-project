@@ -11,9 +11,9 @@
 #include "QuerySession.h"
 #include "clang/ASTMatchers/Dynamic/Parser.h"
 #include "clang/Basic/CharInfo.h"
+#include "clang/Tooling/NodeIntrospection.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
-#include <optional>
 #include <set>
 
 using namespace llvm;
@@ -27,8 +27,10 @@ namespace query {
 // is found before End, return StringRef().  Begin is adjusted to exclude the
 // lexed region.
 StringRef QueryParser::lexWord() {
-  // Don't trim newlines.
-  Line = Line.ltrim(" \t\v\f\r");
+  Line = Line.drop_while([](char c) {
+    // Don't trim newlines.
+    return StringRef(" \t\v\f\r").contains(c);
+  });
 
   if (Line.empty())
     // Even though the Line is empty, it contains a pointer and
@@ -103,16 +105,19 @@ QueryRef QueryParser::parseSetBool(bool QuerySession::*Var) {
 
 template <typename QueryType> QueryRef QueryParser::parseSetOutputKind() {
   StringRef ValStr;
-  unsigned OutKind = LexOrCompleteWord<unsigned>(this, ValStr)
-                         .Case("diag", OK_Diag)
-                         .Case("print", OK_Print)
-                         .Case("detailed-ast", OK_DetailedAST)
-                         .Case("dump", OK_DetailedAST)
-                         .Default(~0u);
+  bool HasIntrospection = tooling::NodeIntrospection::hasIntrospectionSupport();
+  unsigned OutKind =
+      LexOrCompleteWord<unsigned>(this, ValStr)
+          .Case("diag", OK_Diag)
+          .Case("print", OK_Print)
+          .Case("detailed-ast", OK_DetailedAST)
+          .Case("srcloc", OK_SrcLoc, /*IsCompletion=*/HasIntrospection)
+          .Case("dump", OK_DetailedAST)
+          .Default(~0u);
   if (OutKind == ~0u) {
-    return new InvalidQuery("expected 'diag', 'print', 'detailed-ast' or "
-                            "'dump', got '" +
-                            ValStr + "'");
+    return new InvalidQuery("expected 'diag', 'print', 'detailed-ast'" +
+                            StringRef(HasIntrospection ? ", 'srcloc'" : "") +
+                            " or 'dump', got '" + ValStr + "'");
   }
 
   switch (OutKind) {
@@ -122,6 +127,10 @@ template <typename QueryType> QueryRef QueryParser::parseSetOutputKind() {
     return new QueryType(&QuerySession::DiagOutput);
   case OK_Print:
     return new QueryType(&QuerySession::PrintOutput);
+  case OK_SrcLoc:
+    if (HasIntrospection)
+      return new QueryType(&QuerySession::SrcLocOutput);
+    return new InvalidQuery("'srcloc' output support is not available.");
   }
 
   llvm_unreachable("Invalid output kind");
@@ -142,13 +151,16 @@ QueryRef QueryParser::parseSetTraversalKind(TraversalKind QuerySession::*Var) {
 
 QueryRef QueryParser::endQuery(QueryRef Q) {
   StringRef Extra = Line;
-  StringRef ExtraTrimmed = Extra.ltrim(" \t\v\f\r");
+  StringRef ExtraTrimmed = Extra.drop_while(
+      [](char c) { return StringRef(" \t\v\f\r").contains(c); });
 
-  if (ExtraTrimmed.starts_with('\n') || ExtraTrimmed.starts_with("\r\n"))
+  if ((!ExtraTrimmed.empty() && ExtraTrimmed[0] == '\n') ||
+      (ExtraTrimmed.size() >= 2 && ExtraTrimmed[0] == '\r' &&
+       ExtraTrimmed[1] == '\n'))
     Q->RemainingContent = Extra;
   else {
     StringRef TrailingWord = lexWord();
-    if (TrailingWord.starts_with('#')) {
+    if (!TrailingWord.empty() && TrailingWord.front() == '#') {
       Line = Line.drop_until([](char c) { return c == '\n'; });
       Line = Line.drop_while([](char c) { return c == '\n'; });
       return endQuery(Q);
@@ -173,8 +185,7 @@ enum ParsedQueryKind {
   PQK_Unlet,
   PQK_Quit,
   PQK_Enable,
-  PQK_Disable,
-  PQK_File
+  PQK_Disable
 };
 
 enum ParsedQueryVariable {
@@ -182,7 +193,6 @@ enum ParsedQueryVariable {
   PQV_Output,
   PQV_BindRoot,
   PQV_PrintMatcher,
-  PQV_EnableProfile,
   PQV_Traversal
 };
 
@@ -214,14 +224,12 @@ QueryRef QueryParser::doParse() {
                               .Case("let", PQK_Let)
                               .Case("m", PQK_Match, /*IsCompletion=*/false)
                               .Case("match", PQK_Match)
-                              .Case("q", PQK_Quit, /*IsCompletion=*/false)
+                              .Case("q", PQK_Quit,  /*IsCompletion=*/false)
                               .Case("quit", PQK_Quit)
                               .Case("set", PQK_Set)
                               .Case("enable", PQK_Enable)
                               .Case("disable", PQK_Disable)
                               .Case("unlet", PQK_Unlet)
-                              .Case("f", PQK_File, /*IsCompletion=*/false)
-                              .Case("file", PQK_File)
                               .Default(PQK_Invalid);
 
   switch (QKind) {
@@ -267,7 +275,7 @@ QueryRef QueryParser::doParse() {
     Diagnostics Diag;
     auto MatcherSource = Line.ltrim();
     auto OrigMatcherSource = MatcherSource;
-    std::optional<DynTypedMatcher> Matcher = Parser::parseMatcherExpression(
+    Optional<DynTypedMatcher> Matcher = Parser::parseMatcherExpression(
         MatcherSource, nullptr, &QS.NamedValues, &Diag);
     if (!Matcher) {
       return makeInvalidQueryFromDiagnostics(Diag);
@@ -286,7 +294,6 @@ QueryRef QueryParser::doParse() {
             .Case("output", PQV_Output)
             .Case("bind-root", PQV_BindRoot)
             .Case("print-matcher", PQV_PrintMatcher)
-            .Case("enable-profile", PQV_EnableProfile)
             .Case("traversal", PQV_Traversal)
             .Default(PQV_Invalid);
     if (VarStr.empty())
@@ -304,9 +311,6 @@ QueryRef QueryParser::doParse() {
       break;
     case PQV_PrintMatcher:
       Q = parseSetBool(&QuerySession::PrintMatcher);
-      break;
-    case PQV_EnableProfile:
-      Q = parseSetBool(&QuerySession::EnableProfile);
       break;
     case PQV_Traversal:
       Q = parseSetTraversalKind(&QuerySession::TK);
@@ -348,9 +352,6 @@ QueryRef QueryParser::doParse() {
 
     return endQuery(new LetQuery(Name, VariantValue()));
   }
-
-  case PQK_File:
-    return new FileQuery(Line);
 
   case PQK_Invalid:
     return new InvalidQuery("unknown command: " + CommandStr);

@@ -1,4 +1,4 @@
-//===-- ArchitectureMips.h --------------------------------------*- C++ -*-===//
+//===-- ArchitectureMips.h ---------------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -16,11 +16,12 @@ namespace lldb_private {
 
 class ArchitectureMips : public Architecture {
 public:
-  static llvm::StringRef GetPluginNameStatic() { return "mips"; }
+  static ConstString GetPluginNameStatic();
   static void Initialize();
   static void Terminate();
 
-  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
+  ConstString GetPluginName() override;
+  uint32_t GetPluginVersion() override;
 
   void OverrideStopInfo(Thread &thread) const override {}
 

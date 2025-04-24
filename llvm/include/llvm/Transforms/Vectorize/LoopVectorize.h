@@ -15,7 +15,7 @@
 // 'wide' iteration. After this transformation the index is incremented
 // by the SIMD vector width, and not by one.
 //
-// This pass has four parts:
+// This pass has three parts:
 // 1. The main loop pass that drives the different parts.
 // 2. LoopVectorizationLegality - A unit that checks for the legality
 //    of the vectorization.
@@ -27,7 +27,7 @@
 //
 // There is a development effort going on to migrate loop vectorizer to the
 // VPlan infrastructure and to introduce outer loop vectorization support (see
-// docs/VectorizationPlan.rst and
+// docs/Proposal/VectorizationPlan.rst and
 // http://lists.llvm.org/pipermail/llvm-dev/2017-December/119523.html). For this
 // purpose, we temporarily introduced the VPlan-native vectorization path: an
 // alternative vectorization path that is natively implemented on top of the
@@ -58,19 +58,18 @@
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Transforms/Utils/ExtraPassManager.h"
 #include <functional>
 
 namespace llvm {
 
+class AAResults;
 class AssumptionCache;
 class BlockFrequencyInfo;
 class DemandedBits;
 class DominatorTree;
 class Function;
-class Instruction;
 class Loop;
-class LoopAccessInfoManager;
+class LoopAccessInfo;
 class LoopInfo;
 class OptimizationRemarkEmitter;
 class ProfileSummaryInfo;
@@ -147,17 +146,22 @@ public:
   BlockFrequencyInfo *BFI;
   TargetLibraryInfo *TLI;
   DemandedBits *DB;
+  AAResults *AA;
   AssumptionCache *AC;
-  LoopAccessInfoManager *LAIs;
+  std::function<const LoopAccessInfo &(Loop &)> *GetLAA;
   OptimizationRemarkEmitter *ORE;
   ProfileSummaryInfo *PSI;
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  void printPipeline(raw_ostream &OS,
-                     function_ref<StringRef(StringRef)> MapClassName2PassName);
 
   // Shim for old PM.
-  LoopVectorizeResult runImpl(Function &F);
+  LoopVectorizeResult
+  runImpl(Function &F, ScalarEvolution &SE_, LoopInfo &LI_,
+          TargetTransformInfo &TTI_, DominatorTree &DT_,
+          BlockFrequencyInfo &BFI_, TargetLibraryInfo *TLI_, DemandedBits &DB_,
+          AAResults &AA_, AssumptionCache &AC_,
+          std::function<const LoopAccessInfo &(Loop &)> &GetLAA_,
+          OptimizationRemarkEmitter &ORE_, ProfileSummaryInfo *PSI_);
 
   bool processLoop(Loop *L);
 };
@@ -170,22 +174,13 @@ void reportVectorizationFailure(const StringRef DebugMsg,
     const StringRef OREMsg, const StringRef ORETag,
     OptimizationRemarkEmitter *ORE, Loop *TheLoop, Instruction *I = nullptr);
 
-/// Same as above, but the debug message and optimization remark are identical
-inline void reportVectorizationFailure(const StringRef DebugMsg,
-                                       const StringRef ORETag,
-                                       OptimizationRemarkEmitter *ORE,
-                                       Loop *TheLoop,
-                                       Instruction *I = nullptr) {
-  reportVectorizationFailure(DebugMsg, DebugMsg, ORETag, ORE, TheLoop, I);
-}
+/// Reports an informative message: print \p Msg for debugging purposes as well
+/// as an optimization remark. Uses either \p I as location of the remark, or
+/// otherwise \p TheLoop.
+void reportVectorizationInfo(const StringRef OREMsg, const StringRef ORETag,
+                             OptimizationRemarkEmitter *ORE, Loop *TheLoop,
+                             Instruction *I = nullptr);
 
-/// A marker analysis to determine if extra passes should be run after loop
-/// vectorization.
-struct ShouldRunExtraVectorPasses
-    : public ShouldRunExtraPasses<ShouldRunExtraVectorPasses>,
-      public AnalysisInfoMixin<ShouldRunExtraVectorPasses> {
-  static AnalysisKey Key;
-};
 } // end namespace llvm
 
 #endif // LLVM_TRANSFORMS_VECTORIZE_LOOPVECTORIZE_H

@@ -7,14 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/math/llroundf.h"
-#include "src/__support/FPUtil/NearestIntegerOperations.h"
 #include "src/__support/common.h"
-#include "src/__support/macros/config.h"
+#include "utils/FPUtil/NearestIntegerOperations.h"
 
-namespace LIBC_NAMESPACE_DECL {
+namespace __llvm_libc {
 
 LLVM_LIBC_FUNCTION(long long, llroundf, (float x)) {
-  return fputil::round_to_signed_integer<float, long long>(x);
+  return fputil::roundToSignedInteger<float, long long>(x);
 }
 
-} // namespace LIBC_NAMESPACE_DECL
+} // namespace __llvm_libc

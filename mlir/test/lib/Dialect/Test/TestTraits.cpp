@@ -6,43 +6,40 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "TestOps.h"
+#include "TestDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using namespace mlir;
-using namespace test;
+using namespace mlir::test;
 
 //===----------------------------------------------------------------------===//
 // Trait Folder.
 //===----------------------------------------------------------------------===//
 
 OpFoldResult TestInvolutionTraitFailingOperationFolderOp::fold(
-    FoldAdaptor adaptor) {
+    ArrayRef<Attribute> operands) {
   // This failure should cause the trait fold to run instead.
   return {};
 }
 
 OpFoldResult TestInvolutionTraitSuccesfulOperationFolderOp::fold(
-    FoldAdaptor adaptor) {
+    ArrayRef<Attribute> operands) {
   auto argumentOp = getOperand();
   // The success case should cause the trait fold to be supressed.
   return argumentOp.getDefiningOp() ? argumentOp : OpFoldResult{};
 }
 
 namespace {
-struct TestTraitFolder
-    : public PassWrapper<TestTraitFolder, OperationPass<func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestTraitFolder)
-
+struct TestTraitFolder : public PassWrapper<TestTraitFolder, FunctionPass> {
   StringRef getArgument() const final { return "test-trait-folder"; }
   StringRef getDescription() const final { return "Run trait folding"; }
-  void runOnOperation() override {
-    (void)applyPatternsGreedily(getOperation(),
-                                RewritePatternSet(&getContext()));
+  void runOnFunction() override {
+    (void)applyPatternsAndFoldGreedily(getFunction(),
+                                       RewritePatternSet(&getContext()));
   }
 };
-} // namespace
+} // end anonymous namespace
 
 namespace mlir {
 void registerTestTraitsPass() { PassRegistration<TestTraitFolder>(); }

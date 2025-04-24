@@ -3,11 +3,8 @@ set(LLVM_LINK_COMPONENTS
   AsmParser
   BitWriter
   Core
-  ProfileData
   Support
   TransformUtils
-  Passes
-  Vectorize
   )
 
 add_llvm_unittest(UtilsTests
@@ -16,7 +13,6 @@ add_llvm_unittest(UtilsTests
   CallPromotionUtilsTest.cpp
   CloningTest.cpp
   CodeExtractorTest.cpp
-  CodeLayoutTest.cpp
   CodeMoverUtilsTest.cpp
   DebugifyTest.cpp
   FunctionComparatorTest.cpp
@@ -24,12 +20,11 @@ add_llvm_unittest(UtilsTests
   LocalTest.cpp
   LoopRotationUtilsTest.cpp
   LoopUtilsTest.cpp
-  MemTransferLowering.cpp
   ModuleUtilsTest.cpp
   ScalarEvolutionExpanderTest.cpp
   SizeOptsTest.cpp
   SSAUpdaterBulkTest.cpp
   UnrollLoopTest.cpp
   ValueMapperTest.cpp
-  ProfDataUtilTest.cpp
+  VFABIUtils.cpp
   )

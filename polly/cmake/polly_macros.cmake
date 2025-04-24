@@ -1,3 +1,6 @@
+
+include(CMakeParseArguments)
+
 macro(add_polly_library name)
   cmake_parse_arguments(ARG "" "" "" ${ARGN})
   set(srcs ${ARG_UNPARSED_ARGUMENTS})
@@ -18,7 +21,7 @@ macro(add_polly_library name)
     set(libkind)
   endif()
   add_library( ${name} ${libkind} ${srcs} )
-  set_target_properties(${name} PROPERTIES FOLDER "Polly/Libraries")
+  set_target_properties(${name} PROPERTIES FOLDER "Polly")
 
   if( LLVM_COMMON_DEPENDS )
     add_dependencies( ${name} ${LLVM_COMMON_DEPENDS} )
@@ -39,21 +42,12 @@ macro(add_polly_library name)
     llvm_config(${name} ${LLVM_LINK_COMPONENTS})
   endif( LLVM_LINK_COMPONENTS )
   if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY OR ${name} STREQUAL "LLVMPolly")
-    set(exports)
-    if (LLVM_POLLY_LINK_INTO_TOOLS)
-      set(exports EXPORT LLVMExports)
-    endif()
     install(TARGETS ${name}
-      COMPONENT ${name}
-      ${exports}
+      EXPORT LLVMExports
       LIBRARY DESTINATION lib${LLVM_LIBDIR_SUFFIX}
       ARCHIVE DESTINATION lib${LLVM_LIBDIR_SUFFIX})
-    add_llvm_install_targets(install-${name}
-      COMPONENT ${name})
   endif()
-  if (LLVM_POLLY_LINK_INTO_TOOLS)
-    set_property(GLOBAL APPEND PROPERTY LLVM_EXPORTS ${name})
-  endif()
+  set_property(GLOBAL APPEND PROPERTY LLVM_EXPORTS ${name})
 endmacro(add_polly_library)
 
 macro(add_polly_loadable_module name)
@@ -67,7 +61,7 @@ macro(add_polly_loadable_module name)
   endif()
   set(MODULE TRUE)
   add_polly_library(${name} ${srcs})
-  set_target_properties(${name} PROPERTIES FOLDER "Polly/Loadable Modules")
+  set_target_properties(${name} PROPERTIES FOLDER "Polly")
   if (GLOBAL_NOT_MODULE)
     unset (MODULE)
   endif()

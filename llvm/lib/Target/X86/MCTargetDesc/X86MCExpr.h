@@ -18,7 +18,6 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace llvm {
@@ -26,16 +25,16 @@ namespace llvm {
 class X86MCExpr : public MCTargetExpr {
 
 private:
-  const MCRegister Reg; // All
+  const int64_t RegNo; // All
 
-  explicit X86MCExpr(MCRegister R) : Reg(R) {}
+  explicit X86MCExpr(int64_t R) : RegNo(R) {}
 
 public:
   /// @name Construction
   /// @{
 
-  static const X86MCExpr *create(MCRegister Reg, MCContext &Ctx) {
-    return new (Ctx) X86MCExpr(Reg);
+  static const X86MCExpr *create(int64_t RegNo, MCContext &Ctx) {
+    return new (Ctx) X86MCExpr(RegNo);
   }
 
   /// @}
@@ -43,17 +42,17 @@ public:
   /// @{
 
   /// getSubExpr - Get the child of this expression.
-  MCRegister getReg() const { return Reg; }
+  int64_t getRegNo() const { return RegNo; }
 
   /// @}
 
   void printImpl(raw_ostream &OS, const MCAsmInfo *MAI) const override {
     if (!MAI || MAI->getAssemblerDialect() == 0)
       OS << '%';
-    OS << X86ATTInstPrinter::getRegisterName(Reg);
+    OS << X86ATTInstPrinter::getRegisterName(RegNo);
   }
 
-  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAssembler *Asm,
+  bool evaluateAsRelocatableImpl(MCValue &Res, const MCAsmLayout *Layout,
                                  const MCFixup *Fixup) const override {
     return false;
   }
@@ -61,10 +60,10 @@ public:
   bool inlineAssignedExpr() const override { return true; }
   bool isEqualTo(const MCExpr *X) const override {
     if (auto *E = dyn_cast<X86MCExpr>(X))
-      return getReg() == E->getReg();
+      return getRegNo() == E->getRegNo();
     return false;
   }
-  void visitUsedExpr(MCStreamer &Streamer) const override {}
+  void visitUsedExpr(MCStreamer &Streamer) const override{};
   MCFragment *findAssociatedFragment() const override { return nullptr; }
 
   // There are no TLS X86MCExprs at the moment.

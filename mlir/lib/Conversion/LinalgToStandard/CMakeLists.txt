@@ -11,13 +11,10 @@ add_mlir_conversion_library(MLIRLinalgToStandard
   Core
 
   LINK_LIBS PUBLIC
-  MLIRFuncDialect
   MLIRIR
-  MLIRLinalgDialect
-  MLIRLinalgTransforms
-  MLIRLLVMDialect
-  MLIRMemRefDialect
+  MLIRLinalg
+  MLIRMemRef
   MLIRPass
-  MLIRSCFDialect
+  MLIRSCF
   MLIRTransforms
   )

@@ -14,12 +14,12 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ProfileData/SymbolRemappingReader.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SymbolRemappingReader.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -144,18 +144,15 @@ int main(int argc, const char *argv[]) {
   cl::HideUnrelatedOptions({&CXXMapCategory, &getColorCategory()});
   cl::ParseCommandLineOptions(argc, argv, "LLVM C++ mangled name remapper\n");
 
-  auto OldSymbolBufOrError =
-      MemoryBuffer::getFileOrSTDIN(OldSymbolFile, /*IsText=*/true);
+  auto OldSymbolBufOrError = MemoryBuffer::getFileOrSTDIN(OldSymbolFile);
   if (!OldSymbolBufOrError)
     exitWithErrorCode(OldSymbolBufOrError.getError(), OldSymbolFile);
 
-  auto NewSymbolBufOrError =
-      MemoryBuffer::getFileOrSTDIN(NewSymbolFile, /*IsText=*/true);
+  auto NewSymbolBufOrError = MemoryBuffer::getFileOrSTDIN(NewSymbolFile);
   if (!NewSymbolBufOrError)
     exitWithErrorCode(NewSymbolBufOrError.getError(), NewSymbolFile);
 
-  auto RemappingBufOrError =
-      MemoryBuffer::getFileOrSTDIN(RemappingFile, /*IsText=*/true);
+  auto RemappingBufOrError = MemoryBuffer::getFileOrSTDIN(RemappingFile);
   if (!RemappingBufOrError)
     exitWithErrorCode(RemappingBufOrError.getError(), RemappingFile);
 

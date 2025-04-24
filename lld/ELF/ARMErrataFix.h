@@ -11,18 +11,20 @@
 
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
+#include <map>
 #include <vector>
 
-namespace lld::elf {
-struct Ctx;
+namespace lld {
+namespace elf {
+
 class Defined;
 class InputSection;
 class InputSectionDescription;
+class OutputSection;
 class Patch657417Section;
 
 class ARMErr657417Patcher {
 public:
-  ARMErr657417Patcher(Ctx &ctx) : ctx(ctx) {}
   // Return true if Patches have been added to the OutputSections.
   bool createFixes();
 
@@ -35,7 +37,6 @@ private:
 
   void init();
 
-  Ctx &ctx;
   // A cache of the mapping symbols defined by the InputSection sorted in order
   // of ascending value with redundant symbols removed. These describe
   // the ranges of code and data in an executable InputSection.
@@ -44,6 +45,7 @@ private:
   bool initialized = false;
 };
 
-} // namespace lld::elf
+} // namespace elf
+} // namespace lld
 
 #endif

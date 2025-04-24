@@ -12,14 +12,13 @@
 
 #include "ubsan_platform.h"
 #if CAN_SANITIZE_UB
+#include "ubsan_diag.h"
+#include "ubsan_init.h"
+#include "ubsan_flags.h"
 #include "sanitizer_common/sanitizer_common.h"
-#include "sanitizer_common/sanitizer_interface_internal.h"
 #include "sanitizer_common/sanitizer_libc.h"
 #include "sanitizer_common/sanitizer_mutex.h"
 #include "sanitizer_common/sanitizer_symbolizer.h"
-#include "ubsan_diag.h"
-#include "ubsan_flags.h"
-#include "ubsan_init.h"
 
 using namespace __ubsan;
 
@@ -43,8 +42,8 @@ static void CommonStandaloneInit() {
   SanitizerToolName = GetSanititizerToolName();
   CacheBinaryName();
   InitializeFlags();
-  __sanitizer_set_report_path(common_flags()->log_path);
   __sanitizer::InitializePlatformEarly();
+  __sanitizer_set_report_path(common_flags()->log_path);
   AndroidLogInit();
   InitializeCoverage(common_flags()->coverage, common_flags()->coverage_dir);
   CommonInit();

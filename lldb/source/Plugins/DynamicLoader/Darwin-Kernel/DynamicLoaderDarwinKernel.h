@@ -16,7 +16,6 @@
 
 #include "lldb/Host/SafeMachO.h"
 
-#include "lldb/Core/Progress.h"
 #include "lldb/Target/DynamicLoader.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Utility/FileSpec.h"
@@ -34,9 +33,9 @@ public:
 
   static void Terminate();
 
-  static llvm::StringRef GetPluginNameStatic() { return "darwin-kernel"; }
+  static lldb_private::ConstString GetPluginNameStatic();
 
-  static llvm::StringRef GetPluginDescriptionStatic();
+  static const char *GetPluginDescriptionStatic();
 
   static lldb_private::DynamicLoader *
   CreateInstance(lldb_private::Process *process, bool force);
@@ -59,7 +58,9 @@ public:
   lldb_private::Status CanLoadImage() override;
 
   // PluginInterface protocol
-  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
+  lldb_private::ConstString GetPluginName() override;
+
+  uint32_t GetPluginVersion() override;
 
 protected:
   void PrivateInitialize(lldb_private::Process *process);
@@ -138,8 +139,7 @@ protected:
 
     bool LoadImageAtFileAddress(lldb_private::Process *process);
 
-    bool LoadImageUsingMemoryModule(lldb_private::Process *process,
-                                    lldb_private::Progress *progress = nullptr);
+    bool LoadImageUsingMemoryModule(lldb_private::Process *process);
 
     bool IsLoaded() { return m_load_process_stop_id != UINT32_MAX; }
 
@@ -178,7 +178,7 @@ protected:
 
     void SetProcessStopId(uint32_t stop_id);
 
-    bool operator==(const KextImageInfo &rhs) const;
+    bool operator==(const KextImageInfo &rhs);
 
     uint32_t GetAddressByteSize(); // as determined by Mach-O header
 

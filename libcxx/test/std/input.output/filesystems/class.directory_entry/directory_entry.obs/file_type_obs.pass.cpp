@@ -6,12 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-// REQUIRES: can-create-symlinks
-// UNSUPPORTED: c++03, c++11, c++14
-
-// Starting in Android N (API 24), SELinux policy prevents the shell user from
-// creating a hard link.
-// XFAIL: LIBCXX-ANDROID-FIXME && !android-device-api={{21|22|23}}
+// UNSUPPORTED: c++03
 
 // <filesystem>
 
@@ -20,20 +15,23 @@
 // file_status status() const;
 // file_status status(error_code const&) const noexcept;
 
-#include <filesystem>
+#include "filesystem_include.h"
 #include <type_traits>
 #include <cassert>
 
 #include "filesystem_test_helper.h"
-#include "test_macros.h"
-namespace fs = std::filesystem;
+#include "rapid-cxx-test.h"
 
-static void file_dne() {
+#include "test_macros.h"
+
+TEST_SUITE(directory_entry_obs_testsuite)
+
+TEST_CASE(file_dne) {
   using namespace fs;
   directory_entry p("dne");
 }
 
-static void signatures() {
+TEST_CASE(signatures) {
   using namespace fs;
   const directory_entry e = {};
   std::error_code ec;
@@ -58,7 +56,7 @@ static void signatures() {
 #undef TEST_FUNC
 }
 
-static void test_without_ec() {
+TEST_CASE(test_without_ec) {
   using namespace fs;
   using fs::directory_entry;
   using fs::file_status;
@@ -73,17 +71,17 @@ static void test_without_ec() {
     file_status st = status(p);
     file_status sym_st = symlink_status(p);
     fs::remove(p);
-    assert(e.exists());
-    assert(!exists(p));
-    assert(e.exists() == exists(st));
-    assert(e.is_block_file() == is_block_file(st));
-    assert(e.is_character_file() == is_character_file(st));
-    assert(e.is_directory() == is_directory(st));
-    assert(e.is_fifo() == is_fifo(st));
-    assert(e.is_other() == is_other(st));
-    assert(e.is_regular_file() == is_regular_file(st));
-    assert(e.is_socket() == is_socket(st));
-    assert(e.is_symlink() == is_symlink(sym_st));
+    TEST_REQUIRE(e.exists());
+    TEST_REQUIRE(!exists(p));
+    TEST_CHECK(e.exists() == exists(st));
+    TEST_CHECK(e.is_block_file() == is_block_file(st));
+    TEST_CHECK(e.is_character_file() == is_character_file(st));
+    TEST_CHECK(e.is_directory() == is_directory(st));
+    TEST_CHECK(e.is_fifo() == is_fifo(st));
+    TEST_CHECK(e.is_other() == is_other(st));
+    TEST_CHECK(e.is_regular_file() == is_regular_file(st));
+    TEST_CHECK(e.is_socket() == is_socket(st));
+    TEST_CHECK(e.is_symlink() == is_symlink(sym_st));
   };
   test_path(f);
   test_path(d);
@@ -94,7 +92,7 @@ static void test_without_ec() {
 #endif
 }
 
-static void test_with_ec() {
+TEST_CASE(test_with_ec) {
   using namespace fs;
   using fs::directory_entry;
   using fs::file_status;
@@ -118,36 +116,36 @@ static void test_with_ec() {
       return res;
     };
 
-    assert(e.exists(ec));
-    assert(CheckEC(status_ec));
-    assert(!exists(p));
+    TEST_REQUIRE(e.exists(ec));
+    TEST_CHECK(CheckEC(status_ec));
+    TEST_REQUIRE(!exists(p));
 
-    assert(e.exists(ec) == exists(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.exists(ec) == exists(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_block_file(ec) == is_block_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_block_file(ec) == is_block_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_character_file(ec) == is_character_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_character_file(ec) == is_character_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_directory(ec) == is_directory(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_directory(ec) == is_directory(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_fifo(ec) == is_fifo(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_fifo(ec) == is_fifo(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_other(ec) == is_other(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_other(ec) == is_other(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_regular_file(ec) == is_regular_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_regular_file(ec) == is_regular_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_socket(ec) == is_socket(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_socket(ec) == is_socket(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_symlink(ec) == is_symlink(sym_st));
-    assert(CheckEC(sym_status_ec));
+    TEST_CHECK(e.is_symlink(ec) == is_symlink(sym_st));
+    TEST_CHECK(CheckEC(sym_status_ec));
   };
   test_path(f);
   test_path(d);
@@ -158,7 +156,7 @@ static void test_with_ec() {
 #endif
 }
 
-static void test_with_ec_dne() {
+TEST_CASE(test_with_ec_dne) {
   using namespace fs;
   using fs::directory_entry;
   using fs::file_status;
@@ -172,50 +170,45 @@ static void test_with_ec_dne() {
     file_status st = status(p, status_ec);
     file_status sym_st = symlink_status(p, sym_status_ec);
     std::error_code ec = GetTestEC(2);
-    auto CheckEC                  = [&](std::error_code const& other_ec) {
-      // Note: we're comparing equality of the _canonicalized_ error_condition
-      // here (unlike in other tests where we expect exactly the same
-      // error_code). This is because directory_entry can construct its own
-      // generic_category error when a file doesn't exist, instead of passing
-      // through an underlying system_category error.
-      bool res = ec.default_error_condition() == other_ec.default_error_condition();
+    auto CheckEC = [&](std::error_code const& other_ec) {
+      bool res = ec == other_ec;
       ec = GetTestEC(2);
       return res;
     };
 
-    assert(e.exists(ec) == exists(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.exists(ec) == exists(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_block_file(ec) == is_block_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_block_file(ec) == is_block_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_character_file(ec) == is_character_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_character_file(ec) == is_character_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_directory(ec) == is_directory(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_directory(ec) == is_directory(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_fifo(ec) == is_fifo(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_fifo(ec) == is_fifo(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_other(ec) == is_other(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_other(ec) == is_other(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_regular_file(ec) == is_regular_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_regular_file(ec) == is_regular_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_socket(ec) == is_socket(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_socket(ec) == is_socket(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_symlink(ec) == is_symlink(sym_st));
-    assert(CheckEC(sym_status_ec));
+    TEST_CHECK(e.is_symlink(ec) == is_symlink(sym_st));
+    TEST_CHECK(CheckEC(sym_status_ec));
   }
 }
 
 #ifndef TEST_WIN_NO_FILESYSTEM_PERMS_NONE
 // Windows doesn't support setting perms::none to trigger failures
 // reading directories.
-static void test_with_ec_cannot_resolve() {
+TEST_CASE(test_with_ec_cannot_resolve) {
   using namespace fs;
   using fs::directory_entry;
   using fs::file_status;
@@ -236,7 +229,7 @@ static void test_with_ec_cannot_resolve() {
     permissions(dir, perms::none);
     std::error_code dummy_ec;
     e.refresh(dummy_ec);
-    assert(dummy_ec);
+    TEST_REQUIRE(dummy_ec);
 
     std::error_code status_ec = GetTestEC();
     std::error_code sym_status_ec = GetTestEC(1);
@@ -249,45 +242,34 @@ static void test_with_ec_cannot_resolve() {
       return res;
     };
 
-    assert(e.exists(ec) == exists(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.exists(ec) == exists(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_block_file(ec) == is_block_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_block_file(ec) == is_block_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_character_file(ec) == is_character_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_character_file(ec) == is_character_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_directory(ec) == is_directory(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_directory(ec) == is_directory(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_fifo(ec) == is_fifo(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_fifo(ec) == is_fifo(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_other(ec) == is_other(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_other(ec) == is_other(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_regular_file(ec) == is_regular_file(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_regular_file(ec) == is_regular_file(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_socket(ec) == is_socket(st));
-    assert(CheckEC(status_ec));
+    TEST_CHECK(e.is_socket(ec) == is_socket(st));
+    TEST_CHECK(CheckEC(status_ec));
 
-    assert(e.is_symlink(ec) == is_symlink(sym_st));
-    assert(CheckEC(sym_status_ec));
+    TEST_CHECK(e.is_symlink(ec) == is_symlink(sym_st));
+    TEST_CHECK(CheckEC(sym_status_ec));
   }
 }
-#endif // TEST_WIN_NO_FILESYSTEM_PERMS_NONE
-
-int main(int, char**) {
-  file_dne();
-  signatures();
-  test_without_ec();
-  test_with_ec();
-  test_with_ec_dne();
-#ifndef TEST_WIN_NO_FILESYSTEM_PERMS_NONE
-  test_with_ec_cannot_resolve();
 #endif
 
-  return 0;
-}
+TEST_SUITE_END()

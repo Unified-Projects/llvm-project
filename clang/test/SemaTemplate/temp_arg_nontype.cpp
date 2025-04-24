@@ -128,28 +128,28 @@ namespace ns {
   struct Foo {
     static const bool value = true;
   };
-
+  
   template <bool b>
   struct Bar {};
-
+  
   const bool value = false;
-
+  
   Bar<bool(ns::Foo<int>::value)> x;
 }
 
 // PR5349
 namespace ns {
   enum E { k };
-
+  
   template <E e>
   struct Baz  {};
-
+  
   Baz<k> f1;  // This works.
   Baz<E(0)> f2;  // This too.
   Baz<static_cast<E>(0)> f3;  // And this.
-
+  
   Baz<ns::E(0)> b1;  // This doesn't work.
-  Baz<static_cast<ns::E>(0)> b2;  // This neither.
+  Baz<static_cast<ns::E>(0)> b2;  // This neither.  
 }
 
 // PR5597
@@ -174,7 +174,7 @@ namespace pr6249 {
 
 namespace PR6723 {
   template<unsigned char C> void f(int (&a)[C]); // expected-note 3{{candidate template ignored: substitution failure [with C = '\x00']}}
-  // expected-note@-1 {{not viable: no known conversion from 'int[512]' to 'int (&)[0]'}}
+  // expected-note@-1 {{not viable: no known conversion from 'int [512]' to 'int (&)[0]'}}
   void g() {
     int arr512[512];
     f(arr512); // expected-error{{no matching function for call}}
@@ -193,7 +193,7 @@ namespace EntityReferenced {
 
   template<typename T>
   struct Y {
-    static void f(T x) {
+    static void f(T x) { 
       x = 1; // expected-error{{incompatible integer to pointer conversion assigning to 'int *' from 'int'}}
     }
   };
@@ -204,15 +204,16 @@ namespace EntityReferenced {
 }
 
 namespace PR6964 {
-  template <typename ,int, int = 9223372036854775807L > // expected-warning {{non-type template argument value '9223372036854775807' truncated to '-1' for template parameter of type 'int'}} \
-  // expected-note {{template parameter is declared here}}
+  template <typename ,int, int = 9223372036854775807L > // expected-warning 2{{non-type template argument value '9223372036854775807' truncated to '-1' for template parameter of type 'int'}} \
+  // expected-note 2{{template parameter is declared here}}
   struct as_nview { };
 
-  template <typename Sequence, int I0>
+  template <typename Sequence, int I0> 
   struct as_nview<Sequence, I0>  // expected-note{{while checking a default template argument used here}}
   { };
 }
 
+// rdar://problem/8302138
 namespace test8 {
   template <int* ip> struct A {
     int* p;
@@ -235,7 +236,7 @@ namespace test8 {
     char y;
     double z;
   };
-
+  
   template <C* cp> struct B {
     C* p;
     B() : p(cp) {}
@@ -387,16 +388,17 @@ namespace PR17696 {
 
 namespace partial_order_different_types {
   template<int, int, typename T, typename, T> struct A;
-  // expected-note@-1 {{template is declared here}}
-  template<int N, typename T, typename U, T V> struct A<0, N, T, U, V> {};
-  template<int N, typename T, typename U, U V> struct A<0, N, T, U, V>;
-  // expected-error@-1 {{class template partial specialization is not more specialized than the primary template}}
-  A<0, 0, int, int, 0> a;
+  template<int N, typename T, typename U, T V> struct A<0, N, T, U, V>; // expected-note {{matches}}
+  // FIXME: It appears that this partial specialization should be ill-formed as
+  // it is not more specialized than the primary template. V is not deducible
+  // because it does not have the same type as the corresponding parameter.
+  template<int N, typename T, typename U, U V> struct A<0, N, T, U, V> {}; // expected-note {{matches}}
+  A<0, 0, int, int, 0> a; // expected-error {{ambiguous}}
 }
 
 namespace partial_order_references {
   // FIXME: The standard does not appear to consider the second specialization
-  // to be more specialized than the first! The problem is that deducing
+  // to be more more specialized than the first! The problem is that deducing
   // an 'int&' parameter from an argument 'R' results in a type mismatch,
   // because the parameter has a reference type and the argument is an
   // expression and thus does not have reference type. We resolve this by
@@ -435,7 +437,7 @@ namespace dependent_nested_partial_specialization {
 
   template<template<typename> class X> struct A {
     template<typename T, X<T> N> struct B; // expected-note 2{{here}}
-    template <typename T> struct B<T, 0> {}; // expected-error {{non-type template argument specializes a template parameter with dependent type 'Y<T>' (aka 'T *')}}
+    template<typename T> struct B<T, 0> {}; // expected-error {{specializes a template parameter with dependent type 'Y<T>'}}
   };
   A<X>::B<int, 0> ax;
   A<Y>::B<int, &n> ay; // expected-error {{undefined}} expected-note {{instantiation of}}
@@ -457,24 +459,17 @@ namespace dependent_nested_partial_specialization {
 namespace nondependent_default_arg_ordering {
   int n, m;
   template<typename A, A B = &n> struct X {};
-
-  template<typename A> void f(X<A>);
-  // expected-note@-1 {{candidate function}}
-  template<typename A> void f(X<A, &m>);
-  // expected-note@-1 {{candidate function}}
-  template<typename A, A B> void f(X<A, B>);
-  // expected-note@-1 2{{candidate function}}
+  template<typename A> void f(X<A>); // expected-note {{candidate}}
+  template<typename A> void f(X<A, &m>); // expected-note {{candidate}}
+  template<typename A, A B> void f(X<A, B>); // expected-note 2{{candidate}}
   template<template<typename U, U> class T, typename A, int *B> void f(T<A, B>);
-  // expected-note@-1 2{{candidate function}}
-
-  // FIXME: When partial ordering, we get an inconsistent deduction between
-  // `A` (type-parameter-0-0) and `int *`, when deducing the first parameter.
-  // The deduction mechanism needs to be extended to be able to correctly
-  // handle these cases where the argument's template parameters appear in
-  // the result.
   void g() {
-    X<int *, &n> x; f(x); // expected-error {{call to 'f' is ambiguous}}
-    X<int *, &m> y; f(y); // expected-error {{call to 'f' is ambiguous}}
+    // FIXME: The first and second function templates above should be
+    // considered more specialized than the third, but during partial
+    // ordering we fail to check that we actually deduced template arguments
+    // that make the deduced A identical to A.
+    X<int *, &n> x; f(x); // expected-error {{ambiguous}}
+    X<int *, &m> y; f(y); // expected-error {{ambiguous}}
   }
 }
 

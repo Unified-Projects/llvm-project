@@ -25,12 +25,12 @@
 #include "clang/StaticAnalyzer/Core/PathSensitive/ProgramState_Fwd.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/FoldingSet.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include <cassert>
 #include <memory>
-#include <optional>
 
 using namespace clang;
 using namespace ento;
@@ -50,7 +50,8 @@ ExplodedGraph::~ExplodedGraph() = default;
 bool ExplodedGraph::isInterestingLValueExpr(const Expr *Ex) {
   if (!Ex->isLValue())
     return false;
-  return isa<DeclRefExpr, MemberExpr, ObjCIvarRefExpr, ArraySubscriptExpr>(Ex);
+  return isa<DeclRefExpr>(Ex) || isa<MemberExpr>(Ex) ||
+         isa<ObjCIvarRefExpr>(Ex) || isa<ArraySubscriptExpr>(Ex);
 }
 
 bool ExplodedGraph::shouldCollect(const ExplodedNode *node) {
@@ -139,7 +140,7 @@ bool ExplodedGraph::shouldCollect(const ExplodedNode *node) {
 
   // Condition 10.
   const ProgramPoint SuccLoc = succ->getLocation();
-  if (std::optional<StmtPoint> SP = SuccLoc.getAs<StmtPoint>())
+  if (Optional<StmtPoint> SP = SuccLoc.getAs<StmtPoint>())
     if (CallEvent::isCallStmt(SP->getStmt()))
       return false;
 
@@ -211,9 +212,9 @@ void ExplodedNode::NodeGroup::replaceNode(ExplodedNode *node) {
   assert(!getFlag());
 
   GroupStorage &Storage = reinterpret_cast<GroupStorage&>(P);
-  assert(isa<ExplodedNode *>(Storage));
+  assert(Storage.is<ExplodedNode *>());
   Storage = node;
-  assert(isa<ExplodedNode *>(Storage));
+  assert(Storage.is<ExplodedNode *>());
 }
 
 void ExplodedNode::NodeGroup::addNode(ExplodedNode *N, ExplodedGraph &G) {
@@ -222,23 +223,24 @@ void ExplodedNode::NodeGroup::addNode(ExplodedNode *N, ExplodedGraph &G) {
   GroupStorage &Storage = reinterpret_cast<GroupStorage&>(P);
   if (Storage.isNull()) {
     Storage = N;
-    assert(isa<ExplodedNode *>(Storage));
+    assert(Storage.is<ExplodedNode *>());
     return;
   }
 
-  ExplodedNodeVector *V = dyn_cast<ExplodedNodeVector *>(Storage);
+  ExplodedNodeVector *V = Storage.dyn_cast<ExplodedNodeVector *>();
 
   if (!V) {
     // Switch from single-node to multi-node representation.
-    auto *Old = cast<ExplodedNode *>(Storage);
+    ExplodedNode *Old = Storage.get<ExplodedNode *>();
 
     BumpVectorContext &Ctx = G.getNodeAllocator();
-    V = new (G.getAllocator()) ExplodedNodeVector(Ctx, 4);
+    V = G.getAllocator().Allocate<ExplodedNodeVector>();
+    new (V) ExplodedNodeVector(Ctx, 4);
     V->push_back(Old, Ctx);
 
     Storage = V;
     assert(!getFlag());
-    assert(isa<ExplodedNodeVector *>(Storage));
+    assert(Storage.is<ExplodedNodeVector *>());
   }
 
   V->push_back(N, G.getNodeAllocator());
@@ -251,7 +253,7 @@ unsigned ExplodedNode::NodeGroup::size() const {
   const GroupStorage &Storage = reinterpret_cast<const GroupStorage &>(P);
   if (Storage.isNull())
     return 0;
-  if (ExplodedNodeVector *V = dyn_cast<ExplodedNodeVector *>(Storage))
+  if (ExplodedNodeVector *V = Storage.dyn_cast<ExplodedNodeVector *>())
     return V->size();
   return 1;
 }
@@ -263,7 +265,7 @@ ExplodedNode * const *ExplodedNode::NodeGroup::begin() const {
   const GroupStorage &Storage = reinterpret_cast<const GroupStorage &>(P);
   if (Storage.isNull())
     return nullptr;
-  if (ExplodedNodeVector *V = dyn_cast<ExplodedNodeVector *>(Storage))
+  if (ExplodedNodeVector *V = Storage.dyn_cast<ExplodedNodeVector *>())
     return V->begin();
   return Storage.getAddrOfPtr1();
 }
@@ -275,7 +277,7 @@ ExplodedNode * const *ExplodedNode::NodeGroup::end() const {
   const GroupStorage &Storage = reinterpret_cast<const GroupStorage &>(P);
   if (Storage.isNull())
     return nullptr;
-  if (ExplodedNodeVector *V = dyn_cast<ExplodedNodeVector *>(Storage))
+  if (ExplodedNodeVector *V = Storage.dyn_cast<ExplodedNodeVector *>())
     return V->end();
   return Storage.getAddrOfPtr1() + 1;
 }
@@ -349,8 +351,6 @@ const Stmt *ExplodedNode::getStmtForDiagnostics() const {
 
 const Stmt *ExplodedNode::getNextStmtForDiagnostics() const {
   for (const ExplodedNode *N = getFirstSucc(); N; N = N->getFirstSucc()) {
-    if (N->getLocation().isPurgeKind())
-      continue;
     if (const Stmt *S = N->getStmtForDiagnostics()) {
       // Check if the statement is '?' or '&&'/'||'.  These are "merges",
       // not actual statement points.
@@ -378,7 +378,7 @@ const Stmt *ExplodedNode::getNextStmtForDiagnostics() const {
 
 const Stmt *ExplodedNode::getPreviousStmtForDiagnostics() const {
   for (const ExplodedNode *N = getFirstPred(); N; N = N->getFirstPred())
-    if (const Stmt *S = N->getStmtForDiagnostics(); S && !isa<CompoundStmt>(S))
+    if (const Stmt *S = N->getStmtForDiagnostics())
       return S;
 
   return nullptr;
@@ -409,7 +409,7 @@ ExplodedNode *ExplodedGraph::getNode(const ProgramPoint &L,
     }
     else {
       // Allocate a new node.
-      V = getAllocator().Allocate<NodeTy>();
+      V = (NodeTy*) getAllocator().Allocate<NodeTy>();
     }
 
     ++NumNodes;
@@ -433,7 +433,7 @@ ExplodedNode *ExplodedGraph::createUncachedNode(const ProgramPoint &L,
                                                 ProgramStateRef State,
                                                 int64_t Id,
                                                 bool IsSink) {
-  NodeTy *V = getAllocator().Allocate<NodeTy>();
+  NodeTy *V = (NodeTy *) getAllocator().Allocate<NodeTy>();
   new (V) NodeTy(L, State, Id, IsSink);
   return V;
 }
@@ -489,7 +489,7 @@ ExplodedGraph::trim(ArrayRef<const NodeTy *> Sinks,
     const ExplodedNode *N = WL2.pop_back_val();
 
     // Skip this node if we have already processed it.
-    if (Pass2.contains(N))
+    if (Pass2.find(N) != Pass2.end())
       continue;
 
     // Create the corresponding node in the new graph and record the mapping
@@ -510,8 +510,9 @@ ExplodedGraph::trim(ArrayRef<const NodeTy *> Sinks,
 
     // Walk through the predecessors of 'N' and hook up their corresponding
     // nodes in the new graph (if any) to the freshly created node.
-    for (const ExplodedNode *Pred : N->Preds) {
-      Pass2Ty::iterator PI = Pass2.find(Pred);
+    for (ExplodedNode::pred_iterator I = N->Preds.begin(), E = N->Preds.end();
+         I != E; ++I) {
+      Pass2Ty::iterator PI = Pass2.find(*I);
       if (PI == Pass2.end())
         continue;
 
@@ -522,16 +523,17 @@ ExplodedGraph::trim(ArrayRef<const NodeTy *> Sinks,
     // been created, we should hook them up as successors.  Otherwise, enqueue
     // the new nodes from the original graph that should have nodes created
     // in the new graph.
-    for (const ExplodedNode *Succ : N->Succs) {
-      Pass2Ty::iterator PI = Pass2.find(Succ);
+    for (ExplodedNode::succ_iterator I = N->Succs.begin(), E = N->Succs.end();
+         I != E; ++I) {
+      Pass2Ty::iterator PI = Pass2.find(*I);
       if (PI != Pass2.end()) {
         const_cast<ExplodedNode *>(PI->second)->addPredecessor(NewN, *G);
         continue;
       }
 
       // Enqueue nodes to the worklist that were marked during pass 1.
-      if (Pass1.count(Succ))
-        WL2.push_back(Succ);
+      if (Pass1.count(*I))
+        WL2.push_back(*I);
     }
   }
 

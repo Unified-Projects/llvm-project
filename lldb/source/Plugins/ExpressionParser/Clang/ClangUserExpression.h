@@ -9,7 +9,6 @@
 #ifndef LLDB_SOURCE_PLUGINS_EXPRESSIONPARSER_CLANG_CLANGUSEREXPRESSION_H
 #define LLDB_SOURCE_PLUGINS_EXPRESSIONPARSER_CLANG_CLANGUSEREXPRESSION_H
 
-#include <optional>
 #include <vector>
 
 #include "ASTResultSynthesizer.h"
@@ -28,8 +27,6 @@
 #include "lldb/lldb-private.h"
 
 namespace lldb_private {
-
-class ClangExpressionParser;
 
 /// \class ClangUserExpression ClangUserExpression.h
 /// "lldb/Expression/ClangUserExpression.h" Encapsulates a single expression
@@ -51,15 +48,12 @@ public:
 
   enum { kDefaultTimeout = 500000u };
 
-  class ClangUserExpressionHelper
-      : public llvm::RTTIExtends<ClangUserExpressionHelper,
-                                 ClangExpressionHelper> {
+  class ClangUserExpressionHelper : public ClangExpressionHelper {
   public:
-    // LLVM RTTI support
-    static char ID;
-
     ClangUserExpressionHelper(Target &target, bool top_level)
         : m_target(target), m_top_level(top_level) {}
+
+    ~ClangUserExpressionHelper() override = default;
 
     /// Return the object that the parser should use when resolving external
     /// values.  May be NULL if everything should be self-contained.
@@ -106,8 +100,8 @@ public:
   ///     definitions to be included when the expression is parsed.
   ///
   /// \param[in] language
-  ///     If not unknown, a language to use when parsing the
-  ///     expression.  Currently restricted to those languages
+  ///     If not eLanguageTypeUnknown, a language to use when parsing
+  ///     the expression.  Currently restricted to those languages
   ///     supported by Clang.
   ///
   /// \param[in] desired_type
@@ -122,7 +116,7 @@ public:
   ///     must be evaluated. For details see the comment to
   ///     `UserExpression::Evaluate`.
   ClangUserExpression(ExecutionContextScope &exe_scope, llvm::StringRef expr,
-                      llvm::StringRef prefix, SourceLanguage language,
+                      llvm::StringRef prefix, lldb::LanguageType language,
                       ResultType desired_type,
                       const EvaluateExpressionOptions &options,
                       ValueObject *ctx_obj);
@@ -177,8 +171,6 @@ public:
   /// Returns true iff this expression is using any imported C++ modules.
   bool DidImportCxxModules() const { return !m_imported_cpp_modules.empty(); }
 
-  llvm::StringRef GetFilename() const { return m_filename; }
-
 private:
   /// Populate m_in_cplusplus_method and m_in_objectivec_method based on the
   /// environment.
@@ -187,9 +179,9 @@ private:
   /// The parameter have the same meaning as in ClangUserExpression::Parse.
   /// \see ClangUserExpression::Parse
   bool TryParse(DiagnosticManager &diagnostic_manager,
-                ExecutionContext &exe_ctx,
-                lldb_private::ExecutionPolicy execution_policy,
-                bool keep_result_in_memory, bool generate_debug_info);
+                ExecutionContextScope *exe_scope, ExecutionContext &exe_ctx,
+                lldb_private::ExecutionPolicy execution_policy, bool keep_result_in_memory,
+                bool generate_debug_info);
 
   void SetupCppModuleImports(ExecutionContext &exe_ctx);
 
@@ -204,10 +196,6 @@ private:
                         ExecutionContext &exe_ctx,
                         std::vector<std::string> modules_to_import,
                         bool for_completion);
-
-  lldb::addr_t GetCppObjectPointer(lldb::StackFrameSP frame,
-                                   llvm::StringRef object_name, Status &err);
-
   /// Defines how the current expression should be wrapped.
   ClangExpressionSourceCode::WrapKind GetWrapKind() const;
   bool SetupPersistentState(DiagnosticManager &diagnostic_manager,
@@ -238,7 +226,7 @@ private:
   /// The absolute character position in the transformed source code where the
   /// user code (as typed by the user) starts. If the variable is empty, then we
   /// were not able to calculate this position.
-  std::optional<size_t> m_user_expression_start_pos;
+  llvm::Optional<size_t> m_user_expression_start_pos;
   ResultDelegate m_result_delegate;
   ClangPersistentVariables *m_clang_state;
   std::unique_ptr<ClangExpressionSourceCode> m_source_code;
