@@ -119,7 +119,7 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
   // PIE
   bool IsPIE = !Args.hasArg(options::OPT_shared) &&
-               (Args.hasArg(options::OPT_pie) || TC.isPIEDefault(Args));
+               (Args.hasArg(options::OPT_pie) || TC.isPIEDefault());
   if (IsPIE)
     CmdArgs.push_back("-pie");
   // Output

@@ -49,8 +49,11 @@ extern char **environ;
 #endif
 #elif defined(__DragonFly__)
 #include <sys/mount.h>
+
 #elif defined(__unified__)
 #include <sys/auxv.h>
+#include <elf.h>         // for Elf_Auxinfo definition
+typedef Elf64_auxv_t Elf_Auxinfo;
 #elif defined(__MVS__)
 #include "llvm/Support/AutoConvert.h"
 #include <sys/ps.h>
@@ -73,7 +76,7 @@ extern char **environ;
 
 #include <sys/types.h>
 #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
-    !defined(__linux__) && !defined(__FreeBSD_kernel__) && !defined(_AIX)
+    !defined(__linux__) && !defined(__FreeBSD_kernel__) && !defined(_AIX) && !defined(__unified__)
 #include <sys/statvfs.h>
 #define STATVFS statvfs
 #define FSTATVFS fstatvfs
@@ -102,6 +105,9 @@ extern char **environ;
 // the typedef prior to including <sys/vmount.h> to work around this issue.
 typedef uint_t uint;
 #include <sys/vmount.h>
+#elif defined(__unified__)
+#include <sys/statfs.h>
+#include <sys/mount.h>
 #else
 #include <sys/mount.h>
 #endif
@@ -228,7 +234,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   for (Elf_Auxinfo *aux = (Elf_Auxinfo *)p; aux->a_type != AT_NULL; aux++) {
     if (aux->a_type == AT_EXECPATH) {
       char link_path[PATH_MAX];
-      if (realpath((char *)aux->a_un.a_ptr, link_path))
+      if (realpath((char *)aux->a_un.a_val, link_path))
         return link_path;
     }
   }
@@ -461,7 +467,7 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
 }
 
 static bool is_local_impl(struct STATVFS &Vfs) {
-#if defined(__linux__) || defined(__GNU__)
+#if defined(__linux__) || defined(__GNU__) || defined(__unified__)
 #ifndef NFS_SUPER_MAGIC
 #define NFS_SUPER_MAGIC 0x6969
 #endif
