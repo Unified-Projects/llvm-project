@@ -42,6 +42,8 @@ void Unified::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/usr/include");
   addSystemInclude(DriverArgs, CC1Args,
                    getDriver().SysRoot + "/usr/include/" + getTripleString());
+  // Force-enable GOT-PCREL (no PLT) code generation in CC1
+  CC1Args.push_back("-fno-plt");
 }
 
 void Unified::AddLibCxxIncludePaths(const ArgList &DriverArgs,
@@ -53,6 +55,8 @@ void Unified::AddLibCxxIncludePaths(const ArgList &DriverArgs,
   addSystemInclude(DriverArgs, CC1Args,
                    getDriver().Dir + "/../include/" + getTripleString() +
                        "/c++/v1");
+  // Force-enable GOT-PCREL (no PLT) code generation in CC1
+  CC1Args.push_back("-fno-plt");
 }
 
 void Unified::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -133,8 +137,7 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
   // Disable lazy binding (resolve all symbols at link time)
-  CmdArgs.push_back(Args.MakeArgString("-z"));
-  CmdArgs.push_back(Args.MakeArgString("now"));
+  CmdArgs.push_back(Args.MakeArgString("-z now"));
 
   // PIE
   llvm::Reloc::Model RelocationModel;
