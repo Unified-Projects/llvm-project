@@ -318,8 +318,8 @@ template <typename Target>
      DefineStd(Builder, "unix", Opts);
      Builder.defineMacro("__unified__");
      Builder.defineMacro("_GNU_SOURCE", "1");
-     Builder.defineMacro("__USE_GNU",    "1");
-     Builder.defineMacro("__Linux__");
+    //  Builder.defineMacro("__USE_GNU",    "1");
+    //  Builder.defineMacro("__Linux__");
      Builder.defineMacro("__ELF__");
      if (this->HasFloat128)
        Builder.defineMacro("__FLOAT128__");
@@ -328,6 +328,7 @@ template <typename Target>
  public:
    UnifiedTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
        : OSTargetInfo<Target>(Triple, Opts) {
+
      switch (Triple.getArch()) {
      default:
        break;
