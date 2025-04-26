@@ -6,7 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the Unified toolchain for the x86_64-unknown-unified target.
+// This file implements the Unified toolchain for the x86_64-unknown-unified
+// target.
 //
 //===----------------------------------------------------------------------===//
 
@@ -23,7 +24,8 @@ using namespace clang::driver;
 using namespace clang::driver::toolchains;
 using namespace llvm::opt;
 
-Unified::Unified(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
+Unified::Unified(const Driver &D, const llvm::Triple &Triple,
+                 const ArgList &Args)
     : Generic_ELF(D, Triple, Args) {
   // Add library search path under unified sysroot
   getFilePaths().push_back(getDriver().SysRoot + "/system/lib");
@@ -32,39 +34,44 @@ Unified::Unified(const Driver &D, const llvm::Triple &Triple, const ArgList &Arg
 void Unified::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
                                         ArgStringList &CC1Args) const {
   // Include standard system headers
-  addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/system/include");
-  addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/system/include/" + getTripleString());
+  addSystemInclude(DriverArgs, CC1Args,
+                   getDriver().SysRoot + "/system/include");
+  addSystemInclude(DriverArgs, CC1Args,
+                   getDriver().SysRoot + "/system/include/" +
+                       getTripleString());
   addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/usr/include");
-  addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/usr/include/" + getTripleString());
+  addSystemInclude(DriverArgs, CC1Args,
+                   getDriver().SysRoot + "/usr/include/" + getTripleString());
 }
 
 void Unified::AddLibCxxIncludePaths(const ArgList &DriverArgs,
                                     ArgStringList &CC1Args) const {
   // Include libc++ headers
-  addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/system/include/c++/v1");
+  addSystemInclude(DriverArgs, CC1Args,
+                   getDriver().SysRoot + "/system/include/c++/v1");
   addSystemInclude(DriverArgs, CC1Args, getDriver().Dir + "/../include/c++/v1");
-  addSystemInclude(DriverArgs, CC1Args, getDriver().Dir + "/../include/" + getTripleString() + "/c++/v1");
+  addSystemInclude(DriverArgs, CC1Args,
+                   getDriver().Dir + "/../include/" + getTripleString() +
+                       "/c++/v1");
 }
 
 void Unified::AddCXXStdlibLibArgs(const ArgList &Args,
                                   ArgStringList &CmdArgs) const {
-    // Link against libc++ by default
-    CXXStdlibType Type = GetCXXStdlibType(Args);
- 
-    switch (Type) {
-    case ToolChain::CST_Libcxx:
-        CmdArgs.push_back("-lc++");
-        break;
-    }
+  // Link against libc++ by default
+  CXXStdlibType Type = GetCXXStdlibType(Args);
+
+  switch (Type) {
+  case ToolChain::CST_Libcxx:
+    CmdArgs.push_back("-lc++");
+    break;
+  }
 }
 
 Tool *Unified::buildAssembler() const {
   return new tools::unified::Assembler(*this);
 }
 
-Tool *Unified::buildLinker() const {
-  return new tools::unified::Linker(*this);
-}
+Tool *Unified::buildLinker() const { return new tools::unified::Linker(*this); }
 
 // Definitions for the unified assembler and linker tools:
 namespace clang {
@@ -73,67 +80,88 @@ namespace tools {
 namespace unified {
 
 void Assembler::ConstructJob(Compilation &C, const JobAction &JA,
-                            const InputInfo &Output,
-                            const InputInfoList &Inputs,
-                            const llvm::opt::ArgList &Args,
-                            const char *LinkingOutput) const {
+                             const InputInfo &Output,
+                             const InputInfoList &Inputs,
+                             const llvm::opt::ArgList &Args,
+                             const char *LinkingOutput) const {
   ArgStringList CmdArgs;
-  // Output file
+  const Driver &D = getToolChain().getDriver();
+
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
-  // Input files
+
   for (const auto &II : Inputs)
     CmdArgs.push_back(II.getFilename());
-  // Pass through assembler-specific flags
+
   Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA, options::OPT_Xassembler);
-  // Invoke 'as' from the toolchain
+
   const char *Exec = Args.MakeArgString(getToolChain().GetProgramPath("as"));
-  C.addCommand(std::make_unique<Command>(JA, *this,
-      ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
 }
 
 void Linker::ConstructJob(Compilation &C, const JobAction &JA,
-                          const InputInfo &Output,
-                          const InputInfoList &Inputs,
+                          const InputInfo &Output, const InputInfoList &Inputs,
                           const llvm::opt::ArgList &Args,
                           const char *LinkingOutput) const {
-  const toolchains::Unified &TC = static_cast<const toolchains::Unified&>(getToolChain());
+  const toolchains::Unified &TC =
+      static_cast<const toolchains::Unified &>(getToolChain());
   ArgStringList CmdArgs;
+
   const Driver &D = TC.getDriver();
-  // Silence warnings
+
+  // Silence warning for "clang -g foo.o -o foo"
   Args.ClaimAllArgs(options::OPT_g_Group);
+  // and "clang -emit-llvm foo.o -o foo"
   Args.ClaimAllArgs(options::OPT_emit_llvm);
+  // and for "clang -w foo.o -o foo". Other warning options are already
+  // handled somewhere else.
   Args.ClaimAllArgs(options::OPT_w);
+
   // Static vs dynamic
-  if (Args.hasArg(options::OPT_static))
+  if (Args.hasArg(options::OPT_static)) {
     CmdArgs.push_back("-Bstatic");
-  else {
+  } else {
     if (Args.hasArg(options::OPT_rdynamic))
       CmdArgs.push_back("-export-dynamic");
-    if (Args.hasArg(options::OPT_shared))
+    if (Args.hasArg(options::OPT_shared)) {
       CmdArgs.push_back("-shared");
+    }
   }
+
   // rpath and sysroot
-  CmdArgs.push_back("-rpath=/system/lib");
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
+  // Disable lazy binding (resolve all symbols at link time)
+  CmdArgs.push_back(Args.MakeArgString("-z"));
+  CmdArgs.push_back(Args.MakeArgString("now"));
+
   // PIE
-  bool IsPIE = !Args.hasArg(options::OPT_shared) &&
-               (Args.hasArg(options::OPT_pie) || TC.isPIEDefault(Args));
-  if (IsPIE)
-    CmdArgs.push_back("-pie");
-  // Output
-  CmdArgs.push_back("-o");
-  CmdArgs.push_back(Output.getFilename());
-  // Startup files
-  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
-    if (!Args.hasArg(options::OPT_shared))
-      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath("crt0.o")));
-    std::string crtbegin = TC.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
-    if (TC.getVFS().exists(crtbegin))
-      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath(crtbegin.c_str())));
+  llvm::Reloc::Model RelocationModel;
+  unsigned PICLevel;
+  bool IsPIE;
+  std::tie(RelocationModel, PICLevel, IsPIE) =
+      ParsePICArgs(getToolChain(), Args);
+
+  if (Output.isFilename()) {
+    CmdArgs.push_back("-o");
+    CmdArgs.push_back(Output.getFilename());
+  } else {
+    assert(Output.isNothing() && "Invalid output.");
   }
-  // Library paths and linker flags
+
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
+    if (!Args.hasArg(options::OPT_shared)) {
+      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath("crt0.o")));
+    }
+    std::string crtbegin =
+        TC.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
+    if (TC.getVFS().exists(crtbegin)) {
+      CmdArgs.push_back(
+          Args.MakeArgString(TC.GetFilePath(crtbegin.c_str())));
+    }
+  }
+
   Args.AddAllArgs(CmdArgs, options::OPT_L);
   TC.AddFilePathLibArgs(Args, CmdArgs);
   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
@@ -142,32 +170,42 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_t);
   Args.AddAllArgs(CmdArgs, options::OPT_Z_Flag);
   Args.AddAllArgs(CmdArgs, options::OPT_r);
-  // LTO
+
   if (D.isUsingLTO()) {
+    assert(!Inputs.empty() && "Must have at least one input.");
     addLTOOptions(TC, Args, CmdArgs, Output, Inputs[0],
                   D.getLTOMode() == LTOK_Thin);
   }
-  // Inputs
+
   AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
-  // Runtime libs
+
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
     AddRunTimeLibs(TC, D, CmdArgs, Args);
-    if (D.CCCIsCXX() && TC.ShouldLinkCXXStdlib(Args))
-      TC.AddCXXStdlibLibArgs(Args, CmdArgs);
-    if (Args.hasArg(options::OPT_pthread))
+
+    if (D.CCCIsCXX()) {
+      if (TC.ShouldLinkCXXStdlib(Args))
+        TC.AddCXXStdlibLibArgs(Args, CmdArgs);
+    }
+
+    if (Args.hasArg(options::OPT_pthread)) {
       CmdArgs.push_back("-lpthread");
+    }
+
     CmdArgs.push_back("-lc");
   }
-  // CRT end
+
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
-    std::string crtend = TC.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
-    if (TC.getVFS().exists(crtend))
-      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath(crtend.c_str())));
+    std::string crtend =
+        TC.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
+    if (TC.getVFS().exists(crtend)) {
+      CmdArgs.push_back(
+          Args.MakeArgString(TC.GetFilePath(crtend.c_str())));
+    }
   }
-  // Execute linker
+
   const char *Exec = Args.MakeArgString(getToolChain().GetLinkerPath());
-  C.addCommand(std::make_unique<Command>(JA, *this,
-      ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
 }
 
 } // namespace unified

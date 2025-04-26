@@ -62,6 +62,14 @@ public:
     return ToolChain::RLT_CompilerRT;
   }
 
+  
+
+  bool isPICDefault() const override { return false; }
+  bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
+    return false;
+  }
+  bool isPICDefaultForced() const override { return false; }
+
 protected:
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;
