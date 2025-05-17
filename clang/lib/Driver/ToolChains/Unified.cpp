@@ -150,18 +150,18 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
     if (!Args.hasArg(options::OPT_shared)) {
-      CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
+      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath("crt0.o")));
     }
     std::string crtbegin =
-        ToolChain.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
-    if (ToolChain.getVFS().exists(crtbegin)) {
+        TC.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
+    if (TC.getVFS().exists(crtbegin)) {
       CmdArgs.push_back(
-          Args.MakeArgString(ToolChain.GetFilePath(crtbegin.c_str())));
+          Args.MakeArgString(TC.GetFilePath(crtbegin.c_str())));
     }
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);
-  ToolChain.AddFilePathLibArgs(Args, CmdArgs);
+  TC.AddFilePathLibArgs(Args, CmdArgs);
   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
   Args.AddAllArgs(CmdArgs, options::OPT_e);
   Args.AddAllArgs(CmdArgs, options::OPT_s);
@@ -171,18 +171,18 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (D.isUsingLTO()) {
     assert(!Inputs.empty() && "Must have at least one input.");
-    addLTOOptions(ToolChain, Args, CmdArgs, Output, Inputs[0],
+    addLTOOptions(TC, Args, CmdArgs, Output, Inputs[0],
                   D.getLTOMode() == LTOK_Thin);
   }
 
-  AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
+  AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
-    AddRunTimeLibs(ToolChain, D, CmdArgs, Args);
+    AddRunTimeLibs(TC, D, CmdArgs, Args);
 
     if (D.CCCIsCXX()) {
-      if (ToolChain.ShouldLinkCXXStdlib(Args))
-        ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+      if (TC.ShouldLinkCXXStdlib(Args))
+        TC.AddCXXStdlibLibArgs(Args, CmdArgs);
     }
 
     if (Args.hasArg(options::OPT_pthread)) {
@@ -194,10 +194,10 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
     std::string crtend =
-        ToolChain.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
-    if (ToolChain.getVFS().exists(crtend)) {
+        TC.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
+    if (TC.getVFS().exists(crtend)) {
       CmdArgs.push_back(
-          Args.MakeArgString(ToolChain.GetFilePath(crtend.c_str())));
+          Args.MakeArgString(TC.GetFilePath(crtend.c_str())));
     }
   }
 
