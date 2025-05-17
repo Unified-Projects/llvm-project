@@ -28,22 +28,18 @@ Unified::Unified(const Driver &D, const llvm::Triple &Triple,
                  const ArgList &Args)
     : Generic_ELF(D, Triple, Args) {
   // Add library search path under unified sysroot
-  getFilePaths().push_back(getDriver().SysRoot + "/system/lib");
+  getFilePaths().push_back(getDriver().SysRoot + "/lib");
+  getFilePaths().push_back(getDriver().SysRoot + "/usr/lib");
 }
 
 void Unified::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
                                         ArgStringList &CC1Args) const {
   // Include standard system headers
   addSystemInclude(DriverArgs, CC1Args,
-                   getDriver().SysRoot + "/system/include");
+                   getDriver().SysRoot + "/usr/include");
   addSystemInclude(DriverArgs, CC1Args,
-                   getDriver().SysRoot + "/system/include/" +
+                   getDriver().SysRoot + "/usr/include/" +
                        getTripleString());
-  addSystemInclude(DriverArgs, CC1Args, getDriver().SysRoot + "/usr/include");
-  addSystemInclude(DriverArgs, CC1Args,
-                   getDriver().SysRoot + "/usr/include/" + getTripleString());
-  // Force-enable GOT-PCREL (no PLT) code generation in CC1
-  CC1Args.push_back("-fno-plt");
 }
 
 void Unified::AddLibCxxIncludePaths(const ArgList &DriverArgs,
@@ -55,8 +51,6 @@ void Unified::AddLibCxxIncludePaths(const ArgList &DriverArgs,
   addSystemInclude(DriverArgs, CC1Args,
                    getDriver().Dir + "/../include/" + getTripleString() +
                        "/c++/v1");
-  // Force-enable GOT-PCREL (no PLT) code generation in CC1
-  CC1Args.push_back("-fno-plt");
 }
 
 void Unified::AddCXXStdlibLibArgs(const ArgList &Args,
@@ -137,7 +131,8 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
   // Disable lazy binding (resolve all symbols at link time)
-  CmdArgs.push_back(Args.MakeArgString("-z now"));
+  CmdArgs.push_back(Args.MakeArgString("-z"));
+  CmdArgs.push_back(Args.MakeArgString("now"));
 
   // PIE
   llvm::Reloc::Model RelocationModel;
@@ -155,18 +150,18 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
     if (!Args.hasArg(options::OPT_shared)) {
-      CmdArgs.push_back(Args.MakeArgString(TC.GetFilePath("crt0.o")));
+      CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
     }
     std::string crtbegin =
-        TC.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
-    if (TC.getVFS().exists(crtbegin)) {
+        ToolChain.getCompilerRT(Args, "crtbegin", ToolChain::FT_Object);
+    if (ToolChain.getVFS().exists(crtbegin)) {
       CmdArgs.push_back(
-          Args.MakeArgString(TC.GetFilePath(crtbegin.c_str())));
+          Args.MakeArgString(ToolChain.GetFilePath(crtbegin.c_str())));
     }
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);
-  TC.AddFilePathLibArgs(Args, CmdArgs);
+  ToolChain.AddFilePathLibArgs(Args, CmdArgs);
   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
   Args.AddAllArgs(CmdArgs, options::OPT_e);
   Args.AddAllArgs(CmdArgs, options::OPT_s);
@@ -176,18 +171,18 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (D.isUsingLTO()) {
     assert(!Inputs.empty() && "Must have at least one input.");
-    addLTOOptions(TC, Args, CmdArgs, Output, Inputs[0],
+    addLTOOptions(ToolChain, Args, CmdArgs, Output, Inputs[0],
                   D.getLTOMode() == LTOK_Thin);
   }
 
-  AddLinkerInputs(TC, Inputs, Args, CmdArgs, JA);
+  AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
-    AddRunTimeLibs(TC, D, CmdArgs, Args);
+    AddRunTimeLibs(ToolChain, D, CmdArgs, Args);
 
     if (D.CCCIsCXX()) {
-      if (TC.ShouldLinkCXXStdlib(Args))
-        TC.AddCXXStdlibLibArgs(Args, CmdArgs);
+      if (ToolChain.ShouldLinkCXXStdlib(Args))
+        ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
     }
 
     if (Args.hasArg(options::OPT_pthread)) {
@@ -199,10 +194,10 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
     std::string crtend =
-        TC.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
-    if (TC.getVFS().exists(crtend)) {
+        ToolChain.getCompilerRT(Args, "crtend", ToolChain::FT_Object);
+    if (ToolChain.getVFS().exists(crtend)) {
       CmdArgs.push_back(
-          Args.MakeArgString(TC.GetFilePath(crtend.c_str())));
+          Args.MakeArgString(ToolChain.GetFilePath(crtend.c_str())));
     }
   }
 
